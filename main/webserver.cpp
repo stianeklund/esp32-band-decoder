@@ -8,6 +8,7 @@
 #include "esp_event.h"
 #include "cat_parser.h"
 #include "html_content.h"
+#include "relay_controller.h"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <string>
@@ -161,6 +162,31 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     memset(&new_config, 0, sizeof(antenna_switch_config_t));  // Initialize to zero
     new_config.auto_mode = (strstr(content, "auto_mode=on") != NULL);
 
+    // Parse UDP host
+    char *udp_host_str = strstr(content, "udp_host=");
+    if (udp_host_str) {
+        char *end = strchr(udp_host_str + strlen("udp_host="), '&');
+        if (end) {
+            *end = '\0';
+            strncpy(new_config.udp_host, udp_host_str + strlen("udp_host="), sizeof(new_config.udp_host) - 1);
+            new_config.udp_host[sizeof(new_config.udp_host) - 1] = '\0';
+            *end = '&';
+        }
+    }
+
+    // Parse UDP port with input validation
+    char *udp_port_str = strstr(content, "udp_port=");
+    if (udp_port_str) {
+        int udp_port = atoi(udp_port_str + strlen("udp_port="));
+        if (udp_port > 0 && udp_port <= 65535) {
+            new_config.udp_port = udp_port;
+        } else {
+            ESP_LOGE(TAG, "Invalid UDP port: %d", udp_port);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid UDP port");
+            return ESP_FAIL;
+        }
+    }
+
     // Parse num_bands with input validation
     char *num_bands_str = strstr(content, "num_bands=");
     if (num_bands_str) {
@@ -218,7 +244,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
 
         // Process antenna port checkboxes
         for (int j = 0; j < new_config.num_antenna_ports; j++) {
-            snprintf(param, sizeof(param), "antenna_%d_%d=on", i, j);
+            snprintf(param, sizeof(param), "antenna_%d_%d=1", i, j);
             new_config.bands[i].antenna_ports[j] = (strstr(content, param) != NULL);
         }
     }
@@ -273,7 +299,7 @@ static esp_err_t reset_config_handler(httpd_req_t *req)
             .description = "Default",
             .start_freq = 0,
             .end_freq = 30000000,
-            .antenna_ports = {true}
+            .antenna_ports = {true, false, false, false} // Enable only the first antenna port
         }}
     };
 

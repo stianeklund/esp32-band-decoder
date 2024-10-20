@@ -5,7 +5,6 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -17,45 +16,24 @@
 #include "relay_controller.h"
 #include "driver/uart.h"
 
-#define UART_NUM UART_NUM_0
-#define BUF_SIZE 1024
+#define UART_NUM UART_NUM_2
 
 static const char *TAG = "ANTENNA_SWITCH_MAIN";
 
-static void cat_uart_task(void *pvParameters)
+// Global pointer to RelayController
+static RelayController* g_relay_controller = nullptr;
+
+// Task to periodically update relay states
+void update_relay_states_task(void* pvParameters)
 {
-    uart_config_t uart_config = {
-        .baud_rate = 57600,
-        .data_bits = UART_DATA_8_BITS,
-        .parity    = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_APB,
-    };
-
-    ESP_ERROR_CHECK(uart_driver_install(UART_NUM, BUF_SIZE * 2, 0, 0, nullptr, 0));
-    ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_config));
-
-    std::unique_ptr<uint8_t[]> data(new uint8_t[BUF_SIZE]);
-    std::string command;
-    std::string response;
-
     while (true) {
-        int len = uart_read_bytes(UART_NUM, data.get(), BUF_SIZE, 20 / portTICK_PERIOD_MS);
-        if (len) {
-            for (int i = 0; i < len; i++) {
-                if (data[i] == ';') {
-                    ESP_LOGI(TAG, "Received CAT command: %s", command.c_str());
-                    esp_err_t ret = cat_parser_process_command(command.c_str(), &response[0], response.capacity());
-                    if (ret == ESP_OK) {
-                        uart_write_bytes(UART_NUM, response.c_str(), response.length());
-                    }
-                    command.clear();
-                } else {
-                    command += static_cast<char>(data[i]);
-                }
+        if (g_relay_controller) {
+            esp_err_t ret = g_relay_controller->update_all_relay_states();
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to update relay states: %s", esp_err_to_name(ret));
             }
         }
+        vTaskDelay(pdMS_TO_TICKS(5000)); // Update every 5 seconds
     }
 }
 
@@ -69,6 +47,9 @@ extern "C" void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
+
+    // Create RelayController instance
+    RelayController relay_controller;
     ESP_ERROR_CHECK(ret);
 
     // Create default event loop
@@ -84,7 +65,13 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(cat_parser_init());
 
     // Initialize relay controller
-    ESP_ERROR_CHECK(relay_controller_init());
+    ESP_ERROR_CHECK(relay_controller.init());
+
+    // Set the global pointer to the RelayController instance
+    g_relay_controller = &relay_controller;
+
+    // Create task to periodically update relay states
+    xTaskCreate(update_relay_states_task, "update_relay_states", 4096, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "Antenna Switch Controller initialized successfully");
 

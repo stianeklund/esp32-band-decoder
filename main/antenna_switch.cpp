@@ -6,10 +6,54 @@
 #include "nvs.h"
 #include "relay_controller.h"
 #include <cstring>
+#include <memory>
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "esp_system.h"
 
 static const char *TAG = "ANTENNA_SWITCH";
-
 static antenna_switch_config_t current_config;
+static std::unique_ptr<RelayController> relay_controller;
+
+static esp_err_t get_ip_address(char* ip_addr, size_t max_len)
+{
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif == NULL) {
+        ESP_LOGE(TAG, "Failed to get netif handle");
+        return ESP_FAIL;
+    }
+
+    esp_netif_ip_info_t ip_info;
+    esp_err_t ret = esp_netif_get_ip_info(netif, &ip_info);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get IP info: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    snprintf(ip_addr, max_len, IPSTR, IP2STR(&ip_info.ip));
+    return ESP_OK;
+}
+
+esp_err_t antenna_switch_set_udp_host(const char* host)
+{
+    if (host == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    strncpy(current_config.udp_host, host, sizeof(current_config.udp_host) - 1);
+    current_config.udp_host[sizeof(current_config.udp_host) - 1] = '\0';
+
+    // Update the UDP host in the RelayController
+    if (relay_controller) {
+        relay_controller->set_udp_host(host);
+    }
+
+    // Save the updated configuration to NVS
+    return antenna_switch_set_config(&current_config);
+}
+
+
+
 
 esp_err_t antenna_switch_init()
 {
@@ -31,30 +75,44 @@ esp_err_t antenna_switch_init()
         current_config.num_bands = 10;
         current_config.auto_mode = true;
         current_config.num_antenna_ports = 6; // default
-        
-        // Try to save the default configuration
-        err = nvs_set_blob(nvs_handle, "config", &current_config, sizeof(antenna_switch_config_t));
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to save default configuration to NVS: %s", esp_err_to_name(err));
-        } else {
-            err = nvs_commit(nvs_handle);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to commit default configuration to NVS: %s", esp_err_to_name(err));
-            } else {
-                ESP_LOGI(TAG, "Default configuration saved to NVS");
-            }
-        }
+        strcpy(current_config.udp_host, ""); // Clear the UDP host
+        current_config.udp_port = 8888; // default UDP port
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error reading configuration from NVS: %s", esp_err_to_name(err));
         nvs_close(nvs_handle);
         return err;
-    } else {
-        ESP_LOGI(TAG, "Configuration loaded from NVS successfully");
-        ESP_LOGI(TAG, "Loaded config: num_bands=%d, auto_mode=%d, num_antenna_ports=%d",
-                 current_config.num_bands, current_config.auto_mode, current_config.num_antenna_ports);
     }
 
     nvs_close(nvs_handle);
+
+    // Get the current IP address
+    char ip_addr[16];
+    err = get_ip_address(ip_addr, sizeof(ip_addr));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get IP address: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    // Update the UDP host with the current IP address
+    antenna_switch_set_udp_host(ip_addr);
+
+    // Initialize RelayController
+    relay_controller = std::make_unique<RelayController>();
+    err = relay_controller->init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error initializing RelayController: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    // Set UDP settings in RelayController
+    err = relay_controller->update_udp_settings(current_config.udp_host, current_config.udp_port);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Error setting UDP settings in RelayController: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Antenna switch initialized with UDP host: %s, port: %d", current_config.udp_host, current_config.udp_port);
+
     return ESP_OK;
 }
 
@@ -76,9 +134,6 @@ esp_err_t antenna_switch_set_config(const antenna_switch_config_t *config)
         return err;
     }
 
-    ESP_LOGI(TAG, "Saving config: num_bands=%d, auto_mode=%d, num_antenna_ports=%d",
-             current_config.num_bands, current_config.auto_mode, current_config.num_antenna_ports);
-
     err = nvs_set_blob(nvs_handle, "config", &current_config, sizeof(antenna_switch_config_t));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error saving configuration to NVS: %s", esp_err_to_name(err));
@@ -89,11 +144,19 @@ esp_err_t antenna_switch_set_config(const antenna_switch_config_t *config)
     err = nvs_commit(nvs_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error committing NVS changes: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "Configuration saved to NVS successfully");
     }
 
     nvs_close(nvs_handle);
+
+    // Update UDP settings in the RelayController
+    if (relay_controller) {
+        err = relay_controller->update_udp_settings(config->udp_host, config->udp_port);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Error updating UDP settings in RelayController: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
+
     return err;
 }
 
@@ -119,8 +182,18 @@ esp_err_t antenna_switch_set_frequency(uint32_t frequency)
     for (int i = 0; i < current_config.num_bands; i++) {
         if (frequency >= current_config.bands[i].start_freq && 
             frequency <= current_config.bands[i].end_freq) {
-            ESP_LOGI(TAG, "Selecting antenna for band %d", i);
-            return relay_controller_set_antenna(current_config.bands[i].antenna_ports);
+            
+            // Find the first available antenna port for this band
+            for (int j = 0; j < current_config.num_antenna_ports; j++) {
+                if (current_config.bands[i].antenna_ports[j]) {
+                    ESP_LOGI(TAG, "Selecting relay %d for band %d", j + 1, i);
+                    // Use the RelayController to set the appropriate relay
+                    return relay_controller->set_relay_for_antenna(j + 1, i);
+                }
+            }
+            
+            ESP_LOGW(TAG, "No available antenna port found for band %d", i);
+            return ESP_ERR_NOT_FOUND;
         }
     }
 
@@ -156,3 +229,18 @@ esp_err_t antenna_switch_set_auto_mode(bool auto_mode)
     nvs_close(nvs_handle);
     return err;
 }
+esp_err_t antenna_switch_set_relay(int relay_id, bool state)
+{
+    ESP_LOGI(TAG, "Setting relay %d to %s", relay_id, state ? "ON" : "OFF");
+    return relay_controller->set_relay(relay_id, state);
+}
+
+esp_err_t antenna_switch_get_relay_state(int relay_id, bool *state)
+{
+    if (state == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *state = relay_controller->get_relay_state(relay_id);
+    return ESP_OK;
+}
+

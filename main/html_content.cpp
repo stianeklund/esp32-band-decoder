@@ -236,51 +236,58 @@ std::string generate_config_html(const antenna_switch_config_t& config) {
         return "";  // Return empty string to indicate error
     }
 
-    ESP_LOGI(TAG, "Generating HTML for config with %d bands and %d antenna ports", 
-             config.num_bands, config.num_antenna_ports);
+    ESP_LOGI(TAG, "Generating HTML for config: %d bands, %d antenna ports, udp host:%s, udp port:%d", 
+             config.num_bands, config.num_antenna_ports, config.udp_host, config.udp_port);
+    ESP_LOGI(TAG, "Debug: num_bands = %d, num_antenna_ports = %d", config.num_bands, config.num_antenna_ports);
 
     ss << HTML_HEADER;
-    ss << R"(
-    <h2>Relay Configuration</h2>
-    <form action='/config' method='post' class="config-form">
-        <div class="form-group">
-            <label for="num_bands">Number of bands:</label>
-            <input type='number' id="num_bands" name='num_bands' value='" << config.num_bands << "' min='1' max='" << MAX_BANDS << "'>
-        </div>
-        <div class="form-group">
-            <label for="num_antenna_ports">Number of outputs:</label>
-            <input type='number' id="num_antenna_ports" name='num_antenna_ports' value='" << config.num_antenna_ports << "' min='1' max='" << MAX_ANTENNA_PORTS << "'>
-        </div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Band</th>
-                    <th>Start Freq</th>
-                    <th>End Freq</th>
-                    <th>Antenna Ports</th>
-                </tr>
-            </thead>
-            <tbody>
-    )";
+    ss << "<h2>Relay Configuration</h2>";
+    ss << "<form action='/config' method='post' class='config-form'>";
+    ss << "<div class='form-group'>";
+    ss << "<label for='num_bands'>Number of bands:</label>";
+    ss << "<input type='number' id='num_bands' name='num_bands' value='" << std::to_string(config.num_bands) << "' min='1' max='" << MAX_BANDS << "'>";
+    ss << "</div>";
+    ss << "<div class='form-group'>";
+    ss << "<label for='num_antenna_ports'>Number of outputs:</label>";
+    ss << "<input type='number' id='num_antenna_ports' name='num_antenna_ports' value='" << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "'>";
+    ss << "</div>";
+    ss << "<div class='form-group'>";
+    ss << "<label for='udp_host'>UDP Host:</label>";
+    ss << "<input type='text' id='udp_host' name='udp_host' value='" << config.udp_host << "'>";
+    ss << "</div>";
+    ss << "<div class='form-group'>";
+    ss << "<label for='udp_port'>UDP Port:</label>";
+    ss << "<input type='number' id='udp_port' name='udp_port' value='" << config.udp_port << "' min='1' max='65535'>";
+    ss << "</div>";
+    ss << "<table>";
+    ss << "<thead>";
+    ss << "<tr>";
+    ss << "<th>Band</th>";
+    ss << "<th>Start Freq</th>";
+    ss << "<th>End Freq</th>";
+    ss << "<th>Antenna Ports</th>";
+    ss << "</tr>";
+    ss << "</thead>";
+    ss << "<tbody>";
 
     for (int i = 0; i < config.num_bands; i++) {
-        ss << "<tr>"
-              "<td><select name='band_" << i << "'>";
+        ss << "<tr>";
+        ss << "<td><select name='band_" << i << "'>";
         
         for (const auto& band : band_info) {
-            ss << "<option value='" << band.first << "' " << 
-                  (config.bands[i].start_freq == band.second.start_freq && config.bands[i].end_freq == band.second.end_freq ? "selected" : "") << 
-                  ">" << band.second.name << "</option>";
+            ss << "<option value='" << band.first << "' " 
+               << (config.bands[i].start_freq == band.second.start_freq && config.bands[i].end_freq == band.second.end_freq ? "selected" : "") 
+               << ">" << band.second.name << "</option>";
         }
         
-        ss << "</select></td>"
-              "<td>" << config.bands[i].start_freq << "</td>"
-              "<td>" << config.bands[i].end_freq << "</td>"
-              "<td>";
+        ss << "</select></td>";
+        ss << "<td>" << config.bands[i].start_freq << "</td>";
+        ss << "<td>" << config.bands[i].end_freq << "</td>";
+        ss << "<td>";
         
         // Generate checkboxes for each antenna port
         for (int j = 0; j < config.num_antenna_ports; j++) {
-            ss << "<label><input type='checkbox' name='antenna_" << i << "_" << j << "' " 
+            ss << "<label><input type='checkbox' name='antenna_" << i << "_" << j << "' value='1' " 
                << (config.bands[i].antenna_ports[j] ? "checked" : "") << "> Port " << (j + 1) << "</label> ";
         }
 
@@ -288,20 +295,18 @@ std::string generate_config_html(const antenna_switch_config_t& config) {
         ss << "</td></tr>";
     }
 
-    ss << R"(
-            </tbody>
-        </table>
-        <div class="button-container">
-            <input type='submit' value='Update Configuration'>
-        </div>
-    </form>
-    <div class="button-container">
-        <a href='/' class="button">Back to Home</a>
-        <form action='/reset-config' method='post' style="display: inline;">
-            <input type='submit' value='Reset Configuration' class="button" style="background-color: #e74c3c;" onclick="return confirm('Are you sure you want to reset the configuration?');">
-        </form>
-    </div>
-    )";
+    ss << "</tbody>";
+    ss << "</table>";
+    ss << "<div class='button-container'>";
+    ss << "<input type='submit' value='Update Configuration'>";
+    ss << "</div>";
+    ss << "</form>";
+    ss << "<div class='button-container'>";
+    ss << "<a href='/' class='button'>Back to Home</a>";
+    ss << "<form action='/reset-config' method='post' style='display: inline;'>";
+    ss << "<input type='submit' value='Reset Configuration' class='button' style='background-color: #e74c3c;' onclick='return confirm(\"Are you sure you want to reset the configuration?\");'>";
+    ss << "</form>";
+    ss << "</div>";
     ss << HTML_FOOTER;
     return ss.str();
 }
