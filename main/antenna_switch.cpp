@@ -85,29 +85,13 @@ esp_err_t antenna_switch_init()
 
     nvs_close(nvs_handle);
 
-    // Get the current IP address
-    char ip_addr[16];
-    err = get_ip_address(ip_addr, sizeof(ip_addr));
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get IP address: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    // Update the UDP host with the current IP address
-    antenna_switch_set_udp_host(ip_addr);
-
-    // Initialize RelayController
+    // Initialize RelayController with UDP settings from config
     relay_controller = std::make_unique<RelayController>();
+    relay_controller->set_udp_host(current_config.udp_host);
+    relay_controller->set_udp_port(current_config.udp_port);
     err = relay_controller->init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error initializing RelayController: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    // Set UDP settings in RelayController
-    err = relay_controller->update_udp_settings(current_config.udp_host, current_config.udp_port);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Error setting UDP settings in RelayController: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -233,6 +217,19 @@ esp_err_t antenna_switch_set_relay(int relay_id, bool state)
 {
     ESP_LOGI(TAG, "Setting relay %d to %s", relay_id, state ? "ON" : "OFF");
     return relay_controller->set_relay(relay_id, state);
+}
+
+esp_err_t antenna_switch_set_udp_port(uint16_t port)
+{
+    current_config.udp_port = port;
+
+    // Update the UDP port in the RelayController
+    if (relay_controller) {
+        relay_controller->set_udp_port(port);
+    }
+
+    // Save the updated configuration to NVS
+    return antenna_switch_set_config(&current_config);
 }
 
 esp_err_t antenna_switch_get_relay_state(int relay_id, bool *state)

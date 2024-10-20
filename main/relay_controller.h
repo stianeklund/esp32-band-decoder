@@ -33,6 +33,7 @@ public:
     void set_udp_port(uint16_t port);
     std::string get_udp_host() const;
     uint16_t get_udp_port() const;
+    esp_err_t check_udp_connection();
 
 private:
     std::unique_ptr<UDPClient> udp_client;
@@ -45,7 +46,9 @@ private:
 
     bool should_delay() const;
     esp_err_t execute_relay_change(int relay_id, int band_number);
-    esp_err_t send_command_and_validate_response(const std::string& command, const std::string& expected_response);
+    esp_err_t
+    send_command_and_validate_response(const std::string &command,
+                                       const std::string &expected_response);
     bool send_command_with_retry(const std::string& command, const std::string& expectedResponsePattern);
 };
 

@@ -14,6 +14,10 @@ UDPClient::~UDPClient() {
 }
 
 esp_err_t UDPClient::init(const char* host, uint16_t port) {
+    if (sock >= 0) {
+        close();
+    }
+
     sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0) {
         ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
@@ -24,15 +28,21 @@ esp_err_t UDPClient::init(const char* host, uint16_t port) {
     dest_addr.sin_family = AF_INET;
     dest_addr.sin_port = htons(port);
 
+    // Set socket to non-blocking mode
+    int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
     return ESP_OK;
 }
 
 esp_err_t UDPClient::send_message(const std::string& message) {
     int err = sendto(sock, message.c_str(), message.length(), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+    ESP_LOGI(TAG, "Sending: %s to %s:%d", message.c_str(), inet_ntoa(dest_addr.sin_addr), ntohs(dest_addr.sin_port));
     if (err < 0) {
-        ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+        ESP_LOGE(TAG, "Error occurred during sending: errno %d (%s)", errno, strerror(errno));
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "Message sent successfully, %d bytes", err);
     return ESP_OK;
 }
 
@@ -44,20 +54,36 @@ esp_err_t UDPClient::receive_message(std::string& message, int timeout_ms) {
     struct timeval tv;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        ESP_LOGE(TAG, "Error setting socket timeout: errno %d (%s)", errno, strerror(errno));
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Waiting for response (timeout: %d ms)...", timeout_ms);
+    
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(sock, &readfds);
+
+    int activity = select(sock + 1, &readfds, NULL, NULL, &tv);
+
+    if (activity < 0) {
+        ESP_LOGE(TAG, "Select error: errno %d (%s)", errno, strerror(errno));
+        return ESP_FAIL;
+    } else if (activity == 0) {
+        ESP_LOGW(TAG, "Receive timeout after %d ms", timeout_ms);
+        return ESP_ERR_TIMEOUT;
+    }
 
     int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, (struct sockaddr *)&source_addr, &socklen);
 
     if (len < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            ESP_LOGW(TAG, "Receive timeout");
-            return ESP_ERR_TIMEOUT;
-        }
-        ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+        ESP_LOGE(TAG, "recvfrom failed: errno %d (%s)", errno, strerror(errno));
         return ESP_FAIL;
     } else {
         rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
         message = std::string(rx_buffer);
+        ESP_LOGI(TAG, "Received %d bytes from %s:%d: %s", len, inet_ntoa(source_addr.sin_addr), ntohs(source_addr.sin_port), message.c_str());
         return ESP_OK;
     }
 }
