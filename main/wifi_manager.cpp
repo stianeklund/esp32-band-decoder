@@ -278,3 +278,19 @@ esp_err_t wifi_manager_get_ip_info(char* ip_addr, size_t ip_addr_size)
     snprintf(ip_addr, ip_addr_size, IPSTR, IP2STR(&ip_info.ip));
     return ESP_OK;
 }
+
+esp_err_t wifi_manager_get_mac_address(char* mac_addr, size_t mac_addr_size)
+{
+    if (!mac_addr || mac_addr_size < 18) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t mac[6];
+    esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, mac);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    snprintf(mac_addr, mac_addr_size, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return ESP_OK;
+}

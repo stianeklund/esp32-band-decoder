@@ -11,86 +11,138 @@ const char* HTML_HEADER = R"(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Antenna Switch Controller</title>
     <style>
+        :root {
+            --primary-color: #3498db;
+            --secondary-color: #2c3e50;
+            --background-color: #ecf0f1;
+            --text-color: #34495e;
+            --border-color: #bdc3c7;
+        }
         body {
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             line-height: 1.6;
-            color: #333;
-            max-width: 800px;
+            color: var(--text-color);
+            max-width: 1000px;
             margin: 0 auto;
             padding: 20px;
-            background-color: #f4f4f4;
+            background-color: var(--background-color);
         }
         h1, h2 {
-            color: #2c3e50;
+            color: var(--secondary-color);
+            text-align: center;
+            margin-bottom: 30px;
         }
         .status-container {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 20px;
+            margin-bottom: 30px;
         }
         .status-box {
             background-color: white;
-            border-radius: 5px;
-            padding: 15px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             width: 48%;
+            transition: transform 0.3s ease;
+        }
+        .status-box:hover {
+            transform: translateY(-5px);
         }
         table {
             width: 100%;
-            border-collapse: collapse;
+            border-collapse: separate;
+            border-spacing: 0;
             margin-bottom: 20px;
+            border-radius: 10px;
+            overflow: hidden;
         }
         th, td {
-            padding: 12px;
-            border-bottom: 1px solid #ddd;
+            padding: 15px;
             text-align: left;
+            border-bottom: 1px solid var(--border-color);
         }
         th {
             font-weight: bold;
-            color: #2c3e50;
-            background-color: #ecf0f1;
+            color: white;
+            background-color: var(--primary-color);
+        }
+        tr:last-child td {
+            border-bottom: none;
         }
         .button-container {
             text-align: center;
-            margin-top: 20px;
+            margin-top: 30px;
         }
         .button, input[type="submit"] {
             display: inline-block;
-            background-color: #3498db;
+            background-color: var(--primary-color);
             color: white;
-            padding: 10px 20px;
-            border-radius: 5px;
+            padding: 12px 24px;
+            border-radius: 25px;
             text-decoration: none;
-            transition: background-color 0.3s;
+            transition: all 0.3s ease;
             border: none;
             cursor: pointer;
             font-size: 16px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin: 0 10px;
         }
         .button:hover, input[type="submit"]:hover {
-            background-color: #2980b9;
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         input[type="text"], input[type="number"], select {
             width: 100%;
-            padding: 8px;
-            margin: 5px 0;
+            padding: 12px;
+            margin: 8px 0;
             display: inline-block;
-            border: 1px solid #ccc;
+            border: 1px solid var(--border-color);
             border-radius: 4px;
             box-sizing: border-box;
+            transition: border-color 0.3s ease;
+        }
+        input[type="text"]:focus, input[type="number"]:focus, select:focus {
+            border-color: var(--primary-color);
+            outline: none;
         }
         .config-form {
             background-color: white;
-            padding: 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         .form-group {
-            margin-bottom: 15px;
+            margin-bottom: 20px;
         }
         label {
             display: block;
-            margin-bottom: 5px;
+            margin-bottom: 8px;
             font-weight: bold;
+            color: var(--secondary-color);
+        }
+        input[type="checkbox"] {
+            margin-right: 5px;
+        }
+        .auto-mode-container {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+        .auto-mode-container h2 {
+            margin-top: 0;
+        }
+        .auto-mode-container label {
+            display: flex;
+            align-items: center;
+            font-weight: normal;
+        }
+        .auto-mode-container input[type="checkbox"] {
+            margin-right: 10px;
         }
     </style>
 </head>
@@ -113,31 +165,33 @@ const std::map<std::string, BandInfo> band_info = {
     {"12m", {"12m", 24890000, 24990000}},
     {"10m", {"10m", 28000000, 29700000}},
     {"6m", {"6m", 50000000, 54000000}},
-    {"2m", {"2m", 144000000, 148000000}},
-    {"70cm", {"70cm", 420000000, 450000000}}
+    // {"4m", {"4m", 70000000, 74000000}},
+    // {"2m", {"2m", 144000000, 148000000}},
+    // {"70cm", {"70cm", 420000000, 450000000}}
 };
 
-std::string generate_root_html(const antenna_switch_config_t& config, const char* ip_addr) {
+std::string generate_root_html(const antenna_switch_config_t& config, const char* ip_addr, const char* mac_addr) {
     std::stringstream ss;
     ss << HTML_HEADER;
     ss << R"(
-    <h1>Antenna Switch Controller</h1>
+    <h1>Antenna Controller</h1>
     <div class="status-container">
         <div class="status-box">
             <h2>Current Status</h2>
             <table>
                 <tr><th>Current Frequency</th><td id="current-frequency">Updating...</td></tr>
-                <tr><th>Active Antenna Port</th><td id="active-antenna">Updating...</td></tr>
+                <tr><th>Active Relay</th><td id="active-antenna">Updating...</td></tr>
             </table>
         </div>
         <div class="status-box">
             <h2>Network Information</h2>
             <table>
                 <tr><th>IP Address</th><td>)" << ip_addr << R"(</td></tr>
+                <tr><th>MAC Address</th><td>)" << mac_addr << R"(</td></tr>
             </table>
         </div>
     </div>
-    <div class="status-box" style="width: 100%; margin-top: 20px;">
+    <div class="auto-mode-container">
         <h2>Auto Mode</h2>
         <form action='/toggle-auto-mode' method='post'>
             <label>
@@ -187,15 +241,15 @@ std::string generate_config_html(const antenna_switch_config_t& config) {
 
     ss << HTML_HEADER;
     ss << R"(
-    <h2>Antenna Switch Configuration</h2>
+    <h2>Relay Configuration</h2>
     <form action='/config' method='post' class="config-form">
         <div class="form-group">
             <label for="num_bands">Number of bands:</label>
-            <input type='number' id="num_bands" name='num_bands' value=')" << config.num_bands << R"(' min='1' max=')" << MAX_BANDS << R"('>
+            <input type='number' id="num_bands" name='num_bands' value='" << config.num_bands << "' min='1' max='" << MAX_BANDS << "'>
         </div>
         <div class="form-group">
-            <label for="num_antenna_ports">Number of antenna ports:</label>
-            <input type='number' id="num_antenna_ports" name='num_antenna_ports' value=')" << config.num_antenna_ports << R"(' min='1' max=')" << MAX_ANTENNA_PORTS << R"('>
+            <label for="num_antenna_ports">Number of outputs:</label>
+            <input type='number' id="num_antenna_ports" name='num_antenna_ports' value='" << config.num_antenna_ports << "' min='1' max='" << MAX_ANTENNA_PORTS << "'>
         </div>
         <table>
             <thead>
@@ -229,6 +283,7 @@ std::string generate_config_html(const antenna_switch_config_t& config) {
             ss << "<label><input type='checkbox' name='antenna_" << i << "_" << j << "' " 
                << (config.bands[i].antenna_ports[j] ? "checked" : "") << "> Port " << (j + 1) << "</label> ";
         }
+
         
         ss << "</td></tr>";
     }

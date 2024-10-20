@@ -36,7 +36,14 @@ static esp_err_t root_get_handler(httpd_req_t *req)
         strcpy(ip_addr, "Unknown");
     }
 
-    std::string resp_str = generate_root_html(config, ip_addr);
+    char mac_addr[18];
+    ret = wifi_manager_get_mac_address(mac_addr, sizeof(mac_addr));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get MAC address: %s", esp_err_to_name(ret));
+        strcpy(mac_addr, "Unknown");
+    }
+
+    std::string resp_str = generate_root_html(config, ip_addr, mac_addr);
     
     httpd_resp_send(req, resp_str.c_str(), resp_str.length());
     return ESP_OK;
