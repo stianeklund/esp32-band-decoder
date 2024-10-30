@@ -40,6 +40,8 @@ This project uses the ESP-IDF framework. To build and flash the project:
 The antenna switch can be configured through the web interface or by modifying the `antenna_switch_config_t` structure
 in the code. This includes setting up frequency bands, antenna ports, and TCP communication settings.
 
+![](F:\dev\rs232_band_decoder\webconfig.png)
+
 ## TODO
 
 * Hot switch protection (don't switch if transmitting)
