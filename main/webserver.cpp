@@ -411,22 +411,26 @@ static esp_err_t toggle_auto_mode_handler(httpd_req_t *req) {
 static esp_err_t reset_config_handler(httpd_req_t *req) {
     constexpr antenna_switch_config_t default_config = {
         .auto_mode = true,
-        .num_bands = 1,
+        .num_bands = 10,
         .num_antenna_ports = 1,
         .bands = {
-            {
-                .description = "Default",
-                .start_freq = 0,
-                .end_freq = 30000000,
-                .antenna_ports = {true, false, false, false} // Enable only the first antenna port
-            }
+            {.description = "160m", .start_freq = 1800000, .end_freq = 2000000, .antenna_ports = {true}},
+            {.description = "80m", .start_freq = 3500000, .end_freq = 4000000, .antenna_ports = {true}},
+            {.description = "40m", .start_freq = 7000000, .end_freq = 7300000, .antenna_ports = {true}},
+            {.description = "30m", .start_freq = 10100000, .end_freq = 10150000, .antenna_ports = {true}},
+            {.description = "20m", .start_freq = 14000000, .end_freq = 14350000, .antenna_ports = {true}},
+            {.description = "17m", .start_freq = 18068000, .end_freq = 18168000, .antenna_ports = {true}},
+            {.description = "15m", .start_freq = 21000000, .end_freq = 21450000, .antenna_ports = {true}},
+            {.description = "12m", .start_freq = 24890000, .end_freq = 24990000, .antenna_ports = {true}},
+            {.description = "10m", .start_freq = 28000000, .end_freq = 29700000, .antenna_ports = {true}},
+            {.description = "6m", .start_freq = 50000000, .end_freq = 54000000, .antenna_ports = {true}},
         },
         .tcp_host = "",
         .tcp_port = 0,
         .uart_baud_rate = 9600,
         .uart_parity = UART_PARITY_DISABLE,
         .uart_stop_bits = 1,
-            .uart_flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .uart_flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
     };
 
     if (const esp_err_t ret = antenna_switch_set_config(&default_config); ret != ESP_OK) {

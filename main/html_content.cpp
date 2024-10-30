@@ -276,13 +276,13 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     ss << "<div class='form-group'>";
     ss << "<label for='num_bands'>Number of bands:</label>";
     ss << "<input type='number' id='num_bands' name='num_bands' value='" << std::to_string(config.num_bands)
-            << "' min='1' max='" << MAX_BANDS << "'>";
+            << "' min='1' max='" << MAX_BANDS << "' onchange='updateBandRows()'>";
     ss << "</div>";
     ss << "<div class='form-group'>";
     ss << "<h3>Switch Configuration</h3>";
     ss << "<label for='num_antenna_ports'>Number of outputs:</label>";
     ss << "<input type='number' id='num_antenna_ports' name='num_antenna_ports' value='"
-            << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "'>";
+            << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "' onchange='updateAntennaPorts()'>";
     ss << "</div>";
 
     ss << "<div class='form-group'>";
@@ -344,7 +344,7 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
 
     for (int i = 0; i < config.num_bands; i++) {
         ss << "<tr>";
-        ss << "<td><select name='band_" << i << "'>";
+        ss << "<td><select name='band_" << i << "' onchange='updateFrequencies(this, " << i << ")'>";
 
         for (const auto &[fst, snd]: band_info) {
             ss << "<option value='" << fst << "' "
@@ -441,6 +441,145 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             alert('Failed to update configuration');
         }
     }
+    
+    // Create a mapping of band frequencies
+    const bandFrequencies = {
+)";
+
+// Add the band frequencies mapping
+for (const auto &band : band_info) {
+    ss << "'" << band.first << "': {start: " << band.second.start_freq 
+       << ", end: " << band.second.end_freq << "},\n";
+}
+
+ss << R"(
+    };
+
+    function updateFrequencies(selectElement, rowIndex) {
+        const selectedBand = selectElement.value;
+        const frequencies = bandFrequencies[selectedBand];
+        const row = selectElement.closest('tr');
+        const cells = row.cells;
+        
+        // Update start and end frequency cells
+        cells[1].textContent = frequencies.start;
+        cells[2].textContent = frequencies.end;
+    }
+
+    function updateAntennaPorts() {
+        const numPorts = parseInt(document.getElementById('num_antenna_ports').value);
+        const rows = document.querySelectorAll('tbody tr');
+        
+        rows.forEach((row) => {
+            const portCell = row.cells[3]; // Antenna ports cell
+            const bandSelect = row.querySelector('select[name^="band_"]');
+            const bandIndex = bandSelect.name.split('_')[1];
+            
+            // Store existing checkbox states
+            const existingStates = Array.from(portCell.querySelectorAll('input[type="checkbox"]'))
+                .map(cb => cb.checked);
+            
+            let portsHtml = '';
+            for (let j = 0; j < numPorts; j++) {
+                const isChecked = existingStates[j] ? 'checked' : '';
+                portsHtml += `<input type="checkbox" name="a${bandIndex}_${j}" value="1" ${isChecked}>${j + 1} `;
+            }
+            
+            portCell.innerHTML = portsHtml;
+        });
+    }
+
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    function updateBandRows() {
+        const numBands = parseInt(document.getElementById('num_bands').value);
+        const numPorts = parseInt(document.getElementById('num_antenna_ports').value);
+        const tbody = document.querySelector('tbody');
+        
+        // Store existing configurations before updating
+        const existingConfig = [];
+        const existingRows = tbody.querySelectorAll('tr');
+        existingRows.forEach((row, i) => {
+            const bandSelect = row.querySelector(`select[name="band_${i}"]`);
+            const checkboxes = row.querySelectorAll('input[type="checkbox"]');
+            existingConfig[i] = {
+                band: bandSelect ? bandSelect.value : null,
+                ports: Array.from(checkboxes).map(cb => cb.checked)
+            };
+        });
+        
+        // Create a document fragment to batch DOM updates
+        const fragment = document.createDocumentFragment();
+        
+        // Generate all rows at once
+        for (let i = 0; i < numBands; i++) {
+            const row = document.createElement('tr');
+            
+            // Band selection cell
+            const bandCell = document.createElement('td');
+            const bandSelect = document.createElement('select');
+            bandSelect.name = `band_${i}`;
+            bandSelect.setAttribute('onchange', `updateFrequencies(this, ${i})`);
+            
+            // Create band options HTML string once
+            let optionsHtml = '';
+            Object.entries(bandFrequencies).forEach(([band, freq]) => {
+                optionsHtml += `<option value="${band}">${band}</option>`;
+            });
+            bandSelect.innerHTML = optionsHtml;
+            
+            // If we have existing config for this row, use it
+            if (existingConfig[i] && existingConfig[i].band) {
+                bandSelect.value = existingConfig[i].band;
+            } else {
+                // Otherwise use default band based on index
+                const defaultBand = Object.entries(bandFrequencies)[i % Object.keys(bandFrequencies).length];
+                bandSelect.value = defaultBand[0];
+            }
+            
+            bandCell.appendChild(bandSelect);
+            
+            // Frequency cells
+            const startFreqCell = document.createElement('td');
+            const endFreqCell = document.createElement('td');
+            const selectedBand = bandFrequencies[bandSelect.value];
+            startFreqCell.textContent = selectedBand.start;
+            endFreqCell.textContent = selectedBand.end;
+            
+            // Antenna ports cell - create HTML string instead of multiple DOM operations
+            const portsCell = document.createElement('td');
+            let portsHtml = '';
+            for (let j = 0; j < numPorts; j++) {
+                const isChecked = existingConfig[i] && existingConfig[i].ports[j] ? 'checked' : '';
+                portsHtml += `<input type="checkbox" name="a${i}_${j}" value="1" ${isChecked}>${j + 1} `;
+            }
+            portsCell.innerHTML = portsHtml;
+            
+            row.appendChild(bandCell);
+            row.appendChild(startFreqCell);
+            row.appendChild(endFreqCell);
+            row.appendChild(portsCell);
+            fragment.appendChild(row);
+        }
+        
+        // Clear and update tbody in one operation
+        tbody.innerHTML = '';
+        tbody.appendChild(fragment);
+    }
+
+    // Add event listeners with debouncing
+    document.getElementById('num_antenna_ports').addEventListener('change', debounce(updateAntennaPorts, 250));
+    document.getElementById('num_bands').addEventListener('change', debounce(updateBandRows, 250));
     </script>)";
     ss << "<div class='button-container'>";
     ss << "<a href='/' class='button' style='background-color: var(--primary-color);'>Back to Home</a>";
