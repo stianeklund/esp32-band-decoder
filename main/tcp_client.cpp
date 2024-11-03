@@ -263,7 +263,10 @@ esp_err_t TCPClient::receive_message(char *message, const size_t message_size, c
         const int64_t now = esp_timer_get_time() / 1000;
         const int elapsed_ms = static_cast<int>(now - start_time);
         // we can trip the watchdog here if we're on a band that's not supported by the config
-        esp_task_wdt_reset();
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            // Add watchdog feed
+            esp_task_wdt_reset();
+        }
 
         if (elapsed_ms >= timeout_ms) {
             ESP_LOGV(TAG, "Timeout after %d ms, message content: '%.*s'",
@@ -301,10 +304,12 @@ esp_err_t TCPClient::receive_message(char *message, const size_t message_size, c
             total_received += len;
             message[total_received] = '\0';
 
+            // ReSharper disable once CppTooWideScopeInitStatement
             std::string msg(message, total_received);
+
             if (msg.find(",OK") != std::string::npos ||
-                (msg.find("RELAY-STATE-255") != std::string::npos && msg.find(",") != std::string::npos) ||
-                (msg.find("RELAY-SET_ALL-255") != std::string::npos && msg.find(",") != std::string::npos)) {
+                (msg.find("RELAY-STATE-255") != std::string::npos && msg.find(',') != std::string::npos) ||
+                (msg.find("RELAY-SET_ALL-255") != std::string::npos && msg.find(',') != std::string::npos)) {
                 ESP_LOGV(TAG, "Received complete message (%zu bytes)", total_received);
                 return ESP_OK;
             }

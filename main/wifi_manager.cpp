@@ -12,6 +12,7 @@
 #include "nvs.h"
 
 #include <cstring>
+#include <esp_task_wdt.h>
 
 // Add ESP_RETURN_ON_ERROR macro if not already defined
 #ifndef ESP_RETURN_ON_ERROR
@@ -189,9 +190,11 @@ void WifiManager::event_handler(void *arg, const esp_event_base_t event_base,
 // ReSharper disable once CppParameterNeverUsed (it's used by the task callback)
 void WifiManager::smartconfig_task(void *parm) {
     const auto &instance = WifiManager::instance();
-    
-    // Add watchdog feed
-    esp_task_wdt_reset();
+
+    if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+        // Add watchdog feed
+        esp_task_wdt_reset();
+    }
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     // Check if we're already connected
@@ -223,8 +226,11 @@ void WifiManager::smartconfig_task(void *parm) {
 
     while (true) {
         // Feed watchdog periodically
-        esp_task_wdt_reset();
-        
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            // Add watchdog feed
+            esp_task_wdt_reset();
+        }
+
         const EventBits_t uxBits = xEventGroupWaitBits(instance.m_wifi_event_group,
                                                       WIFI_CONNECTED_BIT | ESPTOUCH_DONE_BIT,
                                                       true, false, 
