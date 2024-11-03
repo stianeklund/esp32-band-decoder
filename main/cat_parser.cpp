@@ -176,6 +176,7 @@ void CatParser::uart_task() {
                             while ((pos = command_accumulator.find(';')) != std::string::npos) {
                                 std::string cmd = command_accumulator.substr(0, pos);
                                 command_accumulator = command_accumulator.substr(pos + 1);
+                                ESP_LOGV(TAG, "Received:%s",cmd.c_str());
 
                                 // Only process FA and IF commands
                                 if (cmd.length() >= 2) {
