@@ -1,4 +1,5 @@
 #include <esp_event.h>
+#include <esp_task_wdt.h>
 #include <memory>
 #include <nvs_flash.h>
 
@@ -88,22 +89,36 @@ extern "C" [[noreturn]] void app_main(void) {
 
     // Main loop
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Feed the watchdog
+        esp_task_wdt_reset();
+        
+        // Add error checking for watchdog reset
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_ERR_NOT_FOUND) {
+            ESP_LOGW(TAG, "Task not subscribed to watchdog, attempting to resubscribe");
+            esp_task_wdt_add(xTaskGetCurrentTaskHandle());
+        }
+        
+        // Increased delay to reduce system load
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 
 smartconfig_handler:
-    // Start SmartConfig and wait indefinitely
+    // Start SmartConfig
     ret = WifiManager::instance().start_smartconfig();
-
-    // Enter infinite loop waiting for SmartConfig success
+    
+    // Enter SmartConfig wait loop with watchdog feed
     while (true) {
+        // Feed the watchdog
+        esp_task_wdt_reset();
+        
         if (WifiManager::instance().is_connected()) {
             ESP_LOGI(TAG, "SmartConfig successful, restarting system...");
-            RestartManager::clear_restart_count(); // Clear restart count on success
-            vTaskDelay(pdMS_TO_TICKS(1000)); // Brief delay before restart
+            RestartManager::clear_restart_count();
+            vTaskDelay(pdMS_TO_TICKS(1000));
             esp_restart();
         }
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Check every second
+        // Reduced delay to feed watchdog more frequently
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
 error_handler:

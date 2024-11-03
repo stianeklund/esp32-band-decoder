@@ -189,8 +189,9 @@ void WifiManager::event_handler(void *arg, const esp_event_base_t event_base,
 // ReSharper disable once CppParameterNeverUsed (it's used by the task callback)
 void WifiManager::smartconfig_task(void *parm) {
     const auto &instance = WifiManager::instance();
-
-    // Add delay to ensure WiFi system is ready
+    
+    // Add watchdog feed
+    esp_task_wdt_reset();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     // Check if we're already connected
@@ -221,9 +222,13 @@ void WifiManager::smartconfig_task(void *parm) {
     }
 
     while (true) {
+        // Feed watchdog periodically
+        esp_task_wdt_reset();
+        
         const EventBits_t uxBits = xEventGroupWaitBits(instance.m_wifi_event_group,
-                                                       WIFI_CONNECTED_BIT | ESPTOUCH_DONE_BIT,
-                                                       true, false, portMAX_DELAY);
+                                                      WIFI_CONNECTED_BIT | ESPTOUCH_DONE_BIT,
+                                                      true, false, 
+                                                      pdMS_TO_TICKS(100)); // Reduced timeout
 
         if (uxBits & (WIFI_CONNECTED_BIT | ESPTOUCH_DONE_BIT)) {
             ESP_LOGI(TAG, "SmartConfig task complete");
@@ -239,6 +244,12 @@ void WifiManager::smartconfig_task(void *parm) {
 esp_err_t WifiManager::init() {
     ESP_LOGI(TAG, "Initializing WiFi manager in STA mode");
 
+    // Delete any existing event group first
+    if (m_wifi_event_group) {
+        vEventGroupDelete(m_wifi_event_group);
+        m_wifi_event_group = nullptr;
+    }
+
     // Create event group
     m_wifi_event_group = xEventGroupCreate();
     if (!m_wifi_event_group) {
@@ -246,41 +257,113 @@ esp_err_t WifiManager::init() {
         return ESP_ERR_NO_MEM;
     }
 
-    // Initialize network interface
-    ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "TCP/IP stack init failed");
+    // Initialize TCP/IP adapter with more robust error handling
+    esp_err_t ret = esp_netif_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "TCP/IP adapter initialization failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // Add delay after TCP/IP init
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Create the default event loop if it doesn't exist
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Failed to create event loop: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Add delay after event loop creation
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Create default WiFi sta
     m_sta_netif = esp_netif_create_default_wifi_sta();
     if (!m_sta_netif) {
         ESP_LOGE(TAG, "Failed to create WiFi STA interface");
         return ESP_FAIL;
     }
 
-    // Initialize WiFi
-    const wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    // Add delay after netif creation
+    vTaskDelay(pdMS_TO_TICKS(100));
 
-    ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), TAG, "WiFi init failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "Failed to set WiFi mode");
+    // Initialize WiFi with default config
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    // Increase buffer numbers for stability
+    cfg.static_rx_buf_num = 16;
+    cfg.static_tx_buf_num = 16;
 
-    // Register event handlers
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT,
-                            ESP_EVENT_ANY_ID, &event_handler, nullptr, nullptr), TAG,
-                        "Failed to register WiFi event handler");
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(IP_EVENT,
-                            IP_EVENT_STA_GOT_IP, &event_handler, nullptr, nullptr), TAG,
-                        "Failed to register IP event handler");
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(SC_EVENT,
-                            ESP_EVENT_ANY_ID, &event_handler, nullptr, nullptr), TAG,
-                        "Failed to register SmartConfig event handler");
-
-    // Start WiFi
-    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Failed to start WiFi");
-
-    // Try connecting with saved credentials first
-    if (const esp_err_t ret = try_connect_with_saved_credentials(); ret != ESP_OK) {
-        ESP_LOGW(TAG, "Could not connect with saved credentials, starting SmartConfig");
-        return start_smartconfig();
+    ret = esp_wifi_init(&cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "WiFi initialization failed: %s", esp_err_to_name(ret));
+        return ret;
     }
 
-    return ESP_OK;
+    // Add delay after WiFi init
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Set WiFi storage to flash
+    ret = esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set WiFi storage: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Set mode to station
+    ret = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set WiFi mode: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Register event handlers with error checking
+    ret = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                            &event_handler, nullptr, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register WiFi event handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                            &event_handler, nullptr, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register IP event handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_event_handler_instance_register(SC_EVENT, ESP_EVENT_ANY_ID,
+                                            &event_handler, nullptr, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register SmartConfig event handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Add delay before starting WiFi
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Start WiFi
+    ret = esp_wifi_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start WiFi: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    // Add delay after starting WiFi
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    #ifdef FORCE_SMARTCONFIG
+        ESP_LOGI(TAG, "Forcing SmartConfig mode...");
+        return start_smartconfig();
+    #else
+        // Try connecting with saved credentials
+        ret = try_connect_with_saved_credentials();
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Could not connect with saved credentials: %s", esp_err_to_name(ret));
+            ESP_LOGI(TAG, "Starting SmartConfig...");
+            return start_smartconfig();
+        }
+        return ESP_OK;
+    #endif
 }
 
 esp_err_t WifiManager::wait_for_connection(uint32_t timeout_ms) {
