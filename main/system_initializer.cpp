@@ -38,24 +38,54 @@ esp_err_t SystemInitializer::init_nvs() {
 }
 
 esp_err_t SystemInitializer::init_task_watchdog() {
+    // First try to delete any existing watchdog
+    esp_task_wdt_deinit();
+    vTaskDelay(pdMS_TO_TICKS(100));  // Add delay after deinit
+    
     constexpr esp_task_wdt_config_t twdt_config = {
-        .timeout_ms = 5000,      // 5 second timeout
-        .idle_core_mask = 0, // No idle core deactivation
-        .trigger_panic = false // Don't trigger panic on timeout
+        .timeout_ms = 30000,      // Increase timeout to 30 seconds
+        .idle_core_mask = (1 << 0), // Watch core 0
+        .trigger_panic = false    // Don't trigger panic on timeout
     };
 
-    if (const esp_err_t ret = esp_task_wdt_init(&twdt_config); ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+    esp_err_t ret = esp_task_wdt_init(&twdt_config);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "Failed to initialize watchdog: %s", esp_err_to_name(ret));
         return ret;
     }
+    
+    vTaskDelay(pdMS_TO_TICKS(100));  // Add delay after init
+    
+    // Subscribe the main task to the watchdog
+    ret = esp_task_wdt_add(xTaskGetCurrentTaskHandle());
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to subscribe main task to watchdog: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
     return ESP_OK;
 }
 
 esp_err_t SystemInitializer::initialize_basic() {
+    // Initialize NVS first
     ESP_RETURN_ON_ERROR(init_nvs(), TAG, "Failed to initialize NVS");
-    ESP_RETURN_ON_ERROR(init_task_watchdog(), TAG, "Failed to initialize watchdog");
+    vTaskDelay(pdMS_TO_TICKS(100));  // Add delay after NVS init
+
+    // Initialize event loop before WiFi
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "Failed to create event loop");
-    ESP_RETURN_ON_ERROR(WifiManager::instance().init(), TAG, "Failed to initialize WiFi manager");
+    vTaskDelay(pdMS_TO_TICKS(100));  // Add delay after event loop creation
+
+    // Initialize WiFi with more robust error handling
+    esp_err_t ret = WifiManager::instance().init();
+    if (ret != ESP_OK && ret != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGE(TAG, "Failed to initialize WiFi manager: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));  // Add delay after WiFi init
+
+    // Initialize watchdog last
+    ESP_RETURN_ON_ERROR(init_task_watchdog(), TAG, "Failed to initialize watchdog");
+    
     return ESP_OK;
 }
 
