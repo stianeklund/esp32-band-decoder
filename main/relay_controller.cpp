@@ -300,7 +300,11 @@ bool RelayController::should_delay() const {
 }
 
 esp_err_t RelayController::execute_relay_change(int relay_id, int band_number) {
-    esp_task_wdt_reset();
+
+    if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+        // Add watchdog feed
+        esp_task_wdt_reset();
+    }
 
     // If we're already on the correct relay, no need to change
     if (relay_id == currently_selected_relay_) {
@@ -358,21 +362,30 @@ void RelayController::tcp_task(void *pvParameters) {
 
     while (true) {
         // Always reset watchdog at start of loop
-        esp_task_wdt_reset();
-        
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            // Add watchdog feed
+            esp_task_wdt_reset();
+        }
+
         // Get current time once for this iteration
         TickType_t current_tick = xTaskGetTickCount();
         
         // Connection check with timeout protection
         if ((current_tick - last_connection_check) >= CONNECTION_CHECK_INTERVAL) {
             // Set shorter watchdog timeout for connection check
-            esp_task_wdt_reset();
+            if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+                // Add watchdog feed
+                esp_task_wdt_reset();
+            }
             esp_err_t conn_status = controller->tcp_client->ensure_connected();
             if (conn_status != ESP_OK) {
                 ESP_LOGW(TAG, "Connection check failed: %s", esp_err_to_name(conn_status));
                 // Connection recovery with watchdog protection
                 controller->tcp_client->close();
-                esp_task_wdt_reset(); // Reset before delay
+                if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+                    // Add watchdog feed
+                    esp_task_wdt_reset();
+                }
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 
                 conn_status = controller->tcp_client->ensure_connected();

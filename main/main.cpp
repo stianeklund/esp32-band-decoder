@@ -90,7 +90,11 @@ extern "C" [[noreturn]] void app_main(void) {
     // Main loop
     while (true) {
         // Feed the watchdog
-        esp_task_wdt_reset();
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            // Add watchdog feed
+            esp_task_wdt_reset();
+        }
+        // esp_task_wdt_reset();
         
         // Add error checking for watchdog reset
         if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_ERR_NOT_FOUND) {
@@ -109,8 +113,12 @@ smartconfig_handler:
     // Enter SmartConfig wait loop with watchdog feed
     while (true) {
         // Feed the watchdog
-        esp_task_wdt_reset();
-        
+
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            // Add watchdog feed
+            esp_task_wdt_reset();
+        }
+
         if (WifiManager::instance().is_connected()) {
             ESP_LOGI(TAG, "SmartConfig successful, restarting system...");
             RestartManager::clear_restart_count();
