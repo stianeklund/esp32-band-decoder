@@ -263,7 +263,10 @@ esp_err_t TCPClient::receive_message(char *message, const size_t message_size, c
         const int64_t now = esp_timer_get_time() / 1000;
         const int elapsed_ms = static_cast<int>(now - start_time);
         // we can trip the watchdog here if we're on a band that's not supported by the config
-        esp_task_wdt_reset();
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            // Add watchdog feed
+            esp_task_wdt_reset();
+        }
 
         if (elapsed_ms >= timeout_ms) {
             ESP_LOGV(TAG, "Timeout after %d ms, message content: '%.*s'",
