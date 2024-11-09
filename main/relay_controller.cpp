@@ -2,75 +2,34 @@
 #include "esp_log.h"
 #include "freertos/projdefs.h"
 #include "freertos/task.h"
-#include "esp_task_wdt.h"
-#include <sstream>
-#include "esp_netif.h"
+#include <chrono>
 
-static auto TAG = "RELAY_CONTROLLER";
+static const char* TAG = "RELAY_CONTROLLER";
 
 RelayController::RelayController()
-        : currently_selected_relay_(0), last_band_change_time_(std::chrono::steady_clock::now()), tcp_host_(""),
-          tcp_port_(0), relay_state_bitfield_(0), tcp_task_handle_(nullptr), last_band_number_(-1) {
-    tcp_client = std::make_unique<TCPClient>();
-    latest_request_.store(RelayChangeRequest{0, -1});
+    : currently_selected_relay_(0), 
+      last_relay_change_(std::chrono::steady_clock::now()) {
 }
 
 RelayController::~RelayController() = default;
 
 esp_err_t RelayController::init() {
     ESP_LOGI(TAG, "Initializing relay controller");
-
-    if (tcp_host_.empty()) {
-        ESP_LOGE(TAG, "TCP host not set. Please set the TCP host before initializing.");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    // Initialize TCP client with connection retry
-    esp_err_t ret = tcp_client->init(tcp_host_.c_str(), tcp_port_);
+    
+    esp_err_t ret = kc868_a16_hw_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Error initializing TCP client: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to initialize KC868-A16 hardware: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    // Configure TCP keepalive with more lenient values
-    int keepalive = 1;
-    int keepidle = 20; // Start probing after 20 seconds of idle
-    int keepintvl = 5; // Probe interval of 5 seconds
-    int keepcnt = 5; // Drop connection after 5 failed probes
-
-    if (setsockopt(tcp_client->get_sock(), SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive)) < 0) {
-        ESP_LOGW(TAG, "Failed to set SO_KEEPALIVE");
-    }
-    if (setsockopt(tcp_client->get_sock(), IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle)) < 0) {
-        ESP_LOGW(TAG, "Failed to set TCP_KEEPIDLE");
-    }
-    if (setsockopt(tcp_client->get_sock(), IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl)) < 0) {
-        ESP_LOGW(TAG, "Failed to set TCP_KEEPINTVL");
-    }
-    if (setsockopt(tcp_client->get_sock(), IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt)) < 0) {
-        ESP_LOGW(TAG, "Failed to set TCP_KEEPCNT");
-    }
-
-    // Get initial relay states with retries
-    const int MAX_INIT_RETRIES = 3;
-    for (int i = 0; i < MAX_INIT_RETRIES; i++) {
-        ret = update_all_relay_states();
-        if (ret == ESP_OK) {
-            break;
-        }
-        ESP_LOGW(TAG, "Retry %d/%d getting initial states", i + 1, MAX_INIT_RETRIES);
-        vTaskDelay(pdMS_TO_TICKS(100 * (i + 1))); // Increasing delay between retries
-    }
-
+    // Turn off all relays initially
+    ret = turn_off_all_relays();
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to get initial relay states after %d attempts", MAX_INIT_RETRIES);
-        // Continue anyway as this isn't fatal
+        ESP_LOGE(TAG, "Failed to initialize relay states: %s", esp_err_to_name(ret));
+        return ret;
     }
 
-    // Create TCP task
-    xTaskCreate(tcp_task, "tcp_task", 4096, this, 5, &tcp_task_handle_);
-
-    ESP_LOGV(TAG, "Relay controller initialized with TCP host: %s, port: %d", tcp_host_.c_str(), tcp_port_);
+    ESP_LOGI(TAG, "Relay controller initialized successfully");
     return ESP_OK;
 }
 
@@ -134,23 +93,15 @@ uint16_t RelayController::get_tcp_port() const {
 
 esp_err_t RelayController::turn_off_all_relays() {
     ESP_LOGD(TAG, "Turning off all relays");
-
-    std::string command = "RELAY-AOF-255,1,1";
-    std::string expected_response_suffix = "255,1,1,OK";
-
-    esp_err_t ret = send_command(command, expected_response_suffix);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to turn off all relays: %s", esp_err_to_name(ret));
-        return ret;
+    
+    std::lock_guard<std::mutex> lock(relay_mutex_);
+    
+    esp_err_t ret = kc868_a16_set_all_outputs(0);
+    if (ret == ESP_OK) {
+        currently_selected_relay_ = 0;
+        last_relay_change_ = std::chrono::steady_clock::now();
     }
-
-    // Update local state
-    for (int i = 1; i <= NUM_RELAYS; ++i) {
-        relay_states_[i] = false;
-    }
-    currently_selected_relay_ = 0;
-
-    return ESP_OK;
+    return ret;
 }
 
 esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
@@ -159,15 +110,34 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    // If the relay is already in the desired state, do nothing.
-    if (const bool current_state = (relay_state_bitfield_ & (1 << (relay_id - 1))) != 0; current_state == state) {
+    std::lock_guard<std::mutex> lock(relay_mutex_);
+    
+    bool current_state;
+    esp_err_t ret = kc868_a16_get_output_state(relay_id - 1, &current_state);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get relay state: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    if (current_state == state) {
         ESP_LOGV(TAG, "Relay %d already in desired state", relay_id);
         return ESP_OK;
     }
 
-    // Store the new relay request
-    latest_request_.store(RelayChangeRequest{relay_id, 0}); // 0 for band_number as it's not used here
-    return ESP_OK;
+    if (should_delay()) {
+        vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
+    }
+
+    ret = kc868_a16_set_output(relay_id - 1, state);
+    if (ret == ESP_OK) {
+        last_relay_change_ = std::chrono::steady_clock::now();
+        if (state) {
+            currently_selected_relay_ = relay_id;
+        } else if (currently_selected_relay_ == relay_id) {
+            currently_selected_relay_ = 0;
+        }
+    }
+    return ret;
 }
 
 bool RelayController::get_relay_state(const int relay_id) const {
@@ -175,7 +145,13 @@ bool RelayController::get_relay_state(const int relay_id) const {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
         return false;
     }
-    return relay_states_.at(relay_id);
+
+    bool state;
+    if (kc868_a16_get_output_state(relay_id - 1, &state) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get relay state");
+        return false;
+    }
+    return state;
 }
 
 std::map<int, bool> RelayController::get_all_relay_states() const {
@@ -249,35 +225,22 @@ esp_err_t RelayController::turn_off_all_relays_except(const int relay_to_keep_on
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t d1 = 0, d0 = 0;
-    if (relay_to_keep_on <= 8) {
-        // ReSharper disable once CppRedundantParentheses
-        d0 = 1 << (relay_to_keep_on - 1);
-    } else {
-        // ReSharper disable once CppRedundantParentheses
-        d1 = 1 << (relay_to_keep_on - 9);
+    std::lock_guard<std::mutex> lock(relay_mutex_);
+
+    if (should_delay()) {
+        vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
     }
 
-    std::stringstream ss;
-    ss << "RELAY-SET_ALL-255," << static_cast<int>(d1) << "," << static_cast<int>(d0);
-    const std::string command = ss.str();
-    // Change the expected response to match just the parameters
-    const std::string expected_response_suffix = std::to_string(d1) + "," + std::to_string(d0) + ",OK";
-
-    ESP_LOGV(TAG, "Sending command: %s", command.c_str());
-
-    if (const esp_err_t ret = send_command(command, expected_response_suffix); ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set all relays: %s", esp_err_to_name(ret));
-        return ret;
+    const uint16_t relay_mask = 1 << (relay_to_keep_on - 1);
+    esp_err_t ret = kc868_a16_set_all_outputs(relay_mask);
+    
+    if (ret == ESP_OK) {
+        currently_selected_relay_ = relay_to_keep_on;
+        last_relay_change_ = std::chrono::steady_clock::now();
+        ESP_LOGI(TAG, "All relays turned off except relay %d", relay_to_keep_on);
     }
-
-    for (int i = 1; i <= NUM_RELAYS; ++i) {
-        relay_states_[i] = i == relay_to_keep_on;
-    }
-    currently_selected_relay_ = relay_to_keep_on;
-
-    ESP_LOGI(TAG, "All relays turned off except relay %d", relay_to_keep_on);
-    return ESP_OK;
+    
+    return ret;
 }
 
 int RelayController::get_last_selected_relay_for_band(int band_number) const {
@@ -295,11 +258,12 @@ bool RelayController::is_correct_relay_set(int band_number) const {
 
 bool RelayController::should_delay() const {
     auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(now - last_band_change_time_).count() <
-           COOLDOWN_PERIOD_MS;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(now - last_relay_change_).count() < COOLDOWN_PERIOD_MS;
 }
 
 esp_err_t RelayController::execute_relay_change(int relay_id, int band_number) {
+    std::lock_guard<std::mutex> lock(relay_mutex_);
+    
     // If we're already on the correct relay, no need to change
     if (relay_id == currently_selected_relay_) {
         ESP_LOGD(TAG, "Relay %d already selected", relay_id);
@@ -307,29 +271,13 @@ esp_err_t RelayController::execute_relay_change(int relay_id, int band_number) {
         return ESP_OK;
     }
 
-    // Apply cooldown if needed
-    if (currently_selected_relay_ != 0 && should_delay()) {
-        ESP_LOGV(TAG, "Applying cooldown before switching relays");
-        vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));  // Proper yield during cooldown
-    }
-
-    // Send the relay change command - single operation
     esp_err_t ret = turn_off_all_relays_except(relay_id);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set relay %d", relay_id);
-        return ret;
-    }
-
-    // The SET_ALL command already returns the state, so we can use that
-    // instead of doing an additional state query
-    if (currently_selected_relay_ == relay_id) {
+    if (ret == ESP_OK) {
         last_selected_relay_for_band_[band_number] = relay_id;
-        last_band_change_time_ = std::chrono::steady_clock::now();
         ESP_LOGI(TAG, "Successfully changed to relay %d for band %d", relay_id, band_number);
-        return ESP_OK;
     }
 
-    return ESP_FAIL;
+    return ret;
 }
 
 void RelayController::tcp_task(void *pvParameters) {
