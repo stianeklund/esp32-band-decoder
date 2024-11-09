@@ -26,6 +26,8 @@ typedef struct {
     uint8_t uart_parity;
     uint8_t uart_stop_bits;
     uint8_t uart_flow_ctrl;
+    int8_t uart_tx_pin;  // GPIO pin number for UART TX
+    int8_t uart_rx_pin;  // GPIO pin number for UART RX
 } antenna_switch_config_t;
 
 // C interface

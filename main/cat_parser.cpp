@@ -98,12 +98,28 @@ esp_err_t CatParser::init() {
 
     ESP_LOGV(TAG, "Starting basic UART2 configuration");
 
+    // Validate UART pins and set defaults if needed
+    if (current_config.uart_tx_pin < 0 || current_config.uart_rx_pin < 0) {
+        ESP_LOGW(TAG, "Invalid UART pins, using defaults TX=17, RX=16");
+        current_config.uart_tx_pin = 17;  // Default TX pin
+        current_config.uart_rx_pin = 16;  // Default RX pin
+        ret = antenna_switch_set_config(&current_config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save default UART pins: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    }
+
     // Configure UART2 with minimal settings
     ESP_ERROR_CHECK(uart_param_config(UART_NUM_2, &uart2_config));
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // Set pins before driver installation
-    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2, UART_TX_PIN, UART_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+    // Set configured pins before driver installation
+    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2, 
+                                current_config.uart_tx_pin,
+                                current_config.uart_rx_pin, 
+                                UART_PIN_NO_CHANGE, 
+                                UART_PIN_NO_CHANGE));
     vTaskDelay(pdMS_TO_TICKS(50));
 
     // If basic configuration succeeds, try updating to desired settings
