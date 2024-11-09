@@ -33,13 +33,6 @@ esp_err_t RelayController::init() {
     return ESP_OK;
 }
 
-void RelayController::set_tcp_host(const std::string &host) {
-    if (tcp_host_ != host) {
-        tcp_host_ = host;
-        ESP_LOGD(TAG, "TCP host set to: %s", tcp_host_.c_str());
-    }
-}
-
 esp_err_t RelayController::update_relay_states() {
     ESP_LOGV(TAG, "Updating relay states");
 
@@ -49,46 +42,6 @@ esp_err_t RelayController::update_relay_states() {
     }
 
     return ESP_OK;
-}
-
-esp_err_t RelayController::update_tcp_settings(const std::string &host, const uint16_t port) {
-    if (host != tcp_host_ || port != tcp_port_) {
-        tcp_host_ = host;
-        tcp_port_ = port;
-
-        if (tcp_client->check_connection_status()) {
-            tcp_client->close();
-        }
-
-        esp_err_t ret = tcp_client->ensure_connected();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Error establishing TCP connection: %s", esp_err_to_name(ret));
-            return ret;
-        }
-
-        // Verify connection by getting relay states
-        ret = update_all_relay_states();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to verify connection with relay state query");
-        }
-
-        ESP_LOGI(TAG, "TCP settings updated. New host: %s, new port: %d", tcp_host_.c_str(), tcp_port_);
-    }
-
-    return ESP_OK;
-}
-
-
-void RelayController::set_tcp_port(const uint16_t port) {
-    tcp_port_ = port;
-}
-
-std::string RelayController::get_tcp_host() const {
-    return tcp_host_;
-}
-
-uint16_t RelayController::get_tcp_port() const {
-    return tcp_port_;
 }
 
 esp_err_t RelayController::turn_off_all_relays() {

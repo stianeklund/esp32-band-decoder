@@ -331,6 +331,26 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     ss << "<option value='3' " << (config.uart_flow_ctrl == 3 ? "selected" : "") << ">CTS/RTS</option>";
     ss << "</select></div>";
 
+    ss << "<div class='form-group'>";
+    ss << "<label for='uart_tx_pin'>UART TX Pin:</label>";
+    ss << "<select id='uart_tx_pin' name='uart_tx_pin'>";
+    for (int pin = 0; pin <= 39; pin++) {
+        ss << "<option value='" << pin << "' "
+           << (config.uart_tx_pin == pin ? "selected" : "")
+           << ">GPIO" << pin << "</option>";
+    }
+    ss << "</select></div>";
+
+    ss << "<div class='form-group'>";
+    ss << "<label for='uart_rx_pin'>UART RX Pin:</label>";
+    ss << "<select id='uart_rx_pin' name='uart_rx_pin'>";
+    for (int pin = 0; pin <= 39; pin++) {
+        ss << "<option value='" << pin << "' "
+           << (config.uart_rx_pin == pin ? "selected" : "")
+           << ">GPIO" << pin << "</option>";
+    }
+    ss << "</select></div>";
+
     ss << "<table>";
     ss << "<thead>";
     ss << "<tr>";
@@ -405,6 +425,8 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             uart_parity: parseInt(formData.get('uart_parity')),
             uart_stop_bits: parseInt(formData.get('uart_stop_bits')),
             uart_flow_ctrl: parseInt(formData.get('uart_flow_ctrl')),
+            uart_tx_pin: parseInt(formData.get('uart_tx_pin')),
+            uart_rx_pin: parseInt(formData.get('uart_rx_pin')),
             bands: []
         };
         
