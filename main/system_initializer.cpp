@@ -2,6 +2,7 @@
 
 #include <antenna_switch.h>
 #include <cat_parser.h>
+#include "cat_parser.h"
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <esp_netif_types.h>
@@ -98,29 +99,33 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
     ESP_RETURN_ON_ERROR(antenna_switch_get_config(&config), TAG,
                         "Failed to get antenna switch configuration");
 
-    // Create relay controller
-    auto relay_controller = std::make_unique<RelayController>();
+    // Initialize CAT parser
+    ESP_RETURN_ON_ERROR(cat_parser_init(), TAG, "Failed to initialize CAT parser");
+
+    // Get relay controller singleton instance and initialize it immediately
+    auto& relay_controller = RelayController::instance();
+    esp_err_t ret = relay_controller.init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize relay controller: %s", esp_err_to_name(ret));
+        return ret;
+    }
     
-    // Configure TCP settings if host is specified
-    if (strlen(config.tcp_host) > 0) {
-        relay_controller->set_tcp_host(config.tcp_host);
-        relay_controller->set_tcp_port(config.tcp_port);
-        
-        ESP_LOGI(TAG, "Waiting for valid IP address...");
-        
-        // Wait up to 30 seconds for valid IP
+    // Set the relay controller in antenna switch
+    *relay_controller_out = &relay_controller;
+    antenna_switch_set_relay_controller(*relay_controller_out);
+
+    // Now wait for network if needed
+    if (!is_valid_ip()) {
         constexpr int MAX_IP_WAIT_MS = 30000;
         int waited_ms = 0;
         
         while (!is_valid_ip() && waited_ms < MAX_IP_WAIT_MS) {
-
             constexpr int IP_CHECK_INTERVAL_MS = 500;
-
             vTaskDelay(pdMS_TO_TICKS(IP_CHECK_INTERVAL_MS));
             waited_ms += IP_CHECK_INTERVAL_MS;
             
             if (waited_ms % 1000 == 0) {
-                ESP_LOGI(TAG, "Waiting for IP address... %d/%d ms", 
+                ESP_LOGI(TAG, "Waiting to confirm network connectivity.. %d/%d ms",
                          waited_ms, MAX_IP_WAIT_MS);
             }
         }
@@ -131,33 +136,17 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
             // Give network stack additional time to stabilize
             vTaskDelay(pdMS_TO_TICKS(2000));
 
-
             // Log network information for debugging
             esp_netif_ip_info_t ip_info;
-
             if (esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
                 esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
-                ESP_LOGI(TAG, "Device IP: " IPSTR ", TCP Host: %s",
-                         IP2STR(&ip_info.ip), config.tcp_host);
-                ESP_LOGI(TAG, "WiFi connected, initializing TCP connection to %s:%d",
-                         config.tcp_host, config.tcp_port);
-            }
-
-            if (const esp_err_t ret = relay_controller->init(); ret != ESP_OK) {
-                ESP_LOGW(TAG, "Failed to initialize relay controller: %s. Continuing without TCP connection", 
-                         esp_err_to_name(ret));
-                // Don't return error - continue with initialization
+                ESP_LOGI(TAG, "Device IP:" IPSTR, IP2STR(&ip_info.ip));
             }
         }
-    } else {
-        ESP_LOGW(TAG, "TCP host not configured. Continuing without TCP connection");
     }
 
-    // Initialize CAT parser after relay controller is ready
-    ESP_RETURN_ON_ERROR(cat_parser_init(), TAG, "Failed to initialize CAT parser");
-
     // Set the relay controller in antenna switch
-    *relay_controller_out = relay_controller.get();
-    antenna_switch_set_relay_controller(std::move(relay_controller));
+    *relay_controller_out = &relay_controller;
+    antenna_switch_set_relay_controller(*relay_controller_out);
     return ESP_OK;
 }

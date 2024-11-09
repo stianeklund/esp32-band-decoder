@@ -12,9 +12,7 @@
 #include "relay_controller.h"
 #include "wifi_manager.hpp"
 
-#define UART_NUM UART_NUM_2
-
-static auto TAG = "ANTENNA_SWITCH_MAIN";
+static auto TAG = "MAIN";
 
 // Global pointer to RelayController
 static RelayController *g_relay_controller = nullptr;
@@ -78,7 +76,7 @@ extern "C" [[noreturn]] void app_main(void) {
     }
 
     // Only proceed with full initialization after WiFi is connected
-    ESP_LOGI(TAG, "WiFi connected, initializing full system...");
+    ESP_LOGV(TAG, "WiFi connected, initializing full system...");
     ret = SystemInitializer::initialize_full(&relay_controller);
     if (ret != ESP_OK) {
         goto error_handler;

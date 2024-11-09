@@ -228,30 +228,15 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     const cJSON *auto_mode = cJSON_GetObjectItem(root, "auto_mode");
     new_config.auto_mode = cJSON_IsTrue(auto_mode);
 
-    if (cJSON const *tcp_host = cJSON_GetObjectItem(root, "tcp_host"); cJSON_IsString(tcp_host)) {
-        strncpy(new_config.tcp_host, tcp_host->valuestring, sizeof(new_config.tcp_host) - 1);
-        new_config.tcp_host[sizeof(new_config.tcp_host) - 1] = '\0';
-    }
-
-    // Parse TCP port with input validation
-    if (cJSON const *tcp_port = cJSON_GetObjectItem(root, "tcp_port"); cJSON_IsNumber(tcp_port)) {
-        if (tcp_port->valueint > 0 && tcp_port->valueint <= 65535) {
-            new_config.tcp_port = tcp_port->valueint;
-        } else {
-            ESP_LOGE(TAG, "Invalid TCP port: %d", tcp_port->valueint);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid TCP port");
-            return ESP_FAIL;
-        }
-    } else {
-        ESP_LOGE(TAG, "TCP port not specified or invalid");
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or missing TCP port");
-        return ESP_FAIL;
-    }
 
     // Parse UART configuration
+    // Log the raw JSON content for debugging
+    // ESP_LOGI(TAG, "Received config JSON: %s", content);
+
     if (const cJSON *uart_baud = cJSON_GetObjectItem(root, "uart_baud_rate"); cJSON_IsNumber(uart_baud)) {
         if (uart_baud->valueint > 0) {
             new_config.uart_baud_rate = uart_baud->valueint;
+            ESP_LOGD(TAG, "Setting UART baud rate to: %d", uart_baud->valueint);
         } else {
             ESP_LOGE(TAG, "Invalid baud rate: %d", uart_baud->valueint);
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid baud rate");
@@ -285,9 +270,34 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
 
     if (const cJSON *uart_flow_ctrl = cJSON_GetObjectItem(root, "uart_flow_ctrl"); cJSON_IsNumber(uart_flow_ctrl)) {
         new_config.uart_flow_ctrl = uart_flow_ctrl->valueint;
+        ESP_LOGD(TAG, "Setting UART flow control to: %i", uart_flow_ctrl->valueint);
     } else {
         ESP_LOGE(TAG, "UART flow control not specified or invalid");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or missing UART flow control");
+        cJSON_Delete(root);
+        free(content);
+        return ESP_FAIL;
+    }
+
+    // Handle UART TX pin
+    if (const cJSON *uart_tx = cJSON_GetObjectItem(root, "uart_tx_pin"); cJSON_IsNumber(uart_tx)) {
+        new_config.uart_tx_pin = uart_tx->valueint;
+        ESP_LOGD(TAG, "Setting UART TX pin to: %i", uart_tx->valueint);
+    } else {
+        ESP_LOGE(TAG, "UART TX pin not specified or invalid");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or missing UART TX pin");
+        cJSON_Delete(root);
+        free(content);
+        return ESP_FAIL;
+    }
+
+    // Handle UART RX pin
+    if (const cJSON *uart_rx = cJSON_GetObjectItem(root, "uart_rx_pin"); cJSON_IsNumber(uart_rx)) {
+        new_config.uart_rx_pin = uart_rx->valueint;
+        ESP_LOGD(TAG, "Setting UART RX pin to: %i", uart_rx->valueint);
+    } else {
+        ESP_LOGE(TAG, "UART RX pin not specified or invalid");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or missing UART RX pin");
         cJSON_Delete(root);
         free(content);
         return ESP_FAIL;
@@ -338,13 +348,21 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
 
         for (int i = 0; i < num_bands1 && i < MAX_BANDS; i++) {
             if (cJSON const *band = cJSON_GetArrayItem(bands, i); cJSON_IsObject(band)) {
-                if (cJSON const *description = cJSON_GetObjectItem(band, "description"); cJSON_IsString(description)) {
+                if (const cJSON *description = cJSON_GetObjectItem(band, "description"); cJSON_IsString(description)) {
                     if (auto it = band_info.find(description->valuestring); it != band_info.end()) {
                         strncpy(new_config.bands[i].description, it->second.name,
-                                sizeof(new_config.bands[i].description) - 1);
+                               sizeof(new_config.bands[i].description) - 1);
                         new_config.bands[i].start_freq = it->second.start_freq;
                         new_config.bands[i].end_freq = it->second.end_freq;
+                        ESP_LOGV(TAG, "Setting band %d: %s (%lu-%lu Hz)", i,
+                                new_config.bands[i].description,
+                                new_config.bands[i].start_freq,
+                                new_config.bands[i].end_freq);
+                    } else {
+                        ESP_LOGW(TAG, "Unknown band description: %s", description->valuestring);
                     }
+                } else {
+                    ESP_LOGW(TAG, "Missing or invalid band description for band %d", i);
                 }
 
                 if (const cJSON *antenna_ports = cJSON_GetObjectItem(band, "antenna_ports"); cJSON_IsArray(antenna_ports)) {
@@ -425,8 +443,6 @@ static esp_err_t reset_config_handler(httpd_req_t *req) {
             {.description = "10m", .start_freq = 28000000, .end_freq = 29700000, .antenna_ports = {true}},
             {.description = "6m", .start_freq = 50000000, .end_freq = 54000000, .antenna_ports = {true}},
         },
-        .tcp_host = "",
-        .tcp_port = 0,
         .uart_baud_rate = 9600,
         .uart_parity = UART_PARITY_DISABLE,
         .uart_stop_bits = 1,
@@ -477,6 +493,114 @@ static esp_err_t reset_wifi_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t relay_status_handler(httpd_req_t *req) {
+    uint16_t relay_states = RelayController::instance().get_relay_states();
+    
+    // Log the states for debugging
+    ESP_LOGD(TAG, "Raw relay states: 0x%04X", relay_states);
+    
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "states", relay_states);
+
+    char *json_string = cJSON_Print(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_string);
+
+    free(json_string);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static esp_err_t relay_control_handler(httpd_req_t *req) {
+    char buf[32];
+    int ret = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    if (ret <= 0) {
+        ESP_LOGE(TAG, "Failed to receive relay control request");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    // ESP_LOGI(TAG, "Received relay control request: %s", buf);
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to parse JSON");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    const cJSON *relay = cJSON_GetObjectItem(root, "relay");
+    const cJSON *state = cJSON_GetObjectItem(root, "state");
+
+    if (!cJSON_IsNumber(relay) || !cJSON_IsBool(state)) {
+        ESP_LOGE(TAG, "Invalid relay or state in request");
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid relay or state");
+        return ESP_FAIL;
+    }
+
+    const int relay_num = relay->valueint;
+    const bool relay_state = cJSON_IsTrue(state);
+
+    ESP_LOGD(TAG, "Setting relay %d to state %d", relay_num, relay_state);
+
+    if (const esp_err_t err = RelayController::instance().set_relay(relay_num, relay_state); err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set relay: %s", esp_err_to_name(err));
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to set relay");
+        return ESP_FAIL;
+    }
+
+    // Add a small delay to allow the hardware to update
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // Verify the new state
+    const bool current_state = RelayController::instance().get_relay_state(relay_num);
+    ESP_LOGV(TAG, "Relay %d state after setting: %d", relay_num, current_state);
+
+    cJSON_Delete(root);
+    
+    // Return the current state in the response
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "state", current_state);
+    char *json_string = cJSON_Print(response);
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_string);
+    
+    free(json_string);
+    cJSON_Delete(response);
+    return ESP_OK;
+}
+
+static constexpr httpd_uri_t relay_status = {
+    .uri = "/relay/status",
+    .method = HTTP_GET,
+    .handler = relay_status_handler,
+    .user_ctx = nullptr
+};
+
+static constexpr httpd_uri_t relay_control = {
+    .uri = "/relay/control",
+    .method = HTTP_POST,
+    .handler = relay_control_handler,
+    .user_ctx = nullptr
+};
+
+static constexpr httpd_uri_t reset_wifi = {
+        .uri       = "/reset-wifi",
+        .method    = HTTP_POST,
+        .handler   = reset_wifi_handler,
+        .user_ctx  = nullptr
+};
+
+static constexpr httpd_uri_t config_post = {
+        .uri       = "/config",
+        .method    = HTTP_POST,
+        .handler   = config_post_handler,
+        .user_ctx  = nullptr
+};
+
 static constexpr httpd_uri_t toggle_auto_mode = {
         .uri       = "/toggle-auto-mode",
         .method    = HTTP_POST,
@@ -495,20 +619,6 @@ static constexpr httpd_uri_t restart = {
         .uri       = "/restart",
         .method    = HTTP_POST,
         .handler   = restart_handler,
-        .user_ctx  = nullptr
-};
-
-static constexpr httpd_uri_t reset_wifi = {
-        .uri       = "/reset-wifi",
-        .method    = HTTP_POST,
-        .handler   = reset_wifi_handler,
-        .user_ctx  = nullptr
-};
-
-static constexpr httpd_uri_t config_post = {
-        .uri       = "/config",
-        .method    = HTTP_POST,
-        .handler   = config_post_handler,
         .user_ctx  = nullptr
 };
 
@@ -581,6 +691,18 @@ esp_err_t webserver_init() {
     ret = httpd_register_uri_handler(server, &reset_wifi);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register reset wifi URI handler: %s", esp_err_to_name(ret));
+        goto error_handler;
+    }
+
+    ret = httpd_register_uri_handler(server, &relay_status);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register relay status handler: %s", esp_err_to_name(ret));
+        goto error_handler;
+    }
+
+    ret = httpd_register_uri_handler(server, &relay_control);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register relay control handler: %s", esp_err_to_name(ret));
         goto error_handler;
     }
 

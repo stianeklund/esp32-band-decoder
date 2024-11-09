@@ -30,7 +30,7 @@ ConfigManager &ConfigManager::instance() {
 esp_err_t ConfigManager::init() const {
     ESP_LOGI(TAG, "Initializing configuration manager");
 
-    // Try to load from NVS first
+    // Try to load from NVS
     esp_err_t ret = load_from_nvs();
 
     // If no config exists, create default
@@ -41,12 +41,12 @@ esp_err_t ConfigManager::init() const {
         current_config_->num_bands = 10;
         current_config_->auto_mode = true;
         current_config_->num_antenna_ports = 6;
-        strcpy(current_config_->tcp_host, "192.168.1.100"); // Default to a more typical remote host
-        current_config_->tcp_port = 12090;
         current_config_->uart_baud_rate = 9600;
         current_config_->uart_parity = UART_PARITY_DISABLE;
         current_config_->uart_stop_bits = UART_STOP_BITS_1;
         current_config_->uart_flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+        current_config_->uart_rx_pin = GPIO_NUM_32; // HT1
+        current_config_->uart_tx_pin = GPIO_NUM_33; // HT2
 
         // Save default configuration
         ret = save_to_nvs();
@@ -58,19 +58,6 @@ esp_err_t ConfigManager::init() const {
         ESP_LOGE(TAG, "Error loading configuration: %s", esp_err_to_name(ret));
         return ret;
     }
-
-    // Validate TCP host after loading/setting defaults
-    if (strlen(current_config_->tcp_host) == 0) {
-        ESP_LOGW(TAG, "TCP host is empty, setting default");
-        strcpy(current_config_->tcp_host, "192.168.1.100");
-        ret = save_to_nvs();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to save default TCP host: %s", esp_err_to_name(ret));
-            return ret;
-        }
-    }
-
-    ESP_LOGI(TAG, "Using TCP host: %s:%d", current_config_->tcp_host, current_config_->tcp_port);
 
     return ESP_OK;
 }
