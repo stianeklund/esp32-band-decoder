@@ -12,10 +12,15 @@ static esp_err_t write_pcf8574(uint8_t addr, uint8_t data) {
     i2c_master_stop(cmd);
     esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(cmd);
+    
+    // Add a small delay after each I2C operation
+    vTaskDelay(pdMS_TO_TICKS(10));
     return ret;
 }
 
 esp_err_t kc868_a16_hw_init() {
+    ESP_LOGI(TAG, "Initializing KC868-A16 hardware");
+    
     i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = I2C_MASTER_SDA_IO,
@@ -28,19 +33,33 @@ esp_err_t kc868_a16_hw_init() {
     };
     
     esp_err_t ret = i2c_param_config(I2C_MASTER_NUM, &conf);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure I2C parameters: %s", esp_err_to_name(ret));
+        return ret;
+    }
     
     ret = i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install I2C driver: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
-    // Initialize both PCF8574s to all outputs off
+    ESP_LOGI(TAG, "Initializing PCF8574_1 (0x%02x)", PCF8574_OUTPUT_ADDR_1);
     ret = write_pcf8574(PCF8574_OUTPUT_ADDR_1, 0xFF);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize PCF8574_1: %s", esp_err_to_name(ret));
+        return ret;
+    }
     
+    ESP_LOGI(TAG, "Initializing PCF8574_2 (0x%02x)", PCF8574_OUTPUT_ADDR_2);
     ret = write_pcf8574(PCF8574_OUTPUT_ADDR_2, 0xFF);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize PCF8574_2: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
     output_state = 0;
+    ESP_LOGI(TAG, "KC868-A16 hardware initialized successfully");
     return ESP_OK;
 }
 
@@ -60,6 +79,9 @@ esp_err_t kc868_a16_set_output(uint8_t output_num, bool state) {
         current_byte |= (1 << bit_pos);
     }
 
+    // Add a small delay before changing state
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
     esp_err_t ret = write_pcf8574(pcf_addr, current_byte);
     if (ret == ESP_OK) {
         if (output_num < 8) {
@@ -67,6 +89,8 @@ esp_err_t kc868_a16_set_output(uint8_t output_num, bool state) {
         } else {
             output_state = (output_state & 0x00FF) | (current_byte << 8);
         }
+        // Add a small delay after successful state change
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     return ret;
 }

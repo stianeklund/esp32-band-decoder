@@ -9,7 +9,7 @@
 #include "esp_system.h"
 
 static auto TAG = "ANTENNA_SWITCH";
-static std::unique_ptr<RelayController> relay_controller;
+static RelayController* relay_controller = nullptr;
 
 [[maybe_unused]] static esp_err_t get_ip_address(char *ip_addr, const size_t max_len) {
     if (!ip_addr || max_len < 16) {
@@ -18,30 +18,6 @@ static std::unique_ptr<RelayController> relay_controller;
     }
 
     return WifiManager::instance().get_ip_info(ip_addr, max_len);
-}
-
-esp_err_t antenna_switch_set_tcp_host(const char *host) {
-    if (host == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    auto config = ConfigManager::instance().get_config();
-
-    strncpy(config.tcp_host, host, sizeof(config.tcp_host) - 1);
-    config.tcp_host[sizeof(config.tcp_host) - 1] = '\0';
-
-    // Update the TCP host in the RelayController
-    if (relay_controller) {
-        relay_controller->set_tcp_host(host);
-        // wait a little before reconnecting
-        vTaskDelay(pdMS_TO_TICKS(100));
-        if (const esp_err_t ret = relay_controller->init(); ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to reconnect after host change: %s", esp_err_to_name(ret));
-            return ret;
-        }
-    }
-
-    return ConfigManager::instance().update_config(config);
 }
 
 
@@ -59,8 +35,8 @@ esp_err_t antenna_switch_init() {
     return ESP_OK;
 }
 
-void antenna_switch_set_relay_controller(std::unique_ptr<RelayController> controller) {
-    relay_controller = std::move(controller);
+void antenna_switch_set_relay_controller(RelayController* controller) {
+    relay_controller = controller;
 }
 
 esp_err_t antenna_switch_set_config(const antenna_switch_config_t *config) {
@@ -126,18 +102,6 @@ esp_err_t antenna_switch_set_auto_mode(const bool auto_mode) {
 esp_err_t antenna_switch_set_relay(const int relay_id, const bool state) {
     ESP_LOGI(TAG, "Setting relay %d to %s", relay_id, state ? "ON" : "OFF");
     return relay_controller->set_relay(relay_id, state);
-}
-
-esp_err_t antenna_switch_set_tcp_port(const uint16_t port) {
-    auto config = ConfigManager::instance().get_config();
-    config.tcp_port = port;
-
-    // Update the TCP port in the RelayController
-    if (relay_controller) {
-        relay_controller->set_tcp_port(port);
-    }
-
-    return ConfigManager::instance().update_config(config);
 }
 
 esp_err_t antenna_switch_get_relay_state(const int relay_id, bool *state) {

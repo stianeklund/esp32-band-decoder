@@ -9,8 +9,6 @@
 #include <atomic>
 #define MAX_CAT_COMMAND_LENGTH 32
 #define UART_NUM UART_NUM_2
-#define UART_TX_PIN 17
-#define UART_RX_PIN 16
 #define UART_BAUD_RATE 9600
 #define BUF_SIZE 256  // Reduced buffer size
 #define MAX_EVENTS_PER_LOOP 3  // Limit events processed per loop
@@ -59,13 +57,10 @@ private:
 
     static void uart_task_trampoline(void *arg);
 
-    static void uart0_task_trampoline(void *arg);
-
     uint32_t get_current_frequency() const { return current_frequency; }
 
     std::unordered_map<uint16_t, CommandHandler> command_handlers;
     QueueHandle_t uart2_queue;
-    QueueHandle_t uart0_queue;
     antenna_switch_config_t current_config{};
     uint32_t current_frequency{0};
     int current_band_index{-1}; // Cache for current frequency's band

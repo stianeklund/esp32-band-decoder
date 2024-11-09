@@ -1,4 +1,6 @@
 #include "html_content.h"
+
+#include <cstring>
 #include <sstream>
 #include <esp_log.h>
 
@@ -128,6 +130,31 @@ const char *HTML_HEADER = R"(
         input[type="checkbox"] {
             margin-right: 5px;
         }
+        .relay-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            padding: 15px;
+        }
+        .relay-button {
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #e0e0e0;  /* Default state - OFF */
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: bold;
+        }
+        .relay-button.active {
+            background-color: #2ecc71;  /* ON state - green */
+            color: white;
+            border-color: #27ae60;
+        }
+        .relay-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
         .auto-mode-container {
             background-color: white;
             border-radius: 10px;
@@ -194,6 +221,18 @@ std::string generate_root_html(const antenna_switch_config_t &config, const char
             </table>
         </div>
     </div>
+    <div class="status-box" style="width: 100%; margin-top: 20px;">
+        <h2>Relay Controls</h2>
+        <div class="relay-grid">)";
+
+for (int i = 0; i < 16; i++) {
+    ss << "<button class='relay-button' data-relay='" << (i + 1) << "' onclick='toggleRelay(" << (i + 1) << ")'>"
+       << "Relay " << (i + 1) << "</button>";
+}
+
+ss << R"(
+        </div>
+    </div>
     <div class="button-container">
         <a href='/config' class="button">Edit Configuration</a>
         <form action='/restart' method='post' style='display:inline' onsubmit='handleRestart(event)'>
@@ -222,7 +261,89 @@ std::string generate_root_html(const antenna_switch_config_t &config, const char
         </script>
     </div>
     <script>
-        const STATUS_UPDATE_INTERVAL = 5000;
+        let isRelayOperationInProgress = false;
+        const RELAY_OPERATION_COOLDOWN = 250; // ms
+        const STATUS_UPDATE_INTERVAL = 2000; // Reduced from 5000 to 2000ms
+
+        async function toggleRelay(relay) {
+            // Prevent multiple rapid clicks
+            if (isRelayOperationInProgress) {
+                //console.log('Operation in progress, please wait...');
+                return;
+            }
+
+            try {
+                isRelayOperationInProgress = true;
+                const button = document.querySelector(`button[data-relay="${relay}"]`);
+                button.disabled = true; // Disable button during operation
+                
+                const newState = !button.classList.contains('active');
+                //console.log(`Setting relay ${relay} to state: ${newState}`);
+                
+                const response = await fetch('/relay/control', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        relay: relay,
+                        state: newState
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Server error:', errorText);
+                    throw new Error(errorText);
+                }
+                
+                const result = await response.json();
+                button.classList.toggle('active', result.state);
+                
+                // Wait for a short period before allowing next operation
+                await new Promise(resolve => setTimeout(resolve, RELAY_OPERATION_COOLDOWN));
+                
+            } catch (error) {
+                console.error('Error toggling relay:', error);
+                alert('Failed to toggle relay: ' + error.message);
+            } finally {
+                const button = document.querySelector(`button[data-relay="${relay}"]`);
+                button.disabled = false; // Re-enable button
+                isRelayOperationInProgress = false;
+            }
+        }
+
+        // Add debouncing to the status updates
+        let statusUpdateTimeout = null;
+        async function updateRelayStatus() {
+            if (statusUpdateTimeout) {
+                clearTimeout(statusUpdateTimeout);
+            }
+            
+            try {
+                const response = await fetch('/relay/status');
+                const data = await response.json();
+                const states = data.states;
+                
+                for (let i = 1; i <= 16; i++) {
+                    const button = document.querySelector(`button[data-relay="${i}"]`);
+                    if (button && !button.disabled) { // Only update if button isn't in middle of operation
+                        // Subtract 1 from i since relay numbers are 1-based but bits are 0-based
+                        // Subtract 1 from i since relay numbers are 1-based but bits are 0-based
+                        const state = ((states >> (i-1)) & 1) === 0;  // Inverted logic for active-low relays
+                        button.classList.toggle('active', state);
+                
+                        // Add debug logging
+                        //console.debug(`Relay ${i} state: ${state ? 'ON' : 'OFF'}`);
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating relay status:', error);
+            }
+            
+            // Schedule next update
+            statusUpdateTimeout = setTimeout(updateRelayStatus, STATUS_UPDATE_INTERVAL);
+        }
 
         function updateStatus() {
             fetch("/status")
@@ -243,8 +364,10 @@ std::string generate_root_html(const antenna_switch_config_t &config, const char
                 });
         }
 
-        setInterval(updateStatus, STATUS_UPDATE_INTERVAL);
+        // Start the status updates
         updateStatus();
+        updateRelayStatus();
+        setInterval(updateStatus, STATUS_UPDATE_INTERVAL);
     </script>
     )";
     ss << HTML_FOOTER;
@@ -266,8 +389,7 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
         return ""; // Return empty string to indicate error
     }
 
-    ESP_LOGI(TAG, "Generating HTML for config: %d bands, %d antenna ports, tcp host:%s, tcp port:%d",
-             config.num_bands, config.num_antenna_ports, config.tcp_host, config.tcp_port);
+    ESP_LOGI(TAG, "Generating HTML for config: %d bands, %d antenna ports", config.num_bands, config.num_antenna_ports);
     ESP_LOGI(TAG, "Debug: num_bands = %d, num_antenna_ports = %d", config.num_bands, config.num_antenna_ports);
 
     ss << HTML_HEADER;
@@ -283,16 +405,6 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     ss << "<label for='num_antenna_ports'>Number of outputs:</label>";
     ss << "<input type='number' id='num_antenna_ports' name='num_antenna_ports' value='"
             << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "' onchange='updateAntennaPorts()'>";
-    ss << "</div>";
-
-    ss << "<div class='form-group'>";
-    ss << "<h3>TCP Configuration</h3>";
-    ss << "<label for='tcp_host'>TCP Host:</label>";
-    ss << "<input type='text' id='tcp_host' name='tcp_host' value='" << config.tcp_host << "'>";
-    ss << "</div>";
-    ss << "<div class='form-group'>";
-    ss << "<label for='tcp_port'>TCP Port:</label>";
-    ss << "<input type='number' id='tcp_port' name='tcp_port' value='" << config.tcp_port << "' min='1' max='65535'>";
     ss << "</div>";
 
     ss << "<h3>UART Configuration</h3>";
@@ -366,13 +478,20 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
         ss << "<tr>";
         ss << "<td><select name='band_" << i << "' onchange='updateFrequencies(this, " << i << ")'>";
 
-        for (const auto &[fst, snd]: band_info) {
-            ss << "<option value='" << fst << "' "
-                    << (config.bands[i].start_freq == snd.start_freq &&
-                        config.bands[i].end_freq == snd.end_freq
-                            ? "selected"
-                            : "")
-                    << ">" << snd.name << "</option>";
+        // Find matching band from description
+        std::string selected_band;
+        for (const auto &[band_name, band_info]: band_info) {
+            if (strcmp(config.bands[i].description, band_info.name) == 0) {
+                selected_band = band_name;
+                break;
+            }
+        }
+
+        // Generate options with correct selection
+        for (const auto &[band_name, band_info]: band_info) {
+            ss << "<option value='" << band_name << "' "
+               << (band_name == selected_band ? "selected" : "")
+               << ">" << band_info.name << "</option>";
         }
 
         ss << "</select></td>";
@@ -421,12 +540,12 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             num_antenna_ports: parseInt(formData.get('num_antenna_ports')),
             tcp_host: formData.get('tcp_host'),
             tcp_port: parseInt(formData.get('tcp_port')),
-            uart_baud_rate: parseInt(formData.get('uart_baud_rate')),
-            uart_parity: parseInt(formData.get('uart_parity')),
-            uart_stop_bits: parseInt(formData.get('uart_stop_bits')),
-            uart_flow_ctrl: parseInt(formData.get('uart_flow_ctrl')),
-            uart_tx_pin: parseInt(formData.get('uart_tx_pin')),
-            uart_rx_pin: parseInt(formData.get('uart_rx_pin')),
+            uart_baud_rate: parseInt(formData.get('uart_baud_rate')) || 9600,
+            uart_parity: parseInt(formData.get('uart_parity')) || 0,
+            uart_stop_bits: parseInt(formData.get('uart_stop_bits')) || 1,
+            uart_flow_ctrl: parseInt(formData.get('uart_flow_ctrl')) || 0,
+            uart_tx_pin: parseInt(formData.get('uart_tx_pin')) || 17,
+            uart_rx_pin: parseInt(formData.get('uart_rx_pin')) || 16,
             bands: []
         };
         
@@ -560,11 +679,12 @@ ss << R"(
             });
             bandSelect.innerHTML = optionsHtml;
             
-            // If we have existing config for this row, use it
-            if (existingConfig[i] && existingConfig[i].band) {
-                bandSelect.value = existingConfig[i].band;
+            // Set initial band value based on the description in the config
+            const bandDescription = document.querySelector(`select[name="band_${i}"]`).value;
+            if (bandDescription) {
+                bandSelect.value = bandDescription;
             } else {
-                // Otherwise use default band based on index
+                // Fallback to default band based on index
                 const defaultBand = Object.entries(bandFrequencies)[i % Object.keys(bandFrequencies).length];
                 bandSelect.value = defaultBand[0];
             }

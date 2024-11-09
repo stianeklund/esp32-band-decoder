@@ -5,12 +5,14 @@
 #include "driver/i2c.h"
 
 // PCF8574 I2C addresses (typical for KC868-A16)
-#define PCF8574_OUTPUT_ADDR_1 0x20  // First output expander (D0-D7)
-#define PCF8574_OUTPUT_ADDR_2 0x21  // Second output expander (D8-D15)
+#define PCF8574_OUTPUT_ADDR_1 0x24  // First output expander (D0-D7)
+#define PCF8574_OUTPUT_ADDR_2 0x25  // Second output expander (D8-D15)
+#define PCF8574_INPUT_ADDR_1 0x26  // First input (X01-X08)
+#define PCF8574_INPUT_ADDR_2 0x27  // Second input (X09-X16)
 
 // I2C configuration
-#define I2C_MASTER_SCL_IO 22        // SCL pin
-#define I2C_MASTER_SDA_IO 21        // SDA pin
+#define I2C_MASTER_SCL_IO GPIO_NUM_5        // SCL pin
+#define I2C_MASTER_SDA_IO GPIO_NUM_4        // SDA pin
 #define I2C_MASTER_FREQ_HZ 100000   // 100kHz
 #define I2C_MASTER_NUM I2C_NUM_0    // I2C port number
 

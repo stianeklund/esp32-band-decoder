@@ -20,8 +20,6 @@ typedef struct {
     uint8_t num_bands;
     uint8_t num_antenna_ports;
     band_config_t bands[MAX_BANDS];
-    char tcp_host[16];
-    uint16_t tcp_port;
     int uart_baud_rate;
     uint8_t uart_parity;
     uint8_t uart_stop_bits;
@@ -42,15 +40,13 @@ esp_err_t antenna_switch_set_frequency(uint32_t frequency);
 esp_err_t antenna_switch_set_auto_mode(bool auto_mode);
 esp_err_t antenna_switch_set_relay(int relay_id, bool state);
 esp_err_t antenna_switch_get_relay_state(int relay_id, bool *state);
-esp_err_t antenna_switch_set_tcp_host(const char *host);
-esp_err_t antenna_switch_set_tcp_port(uint16_t port);
 esp_err_t antenna_switch_restart();
 
 #ifdef __cplusplus
 }
 
 // C++ specific declarations
-void antenna_switch_set_relay_controller(std::unique_ptr<RelayController> controller);
+void antenna_switch_set_relay_controller(RelayController* controller);
 #endif
 
 #endif // ANTENNA_SWITCH_H

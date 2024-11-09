@@ -13,7 +13,7 @@
 CatParser *CatParser::instance_ = nullptr;
 
 CatParser::CatParser()
-    : uart2_queue(nullptr), uart0_queue(nullptr),
+    : uart2_queue(nullptr),
       shutdown_requested(false) {
     if (instance_ == nullptr) {
         instance_ = this;
@@ -42,10 +42,6 @@ CatParser::~CatParser() {
     if (uart2_queue != nullptr) {
         uart_driver_delete(UART_NUM_2);
         uart2_queue = nullptr;
-    }
-    if (uart0_queue != nullptr) {
-        uart_driver_delete(UART_NUM_0);
-        uart0_queue = nullptr;
     }
 }
 
@@ -84,7 +80,6 @@ esp_err_t CatParser::init() {
 
     // Reset UART state
     uart2_queue = nullptr;
-    uart0_queue = nullptr;
 
     // Start with very basic UART2 configuration using validated baud rate
     uart_config_t uart2_config = {
@@ -117,9 +112,27 @@ esp_err_t CatParser::init() {
     // Set configured pins before driver installation
     ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2, 
                                 current_config.uart_tx_pin,
-                                current_config.uart_rx_pin, 
-                                UART_PIN_NO_CHANGE, 
+                                current_config.uart_rx_pin,
+                                UART_PIN_NO_CHANGE,
                                 UART_PIN_NO_CHANGE));
+
+    // Disable internal pullups since external ones are present on KC868
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+
+    // Configure TX pin
+    io_conf.pin_bit_mask = (1ULL << current_config.uart_tx_pin);
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+
+    // Configure RX pin 
+    io_conf.pin_bit_mask = (1ULL << current_config.uart_rx_pin);
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+
+    ESP_LOGI(TAG, "Configuring UART2 with RX on GPIO%d, TX on GPIO%d, baud=%d", current_config.uart_rx_pin,
+             current_config.uart_tx_pin, current_config.uart_baud_rate);
     vTaskDelay(pdMS_TO_TICKS(50));
 
     // If basic configuration succeeds, try updating to desired settings
@@ -148,8 +161,7 @@ esp_err_t CatParser::init() {
         "cat_parser_uart_task",
         UART_TASK_STACK_SIZE,
         this,
-        tskIDLE_PRIORITY + 1,
-        nullptr
+        tskIDLE_PRIORITY + 1, nullptr
     );
 
     if (xReturned != pdPASS) {
@@ -157,7 +169,7 @@ esp_err_t CatParser::init() {
         return ESP_FAIL;
     }
 
-    ESP_LOGV(TAG, "CAT parser initialization complete");
+    ESP_LOGI(TAG, "Initialization complete");
     return ESP_OK;
 }
 
@@ -192,7 +204,7 @@ void CatParser::uart_task() {
                             while ((pos = command_accumulator.find(';')) != std::string::npos) {
                                 std::string cmd = command_accumulator.substr(0, pos);
                                 command_accumulator = command_accumulator.substr(pos + 1);
-                                ESP_LOGV(TAG, "Received:%s",cmd.c_str());
+                                ESP_LOGI(TAG, "Received:%s",cmd.c_str());
 
                                 // Only process FA and IF commands
                                 if (cmd.length() >= 2) {
@@ -340,79 +352,6 @@ esp_err_t CatParser::process_command(const char *command) {
     return ESP_OK;
 }
 
-void CatParser::uart0_to_uart2_task() const {
-    constexpr TickType_t xMaxBlockTime = pdMS_TO_TICKS(100);
-    constexpr size_t CHUNK_SIZE = 64;
-
-    const std::unique_ptr<uint8_t[]> chunk_buffer(new uint8_t[CHUNK_SIZE]);
-    uart_event_t event;
-    size_t buffered_size;
-
-    while (!shutdown_requested.load()) {
-        if (xQueueReceive(uart0_queue, &event, xMaxBlockTime) == pdTRUE) {
-            switch (event.type) {
-                case UART_DATA: {
-                    esp_err_t err = uart_get_buffered_data_len(UART_NUM_0, &buffered_size);
-                    if (err != ESP_OK) {
-                        ESP_LOGE(TAG, "Failed to get buffered data length: %s", esp_err_to_name(err));
-                        continue;
-                    }
-
-                    while (buffered_size > 0 && !shutdown_requested.load()) {
-                        const size_t chunk_len = std::min(buffered_size, CHUNK_SIZE);
-                        const int read_len = uart_read_bytes(UART_NUM_0, chunk_buffer.get(),
-                                                             chunk_len, pdMS_TO_TICKS(20));
-
-                        if (read_len > 0) {
-                            // Forward directly to UART2
-                            err = uart_write_bytes(UART_NUM_2, chunk_buffer.get(), read_len);
-                            if (err < 0) {
-                                ESP_LOGE(TAG, "Failed to write to UART2: %s", esp_err_to_name(err));
-                                break;
-                            }
-                            ESP_LOGV(TAG, "Forwarded %d bytes to UART2", read_len);
-                        }
-
-                        err = uart_get_buffered_data_len(UART_NUM_0, &buffered_size);
-                        if (err != ESP_OK) {
-                            ESP_LOGE(TAG, "Failed to update buffered size: %s", esp_err_to_name(err));
-                            break;
-                        }
-                    }
-                    break;
-                }
-
-                case UART_FIFO_OVF:
-                case UART_BUFFER_FULL:
-                    ESP_LOGW(TAG, "UART0 buffer issue: %s",
-                             event.type == UART_FIFO_OVF ? "FIFO overflow" : "Buffer full");
-                    uart_flush_input(UART_NUM_0);
-                    xQueueReset(uart0_queue);
-                    break;
-
-                case UART_BREAK:
-                    ESP_LOGW(TAG, "UART break detected");
-                    break;
-
-                case UART_PARITY_ERR:
-                    ESP_LOGW(TAG, "UART parity error");
-                    break;
-
-                case UART_FRAME_ERR:
-                    ESP_LOGW(TAG, "UART frame error");
-                    break;
-
-                default:
-                    ESP_LOGV(TAG, "Unhandled UART event type: %d", event.type);
-                    break;
-            }
-        }
-        taskYIELD(); // Give other tasks a chance to run
-    }
-
-    ESP_LOGV(TAG, "UART0 to UART2 task shutting down");
-}
-
 int CatParser::get_band_index(const uint32_t freq) const {
     // Use cached band index if frequency is current
     if (freq == current_frequency && current_band_index != -1) {
@@ -519,11 +458,7 @@ esp_err_t CatParser::process_fa_command(const std::string_view command) {
 }
 
 void CatParser::uart_task_trampoline(void *arg) {
+    ESP_LOGI(TAG, "UART_TASK_TRAMPOLINE");
     static_cast<CatParser *>(arg)->uart_task();
-    vTaskDelete(nullptr);
-}
-
-void CatParser::uart0_task_trampoline(void *arg) {
-    static_cast<CatParser *>(arg)->uart0_to_uart2_task();
     vTaskDelete(nullptr);
 }
