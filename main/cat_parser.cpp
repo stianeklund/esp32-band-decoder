@@ -119,17 +119,13 @@ esp_err_t CatParser::init() {
     // Disable internal pullups since external ones are present on KC868
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT,
+    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE,
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-
-    // Configure TX pin
-    io_conf.pin_bit_mask = (1ULL << current_config.uart_tx_pin);
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
-
-    // Configure RX pin 
     io_conf.pin_bit_mask = (1ULL << current_config.uart_rx_pin);
+    // io_conf.pin_bit_mask = (1ULL << current_config.uart_tx_pin);
     ESP_ERROR_CHECK(gpio_config(&io_conf));
+
 
     ESP_LOGI(TAG, "Configuring UART2 with RX on GPIO%d, TX on GPIO%d, baud=%d", current_config.uart_rx_pin,
              current_config.uart_tx_pin, current_config.uart_baud_rate);
