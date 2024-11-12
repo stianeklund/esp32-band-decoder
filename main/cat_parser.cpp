@@ -96,8 +96,8 @@ esp_err_t CatParser::init() {
     // Validate UART pins and set defaults if needed
     if (current_config.uart_tx_pin < 0 || current_config.uart_rx_pin < 0) {
         ESP_LOGW(TAG, "Invalid UART pins, using defaults TX=17, RX=16");
-        current_config.uart_tx_pin = 17;  // Default TX pin
-        current_config.uart_rx_pin = 16;  // Default RX pin
+        current_config.uart_tx_pin = 33; // HT2
+        current_config.uart_rx_pin = 32; // HT1
         ret = antenna_switch_set_config(&current_config);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to save default UART pins: %s", esp_err_to_name(ret));
