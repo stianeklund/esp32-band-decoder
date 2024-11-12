@@ -200,7 +200,7 @@ void CatParser::uart_task() {
                             while ((pos = command_accumulator.find(';')) != std::string::npos) {
                                 std::string cmd = command_accumulator.substr(0, pos);
                                 command_accumulator = command_accumulator.substr(pos + 1);
-                                ESP_LOGI(TAG, "Received:%s",cmd.c_str());
+                                ESP_LOGV(TAG, "Received:%s",cmd.c_str());
 
                                 // Only process FA and IF commands
                                 if (cmd.length() >= 2) {
@@ -454,7 +454,6 @@ esp_err_t CatParser::process_fa_command(const std::string_view command) {
 }
 
 void CatParser::uart_task_trampoline(void *arg) {
-    ESP_LOGI(TAG, "UART_TASK_TRAMPOLINE");
     static_cast<CatParser *>(arg)->uart_task();
     vTaskDelete(nullptr);
 }
