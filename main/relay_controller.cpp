@@ -1,4 +1,5 @@
 #include "relay_controller.h"
+#include "cat_parser.h"
 #include "esp_log.h"
 #include "freertos/task.h"
 #include <chrono>
@@ -6,8 +7,9 @@
 static const char* TAG = "RELAY_CONTROLLER";
 
 RelayController::RelayController()
-    : currently_selected_relay_(0), 
-      last_relay_change_(std::chrono::steady_clock::now()) {
+    : currently_selected_relay_(0),
+      last_relay_change_(std::chrono::steady_clock::now()),
+      cat_parser_(CatParser::instance()) {
 }
 
 RelayController::~RelayController() = default;
@@ -34,6 +36,21 @@ esp_err_t RelayController::init() {
 esp_err_t RelayController::turn_off_all_relays() {
     ESP_LOGD(TAG, "Turning off all relays");
     
+    // Check if radio is transmitting
+    if (cat_parser_.is_transmitting()) {
+        ESP_LOGW(TAG, "Cannot change relays while transmitting");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Add a small delay to ensure transmit state is stable
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    // Double check transmit state after delay
+    if (cat_parser_.is_transmitting()) {
+        ESP_LOGW(TAG, "Cannot change relays while transmitting");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
     std::lock_guard<std::mutex> lock(relay_mutex_);
     
     esp_err_t ret = kc868_a16_set_all_outputs(0);
@@ -48,6 +65,21 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
     if (relay_id < 1 || relay_id > NUM_RELAYS) {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
         return ESP_ERR_INVALID_ARG;
+    }
+
+    // Check if radio is transmitting
+    if (cat_parser_.is_transmitting()) {
+        ESP_LOGW(TAG, "Cannot change relays while transmitting");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Add a small delay to ensure transmit state is stable
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    // Double check transmit state after delay
+    if (cat_parser_.is_transmitting()) {
+        ESP_LOGW(TAG, "Cannot change relays while transmitting");
+        return ESP_ERR_INVALID_STATE;
     }
 
     std::lock_guard<std::mutex> lock(relay_mutex_);
@@ -175,6 +207,21 @@ bool RelayController::should_delay() const {
 
  esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number) {
      std::lock_guard<std::mutex> lock(relay_mutex_);
+
+     // Check if radio is transmitting
+     if (cat_parser_.is_transmitting()) {
+         ESP_LOGW(TAG, "Cannot change relays while transmitting");
+         return ESP_ERR_INVALID_STATE;
+     }
+
+     // Add a small delay to ensure transmit state is stable
+     vTaskDelay(pdMS_TO_TICKS(10));
+    
+     // Double check transmit state after delay
+     if (cat_parser_.is_transmitting()) {
+         ESP_LOGW(TAG, "Cannot change relays while transmitting");
+         return ESP_ERR_INVALID_STATE;
+     }
 
      // If we're already on the correct relay, no need to change
      if (relay_id == currently_selected_relay_) {
