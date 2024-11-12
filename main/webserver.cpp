@@ -143,7 +143,9 @@ static int find_active_port(const uint32_t current_freq, const antenna_switch_co
 static esp_err_t status_get_handler(httpd_req_t *req) {
     // Get current frequency from CAT parser
     const uint32_t current_freq = cat_parser_get_frequency();
-    
+
+    const bool is_transmitting = cat_parser_get_transmit();
+
     // Get current antenna configuration
     antenna_switch_config_t config;
     if (const esp_err_t ret = antenna_switch_get_config(&config); ret != ESP_OK) {
@@ -159,6 +161,7 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "frequency", current_freq);
     cJSON_AddStringToObject(root, "antenna", active_antenna ? 
         ("Antenna " + std::to_string(active_antenna)).c_str() : "None");
+    cJSON_AddBoolToObject(root, "transmitting", is_transmitting);  // Add transmitting state
 
     char *json_string = cJSON_Print(root);
     httpd_resp_set_type(req, "application/json");

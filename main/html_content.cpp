@@ -12,7 +12,7 @@ const char *HTML_HEADER = R"(
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Antenna Switch Controller</title>
     <style>
         :root {
@@ -22,62 +22,119 @@ const char *HTML_HEADER = R"(
             --text-color: #34495e;
             --border-color: #bdc3c7;
         }
+        /* Base responsive layout */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             line-height: 1.6;
             color: var(--text-color);
-            max-width: 1000px;
+            max-width: 1200px;
             margin: 0 auto;
-            padding: 20px;
+            padding: 15px;
             background-color: var(--background-color);
         }
+
         h1, h2 {
             color: var(--secondary-color);
             text-align: center;
             margin-bottom: 30px;
         }
+
+        /* Responsive status container */
         .status-container {
             display: flex;
-            justify-content: space-between;
+            flex-direction: column;
+            gap: 20px;
             margin-bottom: 30px;
         }
+
         .status-box {
             background-color: white;
             border-radius: 10px;
-            padding: 20px;
+            padding: 15px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            width: 48%;
+            width: 100%;
             transition: transform 0.3s ease;
         }
+
         .status-box:hover {
             transform: translateY(-5px);
         }
+
+        /* Responsive tables */
         table {
             width: 100%;
+            display: table;
             border-collapse: separate;
             border-spacing: 0;
             margin-bottom: 20px;
             border-radius: 10px;
-            overflow: hidden;
+            overflow-x: auto;
         }
+
         th, td {
             padding: 15px;
             text-align: left;
             border-bottom: 1px solid var(--border-color);
         }
+
         th {
             font-weight: bold;
             color: white;
             background-color: var(--primary-color);
         }
+
         tr:last-child td {
             border-bottom: none;
         }
-        .button-container {
-            text-align: center;
-            margin-top: 30px;
+
+        /* Responsive relay grid */
+        .relay-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
         }
+
+        .relay-button {
+            padding: 12px 8px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #e0e0e0;  /* Default state - OFF */
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .relay-button.active {
+            background-color: #2ecc71;  /* Selected but not transmitting - green */
+            color: white;
+            border-color: #27ae60;
+        }
+
+        .relay-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .relay-button.active.transmitting {
+            background-color: #e74c3c;  /* Selected and transmitting - red */
+            color: white;
+            border-color: #c0392b;
+        }
+
+        /* Responsive button container */
+        .button-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+        }
+
         .button, input[type="submit"] {
+            width: 100%;
+            max-width: 300px;
+            margin: 5px 0;
             display: inline-block;
             background-color: var(--primary-color);
             color: white;
@@ -91,87 +148,209 @@ const char *HTML_HEADER = R"(
             font-weight: bold;
             text-transform: uppercase;
             letter-spacing: 1px;
-            margin: 0 10px;
         }
+
         .button:hover, input[type="submit"]:hover {
             background-color: var(--secondary-color);
             transform: translateY(-2px);
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
-        input[type="text"], input[type="number"], select {
-            width: 100%;
-            padding: 12px;
-            margin: 8px 0;
-            display: inline-block;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            box-sizing: border-box;
-            transition: border-color 0.3s ease;
-        }
-        input[type="text"]:focus, input[type="number"]:focus, select:focus {
-            border-color: var(--primary-color);
-            outline: none;
-        }
+
+        /* Form responsiveness */
         .config-form {
             background-color: white;
-            padding: 30px;
+            padding: 15px;
             border-radius: 10px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
+
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
+
         label {
             display: block;
             margin-bottom: 8px;
             font-weight: bold;
             color: var(--secondary-color);
         }
+
+        input[type="text"], 
+        input[type="number"], 
+        select {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            display: inline-block;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-sizing: border-box;
+            transition: border-color 0.3s ease;
+        }
+
+        input[type="text"]:focus, 
+        input[type="number"]:focus, 
+        select:focus {
+            border-color: var(--primary-color);
+            outline: none;
+        }
+
         input[type="checkbox"] {
             margin-right: 5px;
         }
-        .relay-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
-            padding: 15px;
+
+        .relay-groups {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
         }
-        .relay-button {
-            padding: 15px;
-            border: 1px solid #ddd;
+
+        .relay-group {
+            background-color: #f5f6fa;
             border-radius: 8px;
-            background-color: #e0e0e0;  /* Default state - OFF */
-            color: var(--text-color);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-weight: bold;
+            padding: 15px;
         }
-        .relay-button.active {
-            background-color: #2ecc71;  /* ON state - green */
-            color: white;
-            border-color: #27ae60;
+
+        .relay-group h3 {
+            margin: 0 0 15px 0;
+            color: var(--secondary-color);
+            text-align: center;
         }
-        .relay-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
+
         .auto-mode-container {
             background-color: white;
             border-radius: 10px;
             padding: 20px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             margin-bottom: 30px;
+            transition: all 0.3s ease;
         }
+
         .auto-mode-container h2 {
             margin-top: 0;
+            color: var(--secondary-color);
         }
+
         .auto-mode-container label {
             display: flex;
             align-items: center;
             font-weight: normal;
+            color: var(--text-color);
         }
+
         .auto-mode-container input[type="checkbox"] {
             margin-right: 10px;
+            accent-color: var(--primary-color);
+        }
+
+        /* Media Queries for different screen sizes */
+        @media (min-width: 768px) {
+            body {
+                padding: 20px;
+            }
+
+            .status-container {
+                flex-direction: row;
+            }
+
+            .status-box {
+                width: 48%;
+            }
+
+            .relay-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+
+            .button, input[type="submit"] {
+                width: auto;
+            }
+        }
+
+        /* Configuration page specific */
+        @media (max-width: 767px) {
+            table th, 
+            table td {
+                display: block;
+                width: 100%;
+                box-sizing: border-box;
+            }
+
+            table tr {
+                margin-bottom: 15px;
+                display: block;
+            }
+
+            table td {
+                border-top: none;
+            }
+
+            .config-form table {
+                display: block;
+                overflow-x: auto;
+            }
+
+            .config-form table th,
+            .config-form table td {
+                min-width: 120px;
+            }
+        }
+
+        /* Touch-friendly improvements */
+        @media (hover: none) {
+            .relay-button {
+                min-height: 44px; /* Minimum touch target size */
+            }
+
+            .button, 
+            input[type="submit"],
+            select {
+                min-height: 44px;
+                touch-action: manipulation;
+            }
+
+            input[type="checkbox"] {
+                min-width: 22px;
+                min-height: 22px;
+            }
+        }
+
+        /* Dark mode support for OLED screens */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --primary-color: #4a9eff;
+                --secondary-color: #a8c7fa;
+                --background-color: #121212;
+                --text-color: #e0e0e0;
+                --border-color: #2d2d2d;
+            }
+
+            body {
+                background-color: var(--background-color);
+            }
+
+            .status-box,
+            .relay-group,
+            .config-form,
+            .auto-mode-container {
+                background-color: #1e1e1e;
+            }
+
+            input[type="text"],
+            input[type="number"],
+            select {
+                background-color: #2d2d2d;
+                color: var(--text-color);
+                border-color: var(--border-color);
+            }
+
+            .relay-button {
+                background-color: #2d2d2d;
+                color: var(--text-color);
+            }
+
+            .relay-button.active {
+                background-color: #2ecc71;
+            }
         }
     </style>
 </head>
@@ -223,14 +402,33 @@ std::string generate_root_html(const antenna_switch_config_t &config, const char
     </div>
     <div class="status-box" style="width: 100%; margin-top: 20px;">
         <h2>Relay Controls</h2>
-        <div class="relay-grid">)";
+        <div class="relay-groups">
+            <div class="relay-group">
+                <h3>Radio A</h3>
+                <div class="relay-grid">)";
 
-for (int i = 0; i < 16; i++) {
+// First 8 relays (Radio A)
+for (int i = 0; i < 8; i++) {
     ss << "<button class='relay-button' data-relay='" << (i + 1) << "' onclick='toggleRelay(" << (i + 1) << ")'>"
        << "Relay " << (i + 1) << "</button>";
 }
 
 ss << R"(
+                </div>
+            </div>
+            <div class="relay-group">
+                <h3>Radio B</h3>
+                <div class="relay-grid">)";
+
+// Next 8 relays (Radio B)
+for (int i = 8; i < 16; i++) {
+    ss << "<button class='relay-button' data-relay='" << (i + 1) << "' onclick='toggleRelay(" << (i + 1) << ")'>"
+       << "Relay " << (i + 1) << "</button>";
+}
+
+ss << R"(
+                </div>
+            </div>
         </div>
     </div>
     <div class="button-container">
@@ -356,6 +554,26 @@ ss << R"(
                 .then(data => {
                     document.getElementById("current-frequency").textContent = data.frequency + " Hz";
                     document.getElementById("active-antenna").textContent = data.antenna;
+                    
+                    // Get the active antenna number
+                    const activeAntennaMatch = data.antenna.match(/Antenna (\d+)/);
+                    const activeAntennaNum = activeAntennaMatch ? parseInt(activeAntennaMatch[1]) : null;
+                    
+                    // Update transmitting state for relay buttons
+                    const buttons = document.querySelectorAll('.relay-button');
+                    buttons.forEach(button => {
+                        const relayNum = parseInt(button.getAttribute('data-relay'));
+                        // Only add transmitting class if the button is active (selected)
+                        if (button.classList.contains('active')) {
+                            if (relayNum === activeAntennaNum && data.transmitting) {
+                                button.classList.add('transmitting');
+                            } else {
+                                button.classList.remove('transmitting');
+                            }
+                        } else {
+                            button.classList.remove('transmitting');
+                        }
+                    });
                 })
                 .catch(error => {
                     console.error("Error:", error);
