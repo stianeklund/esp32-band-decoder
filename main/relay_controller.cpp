@@ -147,6 +147,7 @@ esp_err_t RelayController::turn_off_all_relays_except(const int relay_to_keep_on
     
     if (ret == ESP_OK) {
         currently_selected_relay_ = relay_to_keep_on;
+        relay_states_[relay_to_keep_on] = true;
         last_relay_change_ = std::chrono::steady_clock::now();
         ESP_LOGI(TAG, "All relays turned off except relay %d", relay_to_keep_on);
     }
@@ -171,30 +172,41 @@ bool RelayController::should_delay() const {
     return std::chrono::duration_cast<std::chrono::milliseconds>(now - last_relay_change_).count() < COOLDOWN_PERIOD_MS;
 }
 
-esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number) {
-    std::lock_guard<std::mutex> lock(relay_mutex_);
-    
-    // If we're already on the correct relay, no need to change
-    if (relay_id == currently_selected_relay_) {
-        ESP_LOGD(TAG, "Relay %d already selected", relay_id);
-        last_selected_relay_for_band_[band_number] = relay_id;
-        return ESP_OK;
-    }
 
-    esp_err_t ret = turn_off_all_relays_except(relay_id);
-    if (ret == ESP_OK) {
-        last_selected_relay_for_band_[band_number] = relay_id;
-        ESP_LOGI(TAG, "Successfully changed to relay %d for band %d", relay_id, band_number);
-    }
+ esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number) {
+     std::lock_guard<std::mutex> lock(relay_mutex_);
 
-    return ret;
-}
+     // If we're already on the correct relay, no need to change
+     if (relay_id == currently_selected_relay_) {
+         ESP_LOGI(TAG, "Relay %d already selected", relay_id);
+         last_selected_relay_for_band_[band_number] = relay_id;
+         return ESP_OK;
+     }
+
+     if (should_delay()) {
+         vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
+     }
+
+     const uint16_t relay_mask = 1 << (relay_id - 1);
+     esp_err_t ret = kc868_a16_set_all_outputs(relay_mask);
+
+     if (ret == ESP_OK) {
+         currently_selected_relay_ = relay_id;
+         relay_states_[relay_id] = true;
+         last_relay_change_ = std::chrono::steady_clock::now();
+         last_selected_relay_for_band_[band_number] = relay_id;
+         ESP_LOGI(TAG, "Successfully changed to relay %d for band %d", relay_id, band_number);
+     }
+
+     return ret;
+ }
 
 esp_err_t RelayController::set_relay_for_antenna(int relay_id, int band_number) {
     if (relay_id < 1 || relay_id > NUM_RELAYS) {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
         return ESP_ERR_INVALID_ARG;
     }
+    ESP_LOGI(TAG, "Calling Execute relay change");
 
     return execute_relay_change(relay_id, band_number);
 }
