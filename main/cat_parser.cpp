@@ -209,6 +209,13 @@ void CatParser::uart_task() {
                                     } else if (cmd.substr(0, 2) == "IF") {
                                         process_if_command(cmd.substr(2));
                                     }
+                                    else if (cmd.substr(0, 2) == "TX") {
+                                        transmitting = true;
+                                    }
+                                    else if (cmd.substr(0, 2) == "RX") {
+                                        transmitting = false;
+                                    }
+
                                     // Ignore all other commands
                                 }
                             }

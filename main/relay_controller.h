@@ -7,6 +7,9 @@
 #include <mutex>
 #include <chrono>
 
+// Forward declaration
+class CatParser;
+
 class RelayController {
 public:
     static constexpr int NUM_RELAYS = 16;
@@ -48,6 +51,7 @@ private:
     std::mutex relay_mutex_;
     std::chrono::steady_clock::time_point last_relay_change_;
     std::map<int, bool> relay_states_;
+    CatParser& cat_parser_;  // Reference to check transmit status
 
     [[nodiscard]] bool should_delay() const;
     esp_err_t execute_relay_change(int relay_id, int band_number);

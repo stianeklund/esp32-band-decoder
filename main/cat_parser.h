@@ -85,5 +85,6 @@ inline esp_err_t cat_parser_process_command(const char *command) {
 
 inline esp_err_t cat_parser_update_config() { return CatParser::instance().update_config(); }
 inline uint32_t cat_parser_get_frequency() { return CatParser::instance().get_frequency(); }
+inline uint32_t cat_parser_get_transmit() { return CatParser::instance().is_transmitting(); }
 
 #endif // CAT_PARSER_H
