@@ -119,17 +119,13 @@ esp_err_t CatParser::init() {
     // Disable internal pullups since external ones are present on KC868
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT,
+    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE,
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-
-    // Configure TX pin
-    io_conf.pin_bit_mask = (1ULL << current_config.uart_tx_pin);
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
-
-    // Configure RX pin 
     io_conf.pin_bit_mask = (1ULL << current_config.uart_rx_pin);
+    // io_conf.pin_bit_mask = (1ULL << current_config.uart_tx_pin);
     ESP_ERROR_CHECK(gpio_config(&io_conf));
+
 
     ESP_LOGI(TAG, "Configuring UART2 with RX on GPIO%d, TX on GPIO%d, baud=%d", current_config.uart_rx_pin,
              current_config.uart_tx_pin, current_config.uart_baud_rate);
@@ -204,7 +200,7 @@ void CatParser::uart_task() {
                             while ((pos = command_accumulator.find(';')) != std::string::npos) {
                                 std::string cmd = command_accumulator.substr(0, pos);
                                 command_accumulator = command_accumulator.substr(pos + 1);
-                                ESP_LOGI(TAG, "Received:%s",cmd.c_str());
+                                ESP_LOGV(TAG, "Received:%s",cmd.c_str());
 
                                 // Only process FA and IF commands
                                 if (cmd.length() >= 2) {
@@ -458,7 +454,6 @@ esp_err_t CatParser::process_fa_command(const std::string_view command) {
 }
 
 void CatParser::uart_task_trampoline(void *arg) {
-    ESP_LOGI(TAG, "UART_TASK_TRAMPOLINE");
     static_cast<CatParser *>(arg)->uart_task();
     vTaskDelete(nullptr);
 }

@@ -206,7 +206,7 @@ esp_err_t RelayController::set_relay_for_antenna(int relay_id, int band_number) 
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
         return ESP_ERR_INVALID_ARG;
     }
-    ESP_LOGI(TAG, "Calling Execute relay change");
+    ESP_LOGD(TAG, "Calling Execute relay change");
 
     return execute_relay_change(relay_id, band_number);
 }
