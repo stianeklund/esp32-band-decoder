@@ -15,12 +15,24 @@ const char *HTML_HEADER = R"(
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Antenna Switch Controller</title>
     <style>
-        :root {
+        :root[data-theme="light"] {
             --primary-color: #3498db;
             --secondary-color: #2c3e50;
             --background-color: #ecf0f1;
             --text-color: #34495e;
             --border-color: #bdc3c7;
+        }
+        
+        :root[data-theme="dark"] {
+            --primary-color: #4a9eff;
+            --secondary-color: #a8c7fa;
+            --background-color: #121212;
+            --text-color: #e0e0e0;
+            --border-color: #2d2d2d;
+        }
+        
+        :root {
+            color-scheme: light dark;
         }
         /* Base responsive layout */
         body {
@@ -112,15 +124,28 @@ const char *HTML_HEADER = R"(
             border-color: #27ae60;
         }
 
+        .relay-button.multi-band {
+            background-color: var(--primary-color);
+            color: white;
+            border-color: var(--border-color);
+        }
+
+        .relay-button.multi-band.active {
+            background-color: #2ecc71;  /* Keep active state green */
+        }
+
         .relay-button:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
 
-        .relay-button.active.transmitting {
-            background-color: #e74c3c;  /* Selected and transmitting - red */
-            color: white;
-            border-color: #c0392b;
+        /* Transmitting state should override other states */
+        .relay-button.transmitting,
+        .relay-button.active.transmitting,
+        .relay-button.multi-band.active.transmitting {
+            background-color: #e74c3c !important;  /* Selected and transmitting - red */
+            color: white !important;
+            border-color: #c0392b !important;
         }
 
         /* Responsive button container */
@@ -267,6 +292,30 @@ const char *HTML_HEADER = R"(
         }
 
         /* Configuration page specific */
+        .config-form {
+            background-color: var(--background-color);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+        }
+
+        .config-form table {
+            background-color: var(--background-color);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+        }
+
+        .config-form input[type="text"],
+        .config-form input[type="number"],
+        .config-form select {
+            background-color: var(--background-color);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+        }
+
+        .config-form input[type="checkbox"] {
+            accent-color: var(--primary-color);
+        }
+
         @media (max-width: 767px) {
             table th, 
             table td {
@@ -314,47 +363,86 @@ const char *HTML_HEADER = R"(
             }
         }
 
-        /* Dark mode support for OLED screens */
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --primary-color: #4a9eff;
-                --secondary-color: #a8c7fa;
-                --background-color: #121212;
-                --text-color: #e0e0e0;
-                --border-color: #2d2d2d;
-            }
+        /* Dark mode styles */
+        [data-theme="dark"] body {
+            background-color: var(--background-color);
+        }
 
-            body {
-                background-color: var(--background-color);
-            }
+        [data-theme="dark"] .status-box,
+        [data-theme="dark"] .relay-group,
+        [data-theme="dark"] .auto-mode-container {
+            background-color: #1e1e1e;
+        }
 
-            .status-box,
-            .relay-group,
-            .config-form,
-            .auto-mode-container {
-                background-color: #1e1e1e;
-            }
+        [data-theme="dark"] .config-form {
+            background-color: #1e1e1e;
+            border-color: #404040;
+        }
 
-            input[type="text"],
-            input[type="number"],
-            select {
-                background-color: #2d2d2d;
-                color: var(--text-color);
-                border-color: var(--border-color);
-            }
+        [data-theme="dark"] .config-form table {
+            background-color: #1e1e1e;
+            border-color: #404040;
+        }
 
-            .relay-button {
-                background-color: #2d2d2d;
-                color: var(--text-color);
-            }
+        [data-theme="dark"] input[type="text"],
+        [data-theme="dark"] input[type="number"],
+        [data-theme="dark"] select {
+            background-color: #2d2d2d;
+            color: var(--text-color);
+            border-color: var(--border-color);
+        }
 
-            .relay-button.active {
-                background-color: #2ecc71;
-            }
+        [data-theme="dark"] .relay-button {
+            background-color: #2d2d2d;
+            color: var(--text-color);
+            border-color: #404040;
+        }
+
+        [data-theme="dark"] .relay-button.active {
+            background-color: #2ecc71;
+            color: white;
+        }
+
+        [data-theme="dark"] .relay-button.multi-band {
+            background-color: #1a5f89;
+            color: white;
+            border-color: #2980b9;
+        }
+
+        [data-theme="dark"] .relay-button.multi-band.active {
+            background-color: #2ecc71;
+            color: white;
+        }
+
+        /* Theme toggle button */
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 24px;
+            border-radius: 25px;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+            font-size: 16px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            z-index: 1000;
+        }
+
+        .theme-toggle:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
     </style>
 </head>
 <body>
+<button class="theme-toggle" onclick='toggleTheme()' type="button">Theme</button>
 )";
 
 // ReSharper disable once CppUseAuto
@@ -382,22 +470,30 @@ const std::map<std::string, BandInfo> band_info = {
 std::string generate_root_html(const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr) {
     std::stringstream ss;
     ss << HTML_HEADER;
+    ss << "<h1>Antenna Controller</h1>";
+    ss << "<div class='status-container'>";
+    ss << "<div class='status-box'>";
+    ss << "<h2>Current Status</h2>";
+    ss << "<table>";
+    ss << "<tr><th>Frequency</th><td id='current-frequency'>Updating...</td></tr>";
+    ss << "<tr><th>Port</th><td>";
+    ss << "<span id='active-antenna'>Updating...</span>";
+    ss << "</div>";
+    ss << "</td></tr>";
+    ss << "</table>";
+    ss << "</div>";
     ss << R"(
-    <h1>Antenna Controller</h1>
-    <div class="status-container">
-        <div class="status-box">
-            <h2>Current Status</h2>
-            <table>
-                <tr><th>Current Frequency</th><td id="current-frequency">Updating...</td></tr>
-                <tr><th>Active Relay</th><td id="active-antenna">Updating...</td></tr>
-            </table>
-        </div>
         <div class="status-box">
             <h2>Network Information</h2>
             <table>
                 <tr><th>IP Address</th><td>)" << ip_addr << R"(</td></tr>
                 <tr><th>MAC Address</th><td>)" << mac_addr << R"(</td></tr>
             </table>
+            <div style="margin-top: 15px; text-align: center;">
+                <form action='/reset-wifi' method='post' style='display:inline' onsubmit='return confirm("Reset WiFi credentials?")'>
+                    <button type="submit" class="button warning">Reset WiFi</button>
+                </form>
+            </div>
         </div>
     </div>
     <div class="status-box" style="width: 100%; margin-top: 20px;">
@@ -436,9 +532,6 @@ ss << R"(
         <form action='/restart' method='post' style='display:inline' onsubmit='handleRestart(event)'>
             <button type="submit" class="button" style="background-color:#e74c3c">Restart Device</button>
         </form>
-        <form action='/reset-wifi' method='post' style='display:inline' onsubmit='return confirm("Reset WiFi credentials?")'>
-            <button type="submit" class="button warning">Reset WiFi</button>
-        </form>
         <script>
             function handleRestart(event) {
                 if (!confirm('Are you sure you want to restart the device?')) {
@@ -459,6 +552,23 @@ ss << R"(
         </script>
     </div>
     <script>
+        // Theme handling
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', theme);
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            setTheme(newTheme);
+        }
+
+        // Initialize theme
+        const savedTheme = localStorage.getItem('theme') || 
+                          (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        setTheme(savedTheme);
+
         let isRelayOperationInProgress = false;
         const RELAY_OPERATION_COOLDOWN = 250; // ms
         const STATUS_UPDATE_INTERVAL = 2000; // Reduced from 5000 to 2000ms
@@ -497,6 +607,23 @@ ss << R"(
                 
                 const result = await response.json();
                 button.classList.toggle('active', result.state);
+                
+                // If the relay was turned on, update the active antenna display
+                if (result.state) {
+                    document.getElementById("active-antenna").textContent = "Antenna " + relay;
+                }
+
+                // Check if this relay supports multiple bands
+                fetch("/status")
+                    .then(response => response.json())
+                    .then(data => {
+                        const availableAntennas = data.available_antennas || [];
+                        const count = availableAntennas.filter(ant => ant === relay).length;
+                        button.classList.toggle('multi-band', count > 1);
+                    });
+                
+                // Force an immediate status update
+                updateStatus();
                 
                 // Wait for a short period before allowing next operation
                 await new Promise(resolve => setTimeout(resolve, RELAY_OPERATION_COOLDOWN));
@@ -543,6 +670,34 @@ ss << R"(
             statusUpdateTimeout = setTimeout(updateRelayStatus, STATUS_UPDATE_INTERVAL);
         }
 
+        async function changeAntenna(antennaNumber) {
+           try {
+                const response = await fetch('/relay/control', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        relay: parseInt(antennaNumber),
+                        state: true
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to change antenna');
+                }
+                
+                // Update the display immediately
+                document.getElementById("active-antenna").textContent = "Antenna " + antennaNumber;
+                
+                // Refresh relay status
+                updateRelayStatus();
+            } catch (error) {
+                console.error('Error changing antenna:', error);
+                alert('Failed to change antenna');
+            }
+        }
+
         function updateStatus() {
             fetch("/status")
                 .then(response => {
@@ -552,26 +707,46 @@ ss << R"(
                     return response.json();
                 })
                 .then(data => {
-                    document.getElementById("current-frequency").textContent = data.frequency + " Hz";
+                    // Convert Hz to MHz and format with 3 decimal places
+                    const freqMHz = (data.frequency / 1000000).toFixed(3);
+                    document.getElementById("current-frequency").textContent = freqMHz + " MHz";
                     document.getElementById("active-antenna").textContent = data.antenna;
                     
-                    // Get the active antenna number
-                    const activeAntennaMatch = data.antenna.match(/Antenna (\d+)/);
-                    const activeAntennaNum = activeAntennaMatch ? parseInt(activeAntennaMatch[1]) : null;
-                    
-                    // Update transmitting state for relay buttons
+                    // Get the active antenna number from the relay states
                     const buttons = document.querySelectorAll('.relay-button');
+                    let activeAntennaNum = null;
                     buttons.forEach(button => {
-                        const relayNum = parseInt(button.getAttribute('data-relay'));
-                        // Only add transmitting class if the button is active (selected)
                         if (button.classList.contains('active')) {
-                            if (relayNum === activeAntennaNum && data.transmitting) {
+                            activeAntennaNum = parseInt(button.getAttribute('data-relay'));
+                        }
+                    });
+                    
+                    // Update button states based on the status data
+                    document.querySelectorAll('.relay-button').forEach(button => {
+                        const relayNum = parseInt(button.getAttribute('data-relay'));
+                        
+                        // Check if this relay supports the current frequency
+                        const supportsCurrentFreq = data.available_antennas.includes(relayNum);
+                        
+                        // First, remove all special classes
+                        button.classList.remove('multi-band', 'transmitting');
+                        
+                        if (button.classList.contains('active')) {
+                            // This is the active relay
+                            if (data.transmitting) {
                                 button.classList.add('transmitting');
                             } else {
                                 button.classList.remove('transmitting');
                             }
                         } else {
-                            button.classList.remove('transmitting');
+                            // For inactive relays, only show multi-band if they support current frequency
+                            if (supportsCurrentFreq) {
+                                button.classList.add('multi-band');
+                            }
+                            // Reset styles
+                            button.style.backgroundColor = '';
+                            button.style.borderColor = '';
+                            button.style.color = '';
                         }
                     });
                 })
@@ -611,22 +786,22 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     ESP_LOGI(TAG, "Debug: num_bands = %d, num_antenna_ports = %d", config.num_bands, config.num_antenna_ports);
 
     ss << HTML_HEADER;
-    ss << "<h2>Relay Configuration</h2>";
-    ss << "<form id='configForm' class='config-form' onsubmit='submitConfig(event)'>";
-    ss << "<div class='form-group'>";
-    ss << "<label for='num_bands'>Number of bands:</label>";
+    ss << "<h1>Relay Configuration</h1>";
+    ss << "<form id='configForm' class='config-form' onsubmit='submitConfig(event)' style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 10px; padding: 20px;'>";
+    ss << "<div class='form-group' style='margin-bottom: 20px;'>";
+    ss << "<label for='num_bands' style='color: var(--text-color);'>Number of bands:</label>";
     ss << "<input type='number' id='num_bands' name='num_bands' value='" << std::to_string(config.num_bands)
             << "' min='1' max='" << MAX_BANDS << "' onchange='updateBandRows()'>";
     ss << "</div>";
-    ss << "<div class='form-group'>";
-    ss << "<h3>Switch Configuration</h3>";
-    ss << "<label for='num_antenna_ports'>Number of outputs:</label>";
+    ss << "<div class='form-group' style='margin-bottom: 20px;'>";
+    ss << "<h2>Switch Configuration</h2>";
+    ss << "<label for='num_antenna_ports' style='color: var(--text-color);'>Number of outputs:</label>";
     ss << "<input type='number' id='num_antenna_ports' name='num_antenna_ports' value='"
             << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "' onchange='updateAntennaPorts()'>";
     ss << "</div>";
 
-    ss << "<h3>UART Configuration</h3>";
-    ss << "<div class='form-group'>";
+    ss << "<h2>UART Configuration</h2>";
+    ss << "<div class='form-group' style='margin-bottom: 20px;'>";
     ss << "<label for='uart_baud_rate'>Baud Rate:</label>";
     ss << "<select id='uart_baud_rate' name='uart_baud_rate'>";
     for (const int baud_rates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200}; const int rate: baud_rates) {
@@ -681,8 +856,8 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     }
     ss << "</select></div>";
 
-    ss << "<table>";
-    ss << "<thead>";
+    ss << "<table style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color); margin: 20px 0;'>";
+    ss << "<thead style='background-color: var(--primary-color); color: white;'>";
     ss << "<tr>";
     ss << "<th>Band</th>";
     ss << "<th>Start Freq</th>";
@@ -730,22 +905,39 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     ss << "</tbody>";
     ss << "</table>";
 
-    ss << "<div class='auto-mode-container'>";
-    ss << "<h2>Auto Mode</h2>";
+    ss << "<div class='auto-mode-container' style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color);'>";
+    ss << "<h2 style='color: var(--secondary-color);'>Auto Mode</h2>";
     ss << "<label>";
     ss << "<input type='checkbox' name='auto_mode' " << (config.auto_mode ? "checked" : "") << ">";
     ss << " Enable Automatic band selection";
     ss << "</label>";
     ss << "</div>";
 
-    ss << "<div class='button-container'>";
-    ss << "<input type='submit' value='Update Configuration'>";
+    ss << "<div class='button-container' style='margin: 20px 0;'>";
+    ss << "<input type='submit' value='Update Configuration' class='button' style='background-color: var(--primary-color); color: white;'>";
     ss << "</div>";
     ss << "</form>";
 
     // Add JavaScript for form submission
     ss << R"(
     <script>
+    // Theme handling
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    }
+
+    function toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+        const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+        setTheme(newTheme);
+    }
+
+    // Initialize theme
+    const savedTheme = localStorage.getItem('theme') || 
+                      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    setTheme(savedTheme);
+
     async function submitConfig(event) {
         event.preventDefault();
         const form = document.getElementById('configForm');
@@ -806,9 +998,9 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
 )";
 
 // Add the band frequencies mapping
-for (const auto &band : band_info) {
-    ss << "'" << band.first << "': {start: " << band.second.start_freq 
-       << ", end: " << band.second.end_freq << "},\n";
+for (const auto &[fst, snd] : band_info) {
+    ss << "'" << fst << "': {start: " << snd.start_freq 
+       << ", end: " << snd.end_freq << "},\n";
 }
 
 ss << R"(
@@ -941,11 +1133,10 @@ ss << R"(
     document.getElementById('num_antenna_ports').addEventListener('change', debounce(updateAntennaPorts, 250));
     document.getElementById('num_bands').addEventListener('change', debounce(updateBandRows, 250));
     </script>)";
-    ss << "<div class='button-container'>";
-    ss << "<a href='/' class='button' style='background-color: var(--primary-color);'>Back to Home</a>";
+    ss << "<div class='button-container' style='margin: 20px 0;'>";
+    ss << "<a href='/' class='button' style='background-color: var(--primary-color); color: white;'>Back to Home</a>";
     ss << "<form action='/reset-config' method='post' style='display: inline;'>";
-    ss
-            << "<input type='submit' value='Reset Configuration' class='button' style='background-color: #e74c3c;' onclick='return confirm(\"Are you sure you want to reset the configuration?\");'>";
+    ss << "<input type='submit' value='Reset Configuration' class='button' style='background-color: #e74c3c; color: white;' onclick='return confirm(\"Are you sure you want to reset the configuration?\");'>";
     ss << "</form>";
     ss << "</div>";
     ss << HTML_FOOTER;

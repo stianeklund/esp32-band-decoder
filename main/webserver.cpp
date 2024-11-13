@@ -143,7 +143,6 @@ static int find_active_port(const uint32_t current_freq, const antenna_switch_co
 static esp_err_t status_get_handler(httpd_req_t *req) {
     // Get current frequency from CAT parser
     const uint32_t current_freq = cat_parser_get_frequency();
-
     const bool is_transmitting = cat_parser_get_transmit();
 
     // Get current antenna configuration
@@ -154,14 +153,46 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    // Find which antenna is active for the current frequency
-    int active_antenna = find_active_port(current_freq, config, active_antenna);
+    // Get available antennas for the current frequency
+    std::vector<int> available_antennas;
+    
+    // Find the current band
+    for (int i = 0; i < config.num_bands; i++) {
+        if (current_freq >= config.bands[i].start_freq &&
+            current_freq <= config.bands[i].end_freq) {
+            // Check all enabled antenna ports for this band
+            for (int j = 0; j < config.num_antenna_ports; j++) {
+                if (config.bands[i].antenna_ports[j]) {
+                    // Convert to 1-based index
+                    available_antennas.push_back(j + 1);
+                }
+            }
+            break;
+        }
+    }
+
+    // Find which relay is currently active by checking relay states
+    uint16_t relay_states = RelayController::instance().get_relay_states();
+    int active_antenna = 0;
+    for (int i = 0; i < 16; i++) {
+        if (((relay_states >> i) & 1) == 0) {  // Active low logic
+            active_antenna = i + 1;
+            break;
+        }
+    }
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "frequency", current_freq);
     cJSON_AddStringToObject(root, "antenna", active_antenna ? 
         ("Antenna " + std::to_string(active_antenna)).c_str() : "None");
-    cJSON_AddBoolToObject(root, "transmitting", is_transmitting);  // Add transmitting state
+    cJSON_AddBoolToObject(root, "transmitting", is_transmitting);
+    
+    // Add available antennas array
+    cJSON *antennas = cJSON_CreateArray();
+    for (int antenna : available_antennas) {
+        cJSON_AddItemToArray(antennas, cJSON_CreateNumber(antenna));
+    }
+    cJSON_AddItemToObject(root, "available_antennas", antennas);
 
     char *json_string = cJSON_Print(root);
     httpd_resp_set_type(req, "application/json");
@@ -545,8 +576,26 @@ static esp_err_t relay_control_handler(httpd_req_t *req) {
     const int relay_num = relay->valueint;
     const bool relay_state = cJSON_IsTrue(state);
 
+    // If turning on a relay, first turn off all other relays
+    if (relay_state) {
+        // Get current states
+        uint16_t current_states = RelayController::instance().get_relay_states();
+        
+        // Turn off all relays except the one we're setting
+        for (int i = 1; i <= 16; i++) {
+            if (i != relay_num && ((current_states >> (i-1)) & 1) == 0) {  // Check if relay is on (active low)
+                if (const esp_err_t err = RelayController::instance().set_relay(i, false); err != ESP_OK) {
+                    ESP_LOGW(TAG, "Failed to turn off relay %d: %s", i, esp_err_to_name(err));
+                }
+                // Add a small delay between operations
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+    }
+
     ESP_LOGD(TAG, "Setting relay %d to state %d", relay_num, relay_state);
 
+    // Now set the requested relay state
     if (const esp_err_t err = RelayController::instance().set_relay(relay_num, relay_state); err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set relay: %s", esp_err_to_name(err));
         cJSON_Delete(root);
