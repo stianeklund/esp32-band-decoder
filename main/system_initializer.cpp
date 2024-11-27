@@ -2,10 +2,10 @@
 
 #include <antenna_switch.h>
 #include <cat_parser.h>
-#include "cat_parser.h"
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <esp_netif_types.h>
+#include <my_mqtt_client.h>
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <wifi_manager.hpp>
@@ -101,6 +101,34 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
 
     // Initialize CAT parser
     ESP_RETURN_ON_ERROR(cat_parser_init(), TAG, "Failed to initialize CAT parser");
+
+    // Initialize MQTT if enabled
+    if (config.mqtt_enabled) {
+        esp_err_t mqtt_ret = MQTTClient::instance().init();
+        if (mqtt_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize MQTT client: %s", esp_err_to_name(mqtt_ret));
+        } else {
+            mqtt_ret = MQTTClient::instance().connect();
+            if (mqtt_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to connect MQTT client: %s", esp_err_to_name(mqtt_ret));
+            } else {
+                mqtt_ret = MQTTClient::instance().subscribe_to_omnirig_topics(config.mqtt_rig_id);
+                if (mqtt_ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to subscribe to MQTT topics: %s", esp_err_to_name(mqtt_ret));
+                }
+                ESP_LOGI(TAG, "Subscribed to MQTT topics");
+
+                // This needs to be through MQTT not cat parser
+                // Set up frequency callback
+                // MQTTClient::instance().set_frequency_callback([](uint32_t freq) {
+                //     ESP_LOGI(TAG, "Frequency updated via MQTT to %lu Hz", freq);
+                //     cat_parser_set_frequency(freq);
+                // });
+            }
+        }
+    } else {
+        ESP_LOGI(TAG, "MQTT is disabled in configuration");
+    }
 
     // Get relay controller singleton instance and initialize it immediately
     auto& relay_controller = RelayController::instance();

@@ -864,6 +864,49 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     }
     ss << "</select></div>";
 
+    ss << "<h2>MQTT Configuration</h2>";
+    ss << "<div class='form-group'>";
+    ss << "<label>";
+    ss << "<input type='checkbox' name='mqtt_enabled' " << (config.mqtt_enabled ? "checked" : "") << ">";
+    ss << " Enable MQTT";
+    ss << "</label>";
+    ss << "</div>";
+
+    ss << "<div class='form-group'>";
+    ss << "<label for='mqtt_broker'>MQTT Broker:</label>";
+    ss << "<input type='text' id='mqtt_broker' name='mqtt_broker' value='" << config.mqtt_broker << "'>";
+    ss << "</div>";
+
+    ss << "<div class='form-group'>";
+    ss << "<label for='mqtt_port'>MQTT Port:</label>";
+    ss << "<input type='number' id='mqtt_port' name='mqtt_port' value='" << config.mqtt_port << "'>";
+    ss << "</div>";
+
+    ss << "<div class='form-group'>";
+    ss << "<label for='mqtt_rig_id'>Rig ID:</label>";
+    ss << "<input type='text' id='mqtt_rig_id' name='mqtt_rig_id' value='" << config.mqtt_rig_id << "'>";
+    ss << "</div>";
+
+    ss << "<div class='form-group'>";
+    ss << "<label for='mqtt_username'>MQTT Username:</label>";
+    ss << "<input type='text' id='mqtt_username' name='mqtt_username' value='" << (config.mqtt_username[0] != '\0' ? config.mqtt_username : "") << "'>";
+    ss << "</div>";
+
+    ss << "<div class='form-group'>";
+    ss << "<label for='mqtt_password'>MQTT Password:</label>";
+    ss << "<input type='password' id='mqtt_password' name='mqtt_password' value='" << (config.mqtt_password[0] != '\0' ? config.mqtt_password : "") << "'>";
+    ss << "</div>";
+
+    ss << "<div class='form-group'>";
+    ss << "<label for='mqtt_client_id'>MQTT Client ID:</label>";
+    ss << "<input type='text' id='mqtt_client_id' name='mqtt_client_id' value='" << config.mqtt_client_id << "'>";
+    ss << "</div>";
+
+    ss << "<div class='form-group'>";
+    ss << "<label for='mqtt_topic'>MQTT Topic:</label>";
+    ss << "<input type='text' id='mqtt_topic' name='mqtt_topic' value='" << config.mqtt_topic << "'>";
+    ss << "</div>";
+
     ss << "<table style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color); margin: 20px 0;'>";
     ss << "<thead style='background-color: var(--primary-color); color: white;'>";
     ss << "<tr>";
@@ -921,6 +964,14 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     ss << "</label>";
     ss << "</div>";
 
+    ss << "<div class='auto-mode-container' style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color);'>";
+    ss << "<h2 style='color: var(--secondary-color);'>Data Sources</h2>";
+    ss << "<label>";
+    ss << "<input type='checkbox' name='allow_concurrent_data_sources' " << (config.allow_concurrent_data_sources ? "checked" : "") << ">";
+    ss << " Allow concurrent UART and MQTT data sources";
+    ss << "</label>";
+    ss << "</div>";
+
     ss << "<div class='button-container' style='margin: 20px 0;'>";
     ss << "<input type='submit' value='Update Configuration' class='button' style='background-color: var(--primary-color); color: white;'>";
     ss << "</div>";
@@ -954,6 +1005,7 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
         // Convert form data to JSON structure
         const config = {
             auto_mode: formData.get('auto_mode') === 'on',
+            allow_concurrent_data_sources: formData.get('allow_concurrent_data_sources') === 'on',
             num_bands: parseInt(formData.get('num_bands')),
             num_antenna_ports: parseInt(formData.get('num_antenna_ports')),
             tcp_host: formData.get('tcp_host'),
@@ -964,6 +1016,14 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             uart_flow_ctrl: parseInt(formData.get('uart_flow_ctrl')) || 0,
             uart_tx_pin: parseInt(formData.get('uart_tx_pin')) || 17,
             uart_rx_pin: parseInt(formData.get('uart_rx_pin')) || 16,
+            mqtt_enabled: formData.get('mqtt_enabled') === 'on',
+            mqtt_broker: formData.get('mqtt_broker'),
+            mqtt_port: parseInt(formData.get('mqtt_port')),
+            mqtt_rig_id: formData.get('mqtt_rig_id'),
+            mqtt_username: formData.get('mqtt_username') || '',
+            mqtt_password: formData.get('mqtt_password') || '',
+            mqtt_client_id: formData.get('mqtt_client_id') || 'core-mosquitto',
+            mqtt_topic: formData.get('mqtt_topic') || 'omnirig/frequent/radio_info',
             bands: []
         };
         

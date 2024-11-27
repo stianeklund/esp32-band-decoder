@@ -268,6 +268,8 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
     const cJSON *auto_mode = cJSON_GetObjectItem(root, "auto_mode");
     new_config.auto_mode = cJSON_IsTrue(auto_mode);
 
+    const cJSON *allow_concurrent_data_sources= cJSON_GetObjectItem(root, "allow_concurrent_data_sources");
+    new_config.allow_concurrent_data_sources = cJSON_IsTrue(allow_concurrent_data_sources);
 
     // Parse UART configuration
     // Log the raw JSON content for debugging
@@ -341,6 +343,69 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
         cJSON_Delete(root);
         free(content);
         return ESP_FAIL;
+    }
+
+    // Parse MQTT settings
+    const cJSON *mqtt_enabled = cJSON_GetObjectItem(root, "mqtt_enabled");
+    new_config.mqtt_enabled = cJSON_IsTrue(mqtt_enabled);
+
+    const cJSON *mqtt_broker = cJSON_GetObjectItem(root, "mqtt_broker");
+    if (cJSON_IsString(mqtt_broker)) {
+        strncpy(new_config.mqtt_broker, mqtt_broker->valuestring, sizeof(new_config.mqtt_broker) - 1);
+    }
+
+    const cJSON *mqtt_port = cJSON_GetObjectItem(root, "mqtt_port");
+    if (cJSON_IsNumber(mqtt_port)) {
+        new_config.mqtt_port = mqtt_port->valueint;
+    }
+
+    const cJSON *mqtt_rig_id = cJSON_GetObjectItem(root, "mqtt_rig_id");
+    if (cJSON_IsString(mqtt_rig_id)) {
+        strncpy(new_config.mqtt_rig_id, mqtt_rig_id->valuestring, sizeof(new_config.mqtt_rig_id) - 1);
+    }
+
+    // Debug log the entire JSON content
+    char* debug_json = cJSON_Print(root);
+    ESP_LOGI(TAG, "Received JSON: %s", debug_json);
+    free(debug_json);
+
+    const cJSON *mqtt_username = cJSON_GetObjectItem(root, "mqtt_username");
+    ESP_LOGI(TAG, "Processing MQTT username");
+    if (mqtt_username && mqtt_username->valuestring) {
+        ESP_LOGI(TAG, "Received MQTT username: '%s'", mqtt_username->valuestring);
+        strncpy(new_config.mqtt_username, mqtt_username->valuestring, sizeof(new_config.mqtt_username) - 1);
+        new_config.mqtt_username[sizeof(new_config.mqtt_username) - 1] = '\0';
+    } else {
+        ESP_LOGW(TAG, "MQTT username not found in JSON or is null");
+        new_config.mqtt_username[0] = '\0';
+    }
+
+    const cJSON *mqtt_password = cJSON_GetObjectItem(root, "mqtt_password");
+    ESP_LOGI(TAG, "Processing MQTT password");
+    if (mqtt_password && mqtt_password->valuestring) {
+        ESP_LOGI(TAG, "Received MQTT password (length: %d)", strlen(mqtt_password->valuestring));
+        strncpy(new_config.mqtt_password, mqtt_password->valuestring, sizeof(new_config.mqtt_password) - 1);
+        new_config.mqtt_password[sizeof(new_config.mqtt_password) - 1] = '\0';
+    } else {
+        ESP_LOGW(TAG, "MQTT password not found in JSON or is null");
+        new_config.mqtt_password[0] = '\0';
+    }
+
+    const cJSON *mqtt_client_id = cJSON_GetObjectItem(root, "mqtt_client_id");
+    if (cJSON_IsString(mqtt_client_id)) {
+        strncpy(new_config.mqtt_client_id, mqtt_client_id->valuestring, sizeof(new_config.mqtt_client_id) - 1);
+    } else {
+        // Set default client ID if not provided
+        strncpy(new_config.mqtt_client_id, "core-mosquitto", sizeof(new_config.mqtt_client_id) - 1);
+    }
+
+    const cJSON *mqtt_topic = cJSON_GetObjectItem(root, "mqtt_topic");
+    if (cJSON_IsString(mqtt_topic)) {
+        strncpy(new_config.mqtt_topic, mqtt_topic->valuestring, sizeof(new_config.mqtt_topic) - 1);
+        new_config.mqtt_topic[sizeof(new_config.mqtt_topic) - 1] = '\0';
+    } else {
+        // Set default if not provided
+        strncpy(new_config.mqtt_topic, "omnirig/frequent/radio_info", sizeof(new_config.mqtt_topic) - 1);
     }
 
     // Get num_bands and num_antenna_ports from JSON

@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include <cstring>
+#include "my_mqtt_client.h"
 #include <string>
 #include <string_view>
 #include <sys/param.h>
@@ -14,7 +15,8 @@ CatParser *CatParser::instance_ = nullptr;
 
 CatParser::CatParser()
     : uart2_queue(nullptr),
-      shutdown_requested(false) {
+      shutdown_requested(false),
+      last_serial_data_time(std::chrono::steady_clock::now()) {
     if (instance_ == nullptr) {
         instance_ = this;
     }
@@ -184,6 +186,8 @@ void CatParser::uart_task() {
         while (events_processed < MAX_EVENTS_PER_ITERATION &&
                xQueueReceive(uart2_queue, &event, xTicksToWait) == pdTRUE) {
             events_processed++;
+            MQTTClient::instance().set_has_serial_data(true);
+            last_serial_data_time = std::chrono::steady_clock::now();
 
             switch (event.type) {
                 case UART_DATA: {
@@ -236,6 +240,13 @@ void CatParser::uart_task() {
                     break;
             }
         }
+        // Check if serial data has become stale
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_serial_data_time).count() > SERIAL_DATA_TIMEOUT_S) {
+            MQTTClient::instance().set_has_serial_data(false);
+        }
+
         // Always yield after processing events or timeout
         taskYIELD();
     }
@@ -315,10 +326,16 @@ esp_err_t CatParser::process_ap_command(const std::string_view command) {
     return ESP_OK;
 }
 
+void CatParser::handle_frequency_update(uint32_t frequency) {
+    ESP_LOGD(TAG, "Handling frequency update: %lu Hz", frequency);
+    handle_frequency_change(frequency);
+}
+
 esp_err_t CatParser::process_command(const char *command) {
     if (!command) {
         return ESP_ERR_INVALID_ARG;
     }
+
 
     std::string_view cmd_str(command);
     size_t start = 0;
@@ -463,4 +480,28 @@ esp_err_t CatParser::process_fa_command(const std::string_view command) {
 void CatParser::uart_task_trampoline(void *arg) {
     static_cast<CatParser *>(arg)->uart_task();
     vTaskDelete(nullptr);
+}
+
+void CatParser::process_serial_data(const uint8_t* data, size_t len) {
+    if (!data || len == 0) return;
+    
+    // Create a temporary buffer for the command
+    char temp_buffer[128];
+    size_t copy_len = std::min(len, sizeof(temp_buffer) - 1);
+    memcpy(temp_buffer, data, copy_len);
+    temp_buffer[copy_len] = '\0';
+
+    // Process the command
+    process_command(temp_buffer);
+    
+    // Update serial data timestamp
+    last_serial_data_time = std::chrono::steady_clock::now();
+    MQTTClient::instance().set_has_serial_data(true);
+}
+
+void CatParser::clear_serial_data() {
+    // Force the serial data timeout
+    last_serial_data_time = std::chrono::steady_clock::now() - 
+        std::chrono::seconds(SERIAL_DATA_TIMEOUT_S + 1);
+    MQTTClient::instance().set_has_serial_data(false);
 }

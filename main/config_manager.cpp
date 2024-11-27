@@ -48,6 +48,21 @@ esp_err_t ConfigManager::init() const {
         current_config_->uart_rx_pin = GPIO_NUM_32; // HT1
         current_config_->uart_tx_pin = GPIO_NUM_33; // HT2
 
+        // Whether to allow data from both uart and MQTT at the same time
+        current_config_->allow_concurrent_data_sources = true;  // First come first serve
+
+        // MQTT defaults
+        current_config_->mqtt_enabled = true;  // default to enabled
+        current_config_->mqtt_port = 1883;     // default MQTT port
+        strncpy(current_config_->mqtt_broker, "mqtt://localhost", sizeof(current_config_->mqtt_broker));
+        strncpy(current_config_->mqtt_rig_id, "rig1", sizeof(current_config_->mqtt_rig_id));
+        strncpy(current_config_->mqtt_username, "mqtt", sizeof(current_config_->mqtt_username));
+        strncpy(current_config_->mqtt_password, "mqtt", sizeof(current_config_->mqtt_password));
+        strncpy(current_config_->mqtt_client_id, "core-mosquitto", sizeof(current_config_->mqtt_client_id));
+        strncpy(current_config_->mqtt_username, "mqtt", sizeof(current_config_->mqtt_username));
+        strncpy(current_config_->mqtt_password, "mqtt", sizeof(current_config_->mqtt_password));
+        strncpy(current_config_->mqtt_topic, "omnirig/frequent/radio_info", sizeof(current_config_->mqtt_topic));
+
         // Save default configuration
         ret = save_to_nvs();
         if (ret != ESP_OK) {

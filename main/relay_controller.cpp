@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "freertos/task.h"
 #include <chrono>
+#include <my_mqtt_client.h>
 
 static const char* TAG = "RELAY_CONTROLLER";
 
@@ -205,11 +206,15 @@ bool RelayController::should_delay() const {
 }
 
 
+ bool RelayController::is_transmitting() const {
+     return cat_parser_.is_transmitting() || MQTTClient::instance().is_transmitting();
+ }
+
  esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number) {
      std::lock_guard<std::mutex> lock(relay_mutex_);
 
      // Check if radio is transmitting
-     if (cat_parser_.is_transmitting()) {
+     if (is_transmitting()) {
          ESP_LOGW(TAG, "Cannot change relays while transmitting");
          return ESP_ERR_INVALID_STATE;
      }
@@ -218,7 +223,7 @@ bool RelayController::should_delay() const {
      vTaskDelay(pdMS_TO_TICKS(10));
     
      // Double check transmit state after delay
-     if (cat_parser_.is_transmitting()) {
+     if (is_transmitting()) {
          ESP_LOGW(TAG, "Cannot change relays while transmitting");
          return ESP_ERR_INVALID_STATE;
      }

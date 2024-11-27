@@ -45,6 +45,7 @@ public:
     [[nodiscard]] uint16_t get_relay_states() const;
 
 private:
+    [[nodiscard]] bool is_transmitting() const;
     RelayController();
     std::map<int, int> last_selected_relay_for_band_;
     int currently_selected_relay_;
