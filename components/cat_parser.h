@@ -7,6 +7,9 @@
 #include <string_view>
 #include <unordered_map>
 #include <atomic>
+#include <string>
+#include "esp_timer.h"
+#include <chrono>
 #define MAX_CAT_COMMAND_LENGTH 32
 #define UART_NUM UART_NUM_2
 #define UART_BAUD_RATE 9600
@@ -29,7 +32,7 @@ public:
 
     uint32_t get_frequency() const { return current_frequency; }
     bool is_transmitting() const { return transmitting; }
-    void set_transmitting(bool tx_state) { transmitting = tx_state; }
+    void set_transmitting(const bool tx_state) { transmitting = tx_state; }
     bool is_rit_on() const { return rit_on; }
     bool is_xit_on() const { return xit_on; }
     bool is_split_on() const { return split_on; }
@@ -37,6 +40,7 @@ public:
     int32_t get_rit_offset() const { return rit_offset; }
 
     esp_err_t handle_frequency_change(uint32_t frequency);
+
     void handle_frequency_update(uint32_t frequency);
 
     // Legacy C-style interface for backward compatibility
@@ -58,6 +62,7 @@ private:
     esp_err_t process_if_command(std::string_view command);
 
     esp_err_t process_ap_command(std::string_view command);
+    esp_err_t process_ai_command(std::string_view command);
 
     static void uart_task_trampoline(void *arg);
 
@@ -92,7 +97,7 @@ inline esp_err_t cat_parser_process_command(const char *command) {
 inline esp_err_t cat_parser_update_config() { return CatParser::instance().update_config(); }
 inline uint32_t cat_parser_get_frequency() { return CatParser::instance().get_frequency(); }
 inline uint32_t cat_parser_get_transmit() { return CatParser::instance().is_transmitting(); }
-inline void cat_parser_set_transmit(bool transmitting) { CatParser::instance().set_transmitting(transmitting); }
-inline esp_err_t cat_parser_set_frequency(uint32_t frequency) { return CatParser::instance().handle_frequency_change(frequency); }
+inline void cat_parser_set_transmit(const bool transmitting) { CatParser::instance().set_transmitting(transmitting); }
+inline esp_err_t cat_parser_set_frequency(const uint32_t frequency) { return CatParser::instance().handle_frequency_change(frequency); }
 
 #endif // CAT_PARSER_H

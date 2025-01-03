@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 #include <sys/param.h>
+#include "driver/gpio.h"
+#include <chrono>
 
 // Initialize static member
 CatParser *CatParser::instance_ = nullptr;
@@ -24,6 +26,7 @@ CatParser::CatParser()
     // Initialize command handlers
     command_handlers = {
         {('F' << 8) | 'A', &CatParser::process_fa_command},
+        {('A' << 8) | 'I', &CatParser::process_ap_command},
         {('A' << 8) | 'P', &CatParser::process_ap_command},
         {('I' << 8) | 'F', &CatParser::process_if_command}
     };
@@ -57,7 +60,7 @@ CatParser &CatParser::instance() {
 #define UART_QUEUE_SIZE 3
 
 esp_err_t CatParser::init() {
-    ESP_LOGI(TAG, "Initializing CAT parser");
+    ESP_LOGD(TAG, "Initializing CAT parser");
 
     // Get current configuration from antenna switch
     esp_err_t ret = antenna_switch_get_config(&current_config);
@@ -191,8 +194,8 @@ void CatParser::uart_task() {
 
             switch (event.type) {
                 case UART_DATA: {
-                    if (uart_get_buffered_data_len(UART_NUM, &buffered_size) == ESP_OK) {
-                        const int len = uart_read_bytes(UART_NUM, temp_buffer,
+                    if (uart_get_buffered_data_len(UART_NUM_2, &buffered_size) == ESP_OK) {
+                        const int len = uart_read_bytes(UART_NUM_2, temp_buffer,
                                                         std::min(buffered_size, sizeof(temp_buffer) - 1),
                                                         pdMS_TO_TICKS(1));
                         if (len > 0) {
@@ -231,7 +234,7 @@ void CatParser::uart_task() {
                 case UART_FIFO_OVF:
                 case UART_BUFFER_FULL:
                     ESP_LOGW(TAG, "Buffer issue detected, flushing UART");
-                    uart_flush_input(UART_NUM);
+                    uart_flush_input(UART_NUM_2);
                     xQueueReset(uart2_queue);
                     command_accumulator.clear(); // Clear accumulated data
                     break;
@@ -295,6 +298,37 @@ esp_err_t CatParser::handle_frequency_change(const uint32_t frequency) {
     return ESP_OK;
 }
 
+// TODO
+esp_err_t CatParser::process_ai_command(const std::string_view command) {
+    char *endptr;
+
+    // Convert string_view to C string for strtoul
+    const std::string ports_str(command);
+    const unsigned long ports = strtoul(ports_str.c_str(), &endptr, 10);
+
+    if (*endptr != '\0') {
+        ESP_LOGE(TAG, "Invalid ports format in command: %.*s",
+                 static_cast<int>(command.length()), command.data());
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGD(TAG, "Setting antenna ports: %lu", ports);
+    antenna_switch_config_t config;
+    esp_err_t ret = antenna_switch_get_config(&config);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get config: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    config.num_antenna_ports = ports;
+    ret = antenna_switch_set_config(&config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set config: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    return ESP_OK;
+}
 esp_err_t CatParser::process_ap_command(const std::string_view command) {
     char *endptr;
 
@@ -380,8 +414,8 @@ int CatParser::get_band_index(const uint32_t freq) const {
 
     // Find which band the frequency belongs to
     for (int i = 0; i < current_config.num_bands; i++) {
-        if (freq >= current_config.bands[i].start_freq &&
-            freq <= current_config.bands[i].end_freq) {
+        if (freq >= current_config.bands[0][i].start_freq &&
+            freq <= current_config.bands[0][i].end_freq) {
             return i;
         }
     }
