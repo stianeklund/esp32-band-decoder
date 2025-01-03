@@ -30,6 +30,14 @@ static httpd_config_t config;
 constexpr size_t MAX_POST_SIZE = 4096;
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
+static esp_err_t error_handler(httpd_req_t *req, httpd_err_code_t err) {
+    ESP_LOGW(TAG, "HTTP Error %d occurred", err);
+    httpd_resp_send_err(req, err, "Something went wrong");
+    // Ensure connection is closed
+    httpd_sess_trigger_close(req->handle, httpd_req_to_sockfd(req));
+    return ESP_FAIL;
+}
+
 static esp_err_t root_get_handler(httpd_req_t *req) {
     antenna_switch_config_t config;
 
@@ -753,6 +761,8 @@ esp_err_t webserver_init() {
     config.lru_purge_enable = true;  // Enable LRU purging for large requests
     config.recv_wait_timeout = 10;
     config.uri_match_fn = httpd_uri_match_wildcard;
+    config.keep_alive_enable = false;  // Disable keep-alive to force connection closure
+    config.max_open_sockets = 7;       // Set maximum concurrent connections
 
     char ip_addr[16];
     esp_err_t ret = WifiManager::instance().get_ip_info(ip_addr, sizeof(ip_addr));
@@ -767,6 +777,9 @@ esp_err_t webserver_init() {
         ESP_LOGE(TAG, "Error starting server: %s", esp_err_to_name(ret));
         return ret;
     }
+
+    // Register global error handler
+    httpd_register_err_handler(server, HTTPD_500_INTERNAL_SERVER_ERROR, error_handler);
 
     ESP_LOGD(TAG, "Registering URI handlers");
     ret = httpd_register_uri_handler(server, &root);
