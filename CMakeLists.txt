@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 #include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-include(C:/Espressif/frameworks/esp-idf-v5.3.1-2/tools/cmake/project.cmake)
+include(C:/Espressif/frameworks/esp-idf-v5.4/tools/cmake/project.cmake)
 #C:\Espressif\frameworks\esp-idf-v5.3.1-2\tools\cmake>
 project(rs232_band_decoder)
 
