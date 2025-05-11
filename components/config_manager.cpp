@@ -62,6 +62,9 @@ esp_err_t ConfigManager::init() const {
         strncpy(current_config_->mqtt_username, "mqtt", sizeof(current_config_->mqtt_username));
         strncpy(current_config_->mqtt_password, "mqtt", sizeof(current_config_->mqtt_password));
         strncpy(current_config_->mqtt_topic, "omnirig/frequent/radio_info", sizeof(current_config_->mqtt_topic));
+        
+        // Default for radio B toggle
+        current_config_->enable_radio_b = false;  // Disabled by default
 
         // Save default configuration
         ret = save_to_nvs();

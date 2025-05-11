@@ -28,6 +28,7 @@ typedef struct {
     int8_t uart_rx_pin;  // GPIO pin number for UART RX
     bool mqtt_enabled;
     bool allow_concurrent_data_sources;
+    bool enable_radio_b;  // Toggle for enabling/disabling Radio B relays
     char mqtt_broker[64];
     uint16_t mqtt_port;
     char mqtt_rig_id[16];

@@ -3,12 +3,13 @@
 # The following five lines of boilerplate have to be in your project's
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+#H:\espressif\frameworks\esp-idf-v5.4.1\tools\cmake
 
-#include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-include(C:/Espressif/frameworks/esp-idf-v5.4/tools/cmake/project.cmake)
-#C:\Espressif\frameworks\esp-idf-v5.3.1-2\tools\cmake>
-project(rs232_band_decoder)
+set(EXTRA_COMPONENT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/components $ENV{IDF_PATH}/tools/unit-test-app/components)
 
 # Ensure C++ is enabled
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+project(rs232_band_decoder)

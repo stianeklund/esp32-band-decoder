@@ -3,6 +3,7 @@
 
 #include "esp_err.h"
 #include "kc868_a16_hw.h"
+#include "antenna_switch.h"
 #include <map>
 #include <mutex>
 #include <chrono>
@@ -36,7 +37,10 @@ public:
 
     esp_err_t update_all_relay_states();
 
-    esp_err_t set_relay_for_antenna(int relay_id, int band_number);
+    esp_err_t set_relay_for_antenna(int relay_id, int band_number, RadioID radio);
+    inline esp_err_t set_relay_for_antenna(int relay_id, int band_number) {
+        return set_relay_for_antenna(relay_id, band_number, RadioID::A);
+    }
     esp_err_t turn_off_all_relays_except(int relay_to_keep_on);
     
     [[nodiscard]] int get_last_selected_relay_for_band(int band_number) const;
@@ -47,15 +51,16 @@ public:
 private:
     [[nodiscard]] bool is_transmitting() const;
     RelayController();
-    std::map<int, int> last_selected_relay_for_band_;
+    uint16_t current_mask_[2] = {0,0};               // mask_[0]=Radio A, mask_[1]=Radio B
+    std::map<int,int> last_selected_relay_for_band_[2]; // same indexing
+    std::map<int, bool> relay_states_;
     int currently_selected_relay_;
     std::mutex relay_mutex_;
     std::chrono::steady_clock::time_point last_relay_change_;
-    std::map<int, bool> relay_states_;
     CatParser& cat_parser_;  // Reference to check transmit status
 
     [[nodiscard]] bool should_delay() const;
-    esp_err_t execute_relay_change(int relay_id, int band_number);
+    esp_err_t execute_relay_change(int relay_id, int band_number, RadioID radio);
 };
 
 #endif // RELAY_CONTROLLER_H

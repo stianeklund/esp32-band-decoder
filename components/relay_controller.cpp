@@ -1,4 +1,6 @@
 #include "relay_controller.h"
+#include "antenna_switch.h"
+#include "config_manager.h"
 #include "cat_parser.h"
 #include "esp_log.h"
 #include "freertos/task.h"
@@ -210,56 +212,60 @@ bool RelayController::should_delay() const {
      return cat_parser_.is_transmitting() || MQTTClient::instance().is_transmitting();
  }
 
- esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number) {
+ esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number, const RadioID radio) {
      std::lock_guard<std::mutex> lock(relay_mutex_);
-
      // Check if radio is transmitting
      if (is_transmitting()) {
          ESP_LOGW(TAG, "Cannot change relays while transmitting");
          return ESP_ERR_INVALID_STATE;
      }
-
      // Add a small delay to ensure transmit state is stable
      vTaskDelay(pdMS_TO_TICKS(10));
-    
      // Double check transmit state after delay
      if (is_transmitting()) {
          ESP_LOGW(TAG, "Cannot change relays while transmitting");
          return ESP_ERR_INVALID_STATE;
      }
 
-     // If we're already on the correct relay, no need to change
-     if (relay_id == currently_selected_relay_) {
-         ESP_LOGI(TAG, "Relay %d already selected", relay_id);
-         last_selected_relay_for_band_[band_number] = relay_id;
-         return ESP_OK;
+     const uint16_t bit = 1u << (relay_id - 1);
+     auto &mask = current_mask_[static_cast<int>(radio)];
+     auto &last_map = last_selected_relay_for_band_[static_cast<int>(radio)];
+     const auto &cfg = ConfigManager::instance().get_config();
+
+     // Prevent Radio B grabbing a relay held by Radio A
+     if (radio == RadioID::B && (current_mask_[0] & bit)) {
+         ESP_LOGW(TAG, "Relay %d already in use by Radio A", relay_id);
+         return ESP_ERR_INVALID_STATE;
      }
+     // Clear old selection if multi-select is disabled
+     if (!cfg.allow_multi_select) {
+         mask = 0;
+     }
+     // Toggle this relay
+     mask ^= bit;
+
+     // Combine both radios' masks for hardware
+     uint16_t hw_mask = current_mask_[0] | current_mask_[1];
 
      if (should_delay()) {
          vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
      }
 
-     const uint16_t relay_mask = 1 << (relay_id - 1);
-     esp_err_t ret = kc868_a16_set_all_outputs(relay_mask);
-
+     esp_err_t ret = kc868_a16_set_all_outputs(hw_mask);
      if (ret == ESP_OK) {
-         currently_selected_relay_ = relay_id;
-         relay_states_[relay_id] = true;
          last_relay_change_ = std::chrono::steady_clock::now();
-         last_selected_relay_for_band_[band_number] = relay_id;
-         ESP_LOGI(TAG, "Successfully changed to relay %d for band %d", relay_id, band_number);
+         last_map[band_number] = relay_id;
      }
-
      return ret;
  }
 
-esp_err_t RelayController::set_relay_for_antenna(int relay_id, int band_number) {
+esp_err_t RelayController::set_relay_for_antenna(int relay_id, int band_number, const RadioID radio) {
     if (relay_id < 1 || relay_id > NUM_RELAYS) {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
         return ESP_ERR_INVALID_ARG;
     }
-    ESP_LOGD(TAG, "Calling Execute relay change");
+    ESP_LOGD(TAG, "Calling Execute relay change for Radio %d", static_cast<int>(radio));
 
-    return execute_relay_change(relay_id, band_number);
+    return execute_relay_change(relay_id, band_number, radio);
 }
 
