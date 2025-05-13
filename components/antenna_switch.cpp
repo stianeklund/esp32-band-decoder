@@ -64,15 +64,18 @@ esp_err_t antenna_switch_set_frequency(const uint32_t frequency) {
         return ESP_OK;
     }
 
+    constexpr size_t RADIO_IDX = 0;
     for (int i = 0; i < config.num_bands; i++) {
-        if (frequency >= config.bands[i].start_freq &&
-            frequency <= config.bands[i].end_freq) {
+        const auto &band = config.bands[RADIO_IDX][i];
+        if (frequency >= band.start_freq &&
+            frequency <= band.end_freq) {
             // Find the first available antenna port for this band
             for (int j = 0; j < config.num_antenna_ports; j++) {
-                if (config.bands[i].antenna_ports[j]) {
-                    ESP_LOGI(TAG, "Selecting relay %d for band %d", j + 1, i);
-                    // Use the RelayController to set the appropriate relay
-                    return relay_controller->set_relay_for_antenna(j + 1, i);
+                if (band.antenna_ports[j]) {
+                    ESP_LOGI(TAG, "Selecting relay %d for band %d for Radio A", j + 1, i);
+                    // Use the RelayController to set the appropriate relay, turning it ON
+                    if (!relay_controller) return ESP_ERR_INVALID_STATE;
+                    return relay_controller->set_relay_for_antenna(j + 1, i, RadioID::A, true);
                 }
             }
 
@@ -101,12 +104,57 @@ esp_err_t antenna_switch_set_auto_mode(const bool auto_mode) {
 
 esp_err_t antenna_switch_set_relay(const int relay_id, const bool state) {
     ESP_LOGI(TAG, "Setting relay %d to %s", relay_id, state ? "ON" : "OFF");
-    return relay_controller->set_relay(relay_id, state);
+
+    if (relay_id < 1 || relay_id > RelayController::NUM_RELAYS) {
+        ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!relay_controller) {
+        ESP_LOGE(TAG, "Relay controller not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const auto &cfg = ConfigManager::instance().get_config();
+    const RadioID radio = (relay_id <= RelayController::RELAYS_PER_RADIO)
+                    ? RadioID::A
+                    : RadioID::B;
+
+    // If Radio B operations are disabled (Single A mode) and this request is for Radio B, ignore ON request.
+    if (cfg.radio_operation_mode == RADIO_OP_MODE_SINGLE_A && radio == RadioID::B && state) {
+        ESP_LOGW(TAG, "Radio B operations disabled (Single A mode); ignoring ON for relay %d", relay_id);
+        return ESP_OK;
+    }
+
+    // All interlock and safety logic is now handled by RelayController::execute_relay_change
+    // The band_number is -1 here as this is a direct relay set, not tied to a specific band's auto-selection.
+    return relay_controller->set_relay_for_antenna(relay_id, /*band_number=*/-1, radio, state);
+}
+
+esp_err_t antenna_switch_set_relay_radio_b(int relay_id, bool state) {
+    const auto &cfg = ConfigManager::instance().get_config();
+    if (cfg.radio_operation_mode == RADIO_OP_MODE_SINGLE_A && state) { // Only block if trying to turn ON when Radio B is disabled
+        ESP_LOGW(TAG, "Radio B operations disabled (Single A mode), cannot turn ON relay %d for Radio B", relay_id);
+        return ESP_OK; 
+    }
+    if (!relay_controller) {
+        ESP_LOGE(TAG, "Relay controller not initialized for Radio B set relay");
+        return ESP_ERR_INVALID_STATE;
+    }
+    // Ensure relay_id is within Radio B's range (e.g., 9-16 if RELAYS_PER_RADIO is 8)
+    // or let set_relay_for_antenna determine the radio based on relay_id.
+    // For clarity, explicitly setting RadioID::B.
+    // The band_number is -1 as this is a direct relay set.
+    return relay_controller->set_relay_for_antenna(relay_id, /*band_number=*/-1, RadioID::B, state);
 }
 
 esp_err_t antenna_switch_get_relay_state(const int relay_id, bool *state) {
     if (state == nullptr) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!relay_controller) {
+        ESP_LOGE(TAG, "Relay controller not initialized for get_relay_state");
+        return ESP_ERR_INVALID_STATE;
     }
     *state = relay_controller->get_relay_state(relay_id);
     return ESP_OK;

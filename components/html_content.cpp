@@ -509,22 +509,30 @@ for (int i = 0; i < 8; i++) {
        << "Relay " << (i + 1) << "</button>";
 }
 
-ss << R"(
+// Conditionally render Radio B block
+if (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A) {
+    ss << R"(
                 </div>
             </div>
             <div class="relay-group">
                 <h3>Radio B</h3>
                 <div class="relay-grid">)";
-
-// Next 8 relays (Radio B)
-for (int i = 8; i < 16; i++) {
-    ss << "<button class='relay-button' data-relay='" << (i + 1) << "' onclick='toggleRelay(" << (i + 1) << ")'>"
-       << "Relay " << (i + 1) << "</button>";
+    for (int i = 8; i < 16; i++) {
+        ss << "<button class='relay-button' data-relay='" << (i + 1) << "' onclick='toggleRelay(" << (i + 1) << ")'>"
+           << "Relay " << (i + 1) << "</button>";
+    }
+    ss << R"(
+                </div>
+            </div>
+    )";
+} else {
+    ss << R"(
+                </div>
+            </div>
+    )";
 }
 
 ss << R"(
-                </div>
-            </div>
         </div>
     </div>
     <div class="button-container">
@@ -808,6 +816,34 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "' onchange='updateAntennaPorts()'>";
     ss << "</div>";
 
+    // Radio Operation Mode Dropdown
+    ss << "<div class='form-group'>";
+    ss << "<label for='radio_operation_mode'>Radio Operation Mode:</label>";
+    ss << "<select id='radio_operation_mode' name='radio_operation_mode' onchange='toggleInterlockVisibility()'>";
+    ss << "<option value='SINGLE_A' " << (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A ? "selected" : "") << ">Radio A Only</option>";
+    ss << "<option value='ALTERNATING_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_ALTERNATING_AB ? "selected" : "") << ">Alternating (A or B, one at a time)</option>";
+    ss << "<option value='CONCURRENT_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "selected" : "") << ">Concurrent (A and B, different antennas)</option>";
+    ss << "</select>";
+    ss << "</div>";
+
+    // Interlock Option (conditionally visible)
+    ss << "<div class='form-group' id='interlock_options_div' style='display: "
+       << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "block" : "none") << ";'>";
+    ss << "<label><input type='checkbox' name='interlock_auto_resolves_conflict' "
+       << (config.interlock_auto_resolves_conflict ? "checked" : "")
+       << "> Automatically resolve same-antenna conflict (for Concurrent mode)</label>";
+    ss << "</div>";
+
+    // Radio selector for band configuration (seems to be for UI to pick which radio's bands to show/edit, distinct from operation mode)
+    // Keeping this as its removal was not explicitly requested.
+    ss << "<div class='form-group'>";
+    ss << "<label for='radio'>Configure Bands for Radio:</label>";
+    ss << "<select id='radio' name='radio'>";
+    ss << "<option value='A'>A</option>";
+    ss << "<option value='B'>B</option>";
+    ss << "</select>";
+    ss << "</div>";
+
     ss << "<h2>UART Configuration</h2>";
     ss << "<div class='form-group' style='margin-bottom: 20px;'>";
     ss << "<label for='uart_baud_rate'>Baud Rate:</label>";
@@ -925,7 +961,7 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
         // Find matching band from description
         std::string selected_band;
         for (const auto &[band_name, band_info]: band_info) {
-            if (strcmp(config.bands[i].description, band_info.name) == 0) {
+            if (strcmp(config.bands[0][i].description, band_info.name) == 0) {
                 selected_band = band_name;
                 break;
             }
@@ -939,14 +975,14 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
         }
 
         ss << "</select></td>";
-        ss << "<td>" << config.bands[i].start_freq << "</td>";
-        ss << "<td>" << config.bands[i].end_freq << "</td>";
+        ss << "<td>" << config.bands[0][i].start_freq << "</td>";
+        ss << "<td>" << config.bands[0][i].end_freq << "</td>";
         ss << "<td>";
 
         // Generate checkboxes for each antenna port
         for (int j = 0; j < config.num_antenna_ports; j++) {
             ss << "<input type='checkbox' name='a" << i << "_" << j << "' value='1' "
-                    << (config.bands[i].antenna_ports[j] ? "checked" : "") << ">" << (j + 1) << " ";
+                    << (config.bands[0][i].antenna_ports[j] ? "checked" : "") << ">" << (j + 1) << " ";
         }
 
 
@@ -1006,9 +1042,11 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
         const config = {
             auto_mode: formData.get('auto_mode') === 'on',
             allow_concurrent_data_sources: formData.get('allow_concurrent_data_sources') === 'on',
+            radio_operation_mode: formData.get('radio_operation_mode'),
+            interlock_auto_resolves_conflict: formData.get('interlock_auto_resolves_conflict') === 'on',
             num_bands: parseInt(formData.get('num_bands')),
             num_antenna_ports: parseInt(formData.get('num_antenna_ports')),
-            tcp_host: formData.get('tcp_host'),
+            // tcp_host: formData.get('tcp_host'), // Assuming TCP host/port are not part of this config struct anymore or handled elsewhere
             tcp_port: parseInt(formData.get('tcp_port')),
             uart_baud_rate: parseInt(formData.get('uart_baud_rate')) || 9600,
             uart_parity: parseInt(formData.get('uart_parity')) || 0,
@@ -1024,6 +1062,9 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             mqtt_password: formData.get('mqtt_password') || '',
             mqtt_client_id: formData.get('mqtt_client_id') || 'core-mosquitto',
             mqtt_topic: formData.get('mqtt_topic') || 'omnirig/frequent/radio_info',
+            // The 'radio' field from the form (A/B selector for band config UI) might need to be sent if backend uses it
+            // For now, assuming it's UI only for selecting which set of bands to show.
+            // radio: formData.get('radio'), 
             bands: []
         };
         
@@ -1200,6 +1241,18 @@ ss << R"(
     // Add event listeners with debouncing
     document.getElementById('num_antenna_ports').addEventListener('change', debounce(updateAntennaPorts, 250));
     document.getElementById('num_bands').addEventListener('change', debounce(updateBandRows, 250));
+
+    function toggleInterlockVisibility() {
+        const mode = document.getElementById('radio_operation_mode').value;
+        const interlockDiv = document.getElementById('interlock_options_div');
+        if (mode === 'CONCURRENT_AB') {
+            interlockDiv.style.display = 'block';
+        } else {
+            interlockDiv.style.display = 'none';
+        }
+    }
+    // Initial call to set visibility based on loaded config
+    toggleInterlockVisibility();
     </script>)";
     ss << "<div class='button-container' style='margin: 20px 0;'>";
     ss << "<a href='/' class='button' style='background-color: var(--primary-color); color: white;'>Back to Home</a>";

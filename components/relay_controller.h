@@ -13,8 +13,10 @@ class CatParser;
 
 class RelayController {
 public:
-    static constexpr int NUM_RELAYS = 16;
+    static constexpr int NUM_RELAYS = 16; // Total number of relays
     static constexpr int COOLDOWN_PERIOD_MS = 50;
+    static constexpr int RELAYS_PER_RADIO = NUM_RELAYS / 2;
+
 
     // Delete copy constructor and assignment operator
     RelayController(const RelayController&) = delete;
@@ -37,9 +39,9 @@ public:
 
     esp_err_t update_all_relay_states();
 
-    esp_err_t set_relay_for_antenna(int relay_id, int band_number, RadioID radio);
-    inline esp_err_t set_relay_for_antenna(int relay_id, int band_number) {
-        return set_relay_for_antenna(relay_id, band_number, RadioID::A);
+    esp_err_t set_relay_for_antenna(int relay_id, int band_number, RadioID radio, bool state);
+    inline esp_err_t set_relay_for_antenna(int relay_id, int band_number, bool state) { // Default to Radio A
+        return set_relay_for_antenna(relay_id, band_number, RadioID::A, state);
     }
     esp_err_t turn_off_all_relays_except(int relay_to_keep_on);
     
@@ -49,18 +51,22 @@ public:
     [[nodiscard]] uint16_t get_relay_states() const;
 
 private:
-    [[nodiscard]] bool is_transmitting() const;
-    RelayController();
-    uint16_t current_mask_[2] = {0,0};               // mask_[0]=Radio A, mask_[1]=Radio B
-    std::map<int,int> last_selected_relay_for_band_[2]; // same indexing
-    std::map<int, bool> relay_states_;
+    // Members initialized in constructor, in order of initialization list
     int currently_selected_relay_;
-    std::mutex relay_mutex_;
     std::chrono::steady_clock::time_point last_relay_change_;
     CatParser& cat_parser_;  // Reference to check transmit status
+    uint8_t current_mask_[2]; // Relay masks for Radio A (index 0) and B (index 1) - each mask is 8 bits
 
+    // Other members
+    std::map<int,int> last_selected_relay_for_band_[2]; // same indexing
+    std::map<int, bool> relay_states_;
+    std::mutex relay_mutex_;
+
+    // Private methods
+    [[nodiscard]] bool is_transmitting() const;
+    RelayController(); // Constructor
     [[nodiscard]] bool should_delay() const;
-    esp_err_t execute_relay_change(int relay_id, int band_number, RadioID radio);
+    esp_err_t execute_relay_change(int relay_id, int band_number, RadioID radio, bool state);
 };
 
 #endif // RELAY_CONTROLLER_H
