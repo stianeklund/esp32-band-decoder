@@ -204,6 +204,76 @@ esp_err_t ConfigManager::save_to_nvs() const {
         if (ret == ESP_OK) ret = final_commit_err; // Preserve first error
     }
 
+    // Save UART configuration
+    esp_err_t uart_err = nvs_set_i32(nvs_handle, "uart_baud", current_config_->uart_baud_rate);
+    if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error saving uart_baud_rate: %s", esp_err_to_name(uart_err));
+    if (ret == ESP_OK && uart_err != ESP_OK) ret = uart_err;
+
+    uart_err = nvs_set_u8(nvs_handle, "uart_parity", current_config_->uart_parity);
+    if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error saving uart_parity: %s", esp_err_to_name(uart_err));
+    if (ret == ESP_OK && uart_err != ESP_OK) ret = uart_err;
+
+    uart_err = nvs_set_u8(nvs_handle, "uart_stop_b", current_config_->uart_stop_bits);
+    if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error saving uart_stop_bits: %s", esp_err_to_name(uart_err));
+    if (ret == ESP_OK && uart_err != ESP_OK) ret = uart_err;
+
+    uart_err = nvs_set_u8(nvs_handle, "uart_flow_c", current_config_->uart_flow_ctrl);
+    if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error saving uart_flow_ctrl: %s", esp_err_to_name(uart_err));
+    if (ret == ESP_OK && uart_err != ESP_OK) ret = uart_err;
+
+    uart_err = nvs_set_i32(nvs_handle, "uart_tx_pin", current_config_->uart_tx_pin);
+    if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error saving uart_tx_pin: %s", esp_err_to_name(uart_err));
+    if (ret == ESP_OK && uart_err != ESP_OK) ret = uart_err;
+
+    uart_err = nvs_set_i32(nvs_handle, "uart_rx_pin", current_config_->uart_rx_pin);
+    if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error saving uart_rx_pin: %s", esp_err_to_name(uart_err));
+    if (ret == ESP_OK && uart_err != ESP_OK) ret = uart_err;
+
+    // Save allow_concurrent_data_sources
+    esp_err_t acds_err = nvs_set_u8(nvs_handle, "allow_concurr", static_cast<uint8_t>(current_config_->allow_concurrent_data_sources));
+    if (acds_err != ESP_OK) ESP_LOGE(TAG, "Error saving allow_concurrent_data_sources: %s", esp_err_to_name(acds_err));
+    if (ret == ESP_OK && acds_err != ESP_OK) ret = acds_err;
+
+    // Save MQTT configuration
+    esp_err_t mqtt_err = nvs_set_u8(nvs_handle, "mqtt_enabled", static_cast<uint8_t>(current_config_->mqtt_enabled));
+    if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error saving mqtt_enabled: %s", esp_err_to_name(mqtt_err));
+    if (ret == ESP_OK && mqtt_err != ESP_OK) ret = mqtt_err;
+
+    mqtt_err = nvs_set_str(nvs_handle, "mqtt_broker", current_config_->mqtt_broker);
+    if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error saving mqtt_broker: %s", esp_err_to_name(mqtt_err));
+    if (ret == ESP_OK && mqtt_err != ESP_OK) ret = mqtt_err;
+
+    mqtt_err = nvs_set_u16(nvs_handle, "mqtt_port", current_config_->mqtt_port);
+    if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error saving mqtt_port: %s", esp_err_to_name(mqtt_err));
+    if (ret == ESP_OK && mqtt_err != ESP_OK) ret = mqtt_err;
+
+    mqtt_err = nvs_set_str(nvs_handle, "mqtt_rig_id", current_config_->mqtt_rig_id);
+    if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error saving mqtt_rig_id: %s", esp_err_to_name(mqtt_err));
+    if (ret == ESP_OK && mqtt_err != ESP_OK) ret = mqtt_err;
+
+    mqtt_err = nvs_set_str(nvs_handle, "mqtt_user", current_config_->mqtt_username);
+    if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error saving mqtt_username: %s", esp_err_to_name(mqtt_err));
+    if (ret == ESP_OK && mqtt_err != ESP_OK) ret = mqtt_err;
+
+    mqtt_err = nvs_set_str(nvs_handle, "mqtt_pass", current_config_->mqtt_password);
+    if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error saving mqtt_password: %s", esp_err_to_name(mqtt_err));
+    if (ret == ESP_OK && mqtt_err != ESP_OK) ret = mqtt_err;
+
+    mqtt_err = nvs_set_str(nvs_handle, "mqtt_client", current_config_->mqtt_client_id);
+    if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error saving mqtt_client_id: %s", esp_err_to_name(mqtt_err));
+    if (ret == ESP_OK && mqtt_err != ESP_OK) ret = mqtt_err;
+
+    mqtt_err = nvs_set_str(nvs_handle, "mqtt_topic", current_config_->mqtt_topic);
+    if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error saving mqtt_topic: %s", esp_err_to_name(mqtt_err));
+    if (ret == ESP_OK && mqtt_err != ESP_OK) ret = mqtt_err;
+    
+    // Commit changes for UART, ACDS, and MQTT settings
+    esp_err_t extra_commit_err = nvs_commit(nvs_handle);
+    if (extra_commit_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error committing NVS changes for UART/MQTT: %s", esp_err_to_name(extra_commit_err));
+        if (ret == ESP_OK) ret = extra_commit_err; // Preserve first error
+    }
+
     // Save last_used_antenna for each radio and band
     for (int r_idx = 0; r_idx < 2; ++r_idx) {
         for (int b_idx = 0; b_idx < MAX_BANDS; ++b_idx) {
@@ -304,6 +374,104 @@ esp_err_t ConfigManager::load_from_nvs() const {
         ESP_LOGE(TAG, "Error loading interlock_auto_resolves_conflict: %s", esp_err_to_name(err_ia));
         // Keep existing value or default if error
     }
+
+    // Load UART configuration
+    int32_t temp_i32_val; // Temporary variable for nvs_get_i32
+    esp_err_t uart_err = nvs_get_i32(nvs_handle, "uart_baud", &temp_i32_val);
+    if (uart_err == ESP_OK) {
+        current_config_->uart_baud_rate = temp_i32_val;
+    } else if (uart_err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "uart_baud_rate not found, using default.");
+    } else {
+        ESP_LOGE(TAG, "Error loading uart_baud_rate: %s", esp_err_to_name(uart_err));
+    }
+    
+    uart_err = nvs_get_u8(nvs_handle, "uart_parity", &current_config_->uart_parity);
+    if (uart_err == ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "uart_parity not found, using default.");
+    else if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error loading uart_parity: %s", esp_err_to_name(uart_err));
+
+    uart_err = nvs_get_u8(nvs_handle, "uart_stop_b", &current_config_->uart_stop_bits);
+    if (uart_err == ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "uart_stop_bits not found, using default.");
+    else if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error loading uart_stop_bits: %s", esp_err_to_name(uart_err));
+
+    uart_err = nvs_get_u8(nvs_handle, "uart_flow_c", &current_config_->uart_flow_ctrl);
+    if (uart_err == ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "uart_flow_ctrl not found, using default.");
+    else if (uart_err != ESP_OK) ESP_LOGE(TAG, "Error loading uart_flow_ctrl: %s", esp_err_to_name(uart_err));
+
+    uart_err = nvs_get_i32(nvs_handle, "uart_tx_pin", &temp_i32_val);
+    if (uart_err == ESP_OK) {
+        current_config_->uart_tx_pin = static_cast<int8_t>(temp_i32_val);
+    } else if (uart_err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "uart_tx_pin not found, using default.");
+    } else {
+        ESP_LOGE(TAG, "Error loading uart_tx_pin: %s", esp_err_to_name(uart_err));
+    }
+
+    uart_err = nvs_get_i32(nvs_handle, "uart_rx_pin", &temp_i32_val);
+    if (uart_err == ESP_OK) {
+        current_config_->uart_rx_pin = static_cast<int8_t>(temp_i32_val);
+    } else if (uart_err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "uart_rx_pin not found, using default.");
+    } else {
+        ESP_LOGE(TAG, "Error loading uart_rx_pin: %s", esp_err_to_name(uart_err));
+    }
+
+    // Load allow_concurrent_data_sources
+    uint8_t acds_val;
+    esp_err_t acds_err = nvs_get_u8(nvs_handle, "allow_concurr", &acds_val);
+    if (acds_err == ESP_OK) current_config_->allow_concurrent_data_sources = static_cast<bool>(acds_val);
+    else if (acds_err == ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "allow_concurrent_data_sources not found, using default."); // Default is true from init
+    else ESP_LOGE(TAG, "Error loading allow_concurrent_data_sources: %s", esp_err_to_name(acds_err));
+    
+    // Load MQTT configuration
+    uint8_t mqtt_enabled_val;
+    esp_err_t mqtt_err = nvs_get_u8(nvs_handle, "mqtt_enabled", &mqtt_enabled_val);
+    if (mqtt_err == ESP_OK) current_config_->mqtt_enabled = static_cast<bool>(mqtt_enabled_val);
+    else if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "mqtt_enabled not found, using default."); // Default is true from init
+    else ESP_LOGE(TAG, "Error loading mqtt_enabled: %s", esp_err_to_name(mqtt_err));
+
+    size_t len;
+    len = sizeof(current_config_->mqtt_broker);
+    mqtt_err = nvs_get_str(nvs_handle, "mqtt_broker", current_config_->mqtt_broker, &len);
+    if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "mqtt_broker not found, using default."); /* Default from init */ }
+    else if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error loading mqtt_broker: %s", esp_err_to_name(mqtt_err));
+    // Ensure null termination if string was loaded and filled buffer
+    else if (len == sizeof(current_config_->mqtt_broker)) current_config_->mqtt_broker[len-1] = '\0';
+
+
+    mqtt_err = nvs_get_u16(nvs_handle, "mqtt_port", &current_config_->mqtt_port);
+    if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "mqtt_port not found, using default."); // Default from init
+    else if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error loading mqtt_port: %s", esp_err_to_name(mqtt_err));
+
+    len = sizeof(current_config_->mqtt_rig_id);
+    mqtt_err = nvs_get_str(nvs_handle, "mqtt_rig_id", current_config_->mqtt_rig_id, &len);
+    if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "mqtt_rig_id not found, using default."); /* Default from init */ }
+    else if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error loading mqtt_rig_id: %s", esp_err_to_name(mqtt_err));
+    else if (len == sizeof(current_config_->mqtt_rig_id)) current_config_->mqtt_rig_id[len-1] = '\0';
+
+    len = sizeof(current_config_->mqtt_username);
+    mqtt_err = nvs_get_str(nvs_handle, "mqtt_user", current_config_->mqtt_username, &len);
+    if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "mqtt_username not found, using default."); /* Default from init */ }
+    else if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error loading mqtt_username: %s", esp_err_to_name(mqtt_err));
+    else if (len == sizeof(current_config_->mqtt_username)) current_config_->mqtt_username[len-1] = '\0';
+
+    len = sizeof(current_config_->mqtt_password);
+    mqtt_err = nvs_get_str(nvs_handle, "mqtt_pass", current_config_->mqtt_password, &len);
+    if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "mqtt_password not found, using default."); /* Default from init */ }
+    else if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error loading mqtt_password: %s", esp_err_to_name(mqtt_err));
+    else if (len == sizeof(current_config_->mqtt_password)) current_config_->mqtt_password[len-1] = '\0';
+
+    len = sizeof(current_config_->mqtt_client_id);
+    mqtt_err = nvs_get_str(nvs_handle, "mqtt_client", current_config_->mqtt_client_id, &len);
+    if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "mqtt_client_id not found, using default."); /* Default from init */ }
+    else if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error loading mqtt_client_id: %s", esp_err_to_name(mqtt_err));
+    else if (len == sizeof(current_config_->mqtt_client_id)) current_config_->mqtt_client_id[len-1] = '\0';
+
+    len = sizeof(current_config_->mqtt_topic);
+    mqtt_err = nvs_get_str(nvs_handle, "mqtt_topic", current_config_->mqtt_topic, &len);
+    if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "mqtt_topic not found, using default."); /* Default from init */ }
+    else if (mqtt_err != ESP_OK) ESP_LOGE(TAG, "Error loading mqtt_topic: %s", esp_err_to_name(mqtt_err));
+    else if (len == sizeof(current_config_->mqtt_topic)) current_config_->mqtt_topic[len-1] = '\0';
 
     // Load last_used_antenna for each radio and band
     for (int r_idx = 0; r_idx < 2; ++r_idx) {
