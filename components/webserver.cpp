@@ -131,12 +131,13 @@ static esp_err_t config_get_handler(httpd_req_t *req) {
 
 static int find_active_port(const uint32_t current_freq, const antenna_switch_config_t &config, int &active_antenna) {
     active_antenna = 0;
+    constexpr size_t RADIO_IDX = 0;  // or choose based on runtime
     for (int i = 0; i < config.num_bands; i++) {
-        if (current_freq >= config.bands[i].start_freq &&
-            current_freq <= config.bands[i].end_freq) {
+        const auto &band = config.bands[RADIO_IDX][i];
+        if (current_freq >= band.start_freq && current_freq <= band.end_freq) {
             // Find first enabled antenna port for this band
             for (int j = 0; j < config.num_antenna_ports; j++) {
-                if (config.bands[i].antenna_ports[j]) {
+                if (band.antenna_ports[j]) {
                     // Convert to 1-based index (this is because antenna port selection starts at 1)
                     active_antenna = j + 1;
                     break;
@@ -165,12 +166,13 @@ static esp_err_t status_get_handler(httpd_req_t *req) {
     std::vector<int> available_antennas;
     
     // Find the current band
+    constexpr size_t RADIO_IDX = 0;
     for (int i = 0; i < config.num_bands; i++) {
-        if (current_freq >= config.bands[i].start_freq &&
-            current_freq <= config.bands[i].end_freq) {
+        const auto &band = config.bands[RADIO_IDX][i];
+        if (current_freq >= band.start_freq && current_freq <= band.end_freq) {
             // Check all enabled antenna ports for this band
             for (int j = 0; j < config.num_antenna_ports; j++) {
-                if (config.bands[i].antenna_ports[j]) {
+                if (band.antenna_ports[j]) {
                     // Convert to 1-based index
                     available_antennas.push_back(j + 1);
                 }
@@ -278,6 +280,38 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
 
     const cJSON *allow_concurrent_data_sources= cJSON_GetObjectItem(root, "allow_concurrent_data_sources");
     new_config.allow_concurrent_data_sources = cJSON_IsTrue(allow_concurrent_data_sources);
+
+    // Parse radio_operation_mode
+    const cJSON *radio_op_mode_json = cJSON_GetObjectItem(root, "radio_operation_mode");
+    if (cJSON_IsString(radio_op_mode_json) && radio_op_mode_json->valuestring != nullptr) {
+        if (strcmp(radio_op_mode_json->valuestring, "SINGLE_A") == 0) {
+            new_config.radio_operation_mode = RADIO_OP_MODE_SINGLE_A;
+        } else if (strcmp(radio_op_mode_json->valuestring, "ALTERNATING_AB") == 0) {
+            new_config.radio_operation_mode = RADIO_OP_MODE_ALTERNATING_AB;
+        } else if (strcmp(radio_op_mode_json->valuestring, "CONCURRENT_AB") == 0) {
+            new_config.radio_operation_mode = RADIO_OP_MODE_CONCURRENT_AB;
+        } else {
+            ESP_LOGW(TAG, "Invalid radio_operation_mode string: %s. Defaulting to SINGLE_A.", radio_op_mode_json->valuestring);
+            new_config.radio_operation_mode = RADIO_OP_MODE_SINGLE_A; 
+        }
+    } else {
+        ESP_LOGW(TAG, "radio_operation_mode not found or not a string. Defaulting to SINGLE_A.");
+        new_config.radio_operation_mode = RADIO_OP_MODE_SINGLE_A; 
+    }
+
+    // Parse interlock_auto_resolves_conflict
+    const cJSON* interlock_json = cJSON_GetObjectItem(root, "interlock_auto_resolves_conflict");
+    new_config.interlock_auto_resolves_conflict = cJSON_IsTrue(interlock_json);
+
+
+    // Parse (old) radio parameter - this seems to be for selecting which radio's bands to configure, not directly related to the mode.
+    // Keeping it for now as its removal was not requested.
+    const cJSON *radio = cJSON_GetObjectItem(root, "radio");
+    if (cJSON_IsString(radio) && radio->valuestring) {
+        // Store or use the radio value as needed
+        ESP_LOGI(TAG, "Received radio parameter: %s", radio->valuestring);
+        // Example: new_config.radio = (radio->valuestring[0] == 'B') ? 1 : 0;
+    }
 
     // Parse UART configuration
     // Log the raw JSON content for debugging
@@ -459,18 +493,20 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
         const int num_bands1 = cJSON_GetArraySize(bands);
         new_config.num_bands = num_bands1;
 
+        constexpr size_t RADIO_IDX = 0;
         for (int i = 0; i < num_bands1 && i < MAX_BANDS; i++) {
             if (cJSON const *band = cJSON_GetArrayItem(bands, i); cJSON_IsObject(band)) {
+                auto &dst = new_config.bands[RADIO_IDX][i];
                 if (const cJSON *description = cJSON_GetObjectItem(band, "description"); cJSON_IsString(description)) {
                     if (auto it = band_info.find(description->valuestring); it != band_info.end()) {
-                        strncpy(new_config.bands[i].description, it->second.name,
-                               sizeof(new_config.bands[i].description) - 1);
-                        new_config.bands[i].start_freq = it->second.start_freq;
-                        new_config.bands[i].end_freq = it->second.end_freq;
+                        strncpy(dst.description, it->second.name,
+                                sizeof(dst.description) - 1);
+                        dst.start_freq = it->second.start_freq;
+                        dst.end_freq   = it->second.end_freq;
                         ESP_LOGV(TAG, "Setting band %d: %s (%lu-%lu Hz)", i,
-                                new_config.bands[i].description,
-                                new_config.bands[i].start_freq,
-                                new_config.bands[i].end_freq);
+                                dst.description,
+                                dst.start_freq,
+                                dst.end_freq);
                     } else {
                         ESP_LOGW(TAG, "Unknown band description: %s", description->valuestring);
                     }
@@ -478,11 +514,10 @@ static esp_err_t config_post_handler(httpd_req_t *req) {
                     ESP_LOGW(TAG, "Missing or invalid band description for band %d", i);
                 }
 
-                if (const cJSON *antenna_ports = cJSON_GetObjectItem(band, "antenna_ports"); cJSON_IsArray(antenna_ports)) {
-                    const int num_ports = cJSON_GetArraySize(antenna_ports);
+                if (const cJSON *ports = cJSON_GetObjectItem(band, "antenna_ports"); cJSON_IsArray(ports)) {
+                    const int num_ports = cJSON_GetArraySize(ports);
                     for (int j = 0; j < num_ports && j < MAX_ANTENNA_PORTS; j++) {
-                        const cJSON *port = cJSON_GetArrayItem(antenna_ports, j);
-                        new_config.bands[i].antenna_ports[j] = cJSON_IsTrue(port);
+                        dst.antenna_ports[j] = cJSON_IsTrue(cJSON_GetArrayItem(ports, j));
                     }
                 }
             }
@@ -541,25 +576,41 @@ static esp_err_t toggle_auto_mode_handler(httpd_req_t *req) {
 
 static esp_err_t reset_config_handler(httpd_req_t *req) {
     constexpr antenna_switch_config_t default_config = {
-        .auto_mode = true,
-        .num_bands = 10,
-        .num_antenna_ports = 1,
-        .bands = {
-            {.description = "160m", .start_freq = 1800000, .end_freq = 2000000, .antenna_ports = {true}},
-            {.description = "80m", .start_freq = 3500000, .end_freq = 4000000, .antenna_ports = {true}},
-            {.description = "40m", .start_freq = 7000000, .end_freq = 7300000, .antenna_ports = {true}},
-            {.description = "30m", .start_freq = 10100000, .end_freq = 10150000, .antenna_ports = {true}},
-            {.description = "20m", .start_freq = 14000000, .end_freq = 14350000, .antenna_ports = {true}},
-            {.description = "17m", .start_freq = 18068000, .end_freq = 18168000, .antenna_ports = {true}},
-            {.description = "15m", .start_freq = 21000000, .end_freq = 21450000, .antenna_ports = {true}},
-            {.description = "12m", .start_freq = 24890000, .end_freq = 24990000, .antenna_ports = {true}},
-            {.description = "10m", .start_freq = 28000000, .end_freq = 29700000, .antenna_ports = {true}},
-            {.description = "6m", .start_freq = 50000000, .end_freq = 54000000, .antenna_ports = {true}},
+        true,
+        10,
+        1,
+        {
+            {
+                {"160m", 1800000, 2000000, {true}},
+                {"80m", 3500000, 4000000, {true}},
+                {"40m", 7000000, 7300000, {true}},
+                {"30m", 10100000, 10150000, {true}},
+                {"20m", 14000000, 14350000, {true}},
+                {"17m", 18068000, 18168000, {true}},
+                {"15m", 21000000, 21450000, {true}},
+                {"12m", 24890000, 24990000, {true}},
+                {"10m", 28000000, 29700000, {true}},
+                {"6m", 50000000, 54000000, {true}}
+            },
+            {}  // Radio B defaults
         },
-        .uart_baud_rate = 9600,
-        .uart_parity = UART_PARITY_DISABLE,
-        .uart_stop_bits = 1,
-        .uart_flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        9600,
+        UART_PARITY_DISABLE, // uart_parity
+        1, // uart_stop_bits
+        UART_HW_FLOWCTRL_DISABLE, // uart_flow_ctrl
+        17, // uart_tx_pin (example, ensure this is a valid default for your hardware)
+        16, // uart_rx_pin (example, ensure this is a valid default for your hardware)
+        false, // mqtt_enabled
+        true, // interlock_auto_resolves_conflict (default to true for safety if concurrent mode is chosen later)
+        false, // allow_concurrent_data_sources
+        "broker.example.com", // mqtt_broker
+        1883, // mqtt_port
+        "RIG1", // mqtt_rig_id
+        "", // mqtt_username
+        "", // mqtt_password
+        "esp32-antenna-switch", // mqtt_client_id
+        "omnirig/radio_info", // mqtt_topic
+        RADIO_OP_MODE_SINGLE_A // radio_operation_mode (default to Radio A only)
     };
 
     if (const esp_err_t ret = antenna_switch_set_config(&default_config); ret != ESP_OK) {
@@ -655,27 +706,10 @@ static esp_err_t relay_control_handler(httpd_req_t *req) {
     const int relay_num = relay->valueint;
     const bool relay_state = cJSON_IsTrue(state);
 
-    // If turning on a relay, first turn off all other relays
-    if (relay_state) {
-        // Get current states
-        uint16_t current_states = RelayController::instance().get_relay_states();
-        
-        // Turn off all relays except the one we're setting
-        for (int i = 1; i <= 16; i++) {
-            if (i != relay_num && ((current_states >> (i-1)) & 1) == 0) {  // Check if relay is on (active low)
-                if (const esp_err_t err = RelayController::instance().set_relay(i, false); err != ESP_OK) {
-                    ESP_LOGW(TAG, "Failed to turn off relay %d: %s", i, esp_err_to_name(err));
-                }
-                // Add a small delay between operations
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
-        }
-    }
-
-    ESP_LOGD(TAG, "Setting relay %d to state %d", relay_num, relay_state);
-
-    // Now set the requested relay state
-    if (const esp_err_t err = RelayController::instance().set_relay(relay_num, relay_state); err != ESP_OK) {
+    // apply policy & set the relay in one shot
+    ESP_LOGD(TAG, "Calling antenna_switch_set_relay(%d, %d)", relay_num, relay_state);
+    esp_err_t err = antenna_switch_set_relay(relay_num, relay_state);
+    if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set relay: %s", esp_err_to_name(err));
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to set relay");
