@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include <cstring>
 #include <sys/param.h>
 
@@ -33,8 +34,8 @@ esp_err_t ConfigManager::init() const {
     // Try to load from NVS
     esp_err_t ret = load_from_nvs();
 
-    // If no config exists, create default
-    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+    // If no config exists _or_ the blob is the wrong size, create default
+    if (ret == ESP_ERR_NVS_NOT_FOUND || ret == ESP_ERR_NVS_INVALID_LENGTH) {
         ESP_LOGW(TAG, "No configuration found in NVS, using defaults");
 
         // Set default configuration
@@ -63,8 +64,30 @@ esp_err_t ConfigManager::init() const {
         strncpy(current_config_->mqtt_password, "mqtt", sizeof(current_config_->mqtt_password));
         strncpy(current_config_->mqtt_topic, "omnirig/frequent/radio_info", sizeof(current_config_->mqtt_topic));
         
-        // Default for radio B toggle
-        current_config_->enable_radio_b = false;  // Disabled by default
+        // Default for radio operation mode and interlock
+        current_config_->radio_operation_mode = RADIO_OP_MODE_SINGLE_A; // Default to Radio A only
+        current_config_->interlock_auto_resolves_conflict = true; // Default to true for safety if concurrent mode is chosen
+
+        // Set default bands for both radios
+        const char* default_band_names[10] = {
+            "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
+        };
+        uint32_t default_start[10] = {
+            1800000, 3500000, 7000000, 10100000, 14000000, 18068000, 21000000, 24890000, 28000000, 50000000
+        };
+        uint32_t default_end[10] = {
+            2000000, 4000000, 7300000, 10150000, 14350000, 18168000, 21450000, 24990000, 29700000, 54000000
+        };
+        for (int r = 0; r < 2; ++r) {
+            for (int i = 0; i < 10; ++i) {
+                strncpy(current_config_->bands[r][i].description, default_band_names[i], sizeof(current_config_->bands[r][i].description));
+                current_config_->bands[r][i].start_freq = default_start[i];
+                current_config_->bands[r][i].end_freq = default_end[i];
+                for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
+                    current_config_->bands[r][i].antenna_ports[j] = (j == 0); // Only first port enabled by default
+                }
+            }
+        }
 
         // Save default configuration
         ret = save_to_nvs();
@@ -119,11 +142,32 @@ esp_err_t ConfigManager::save_to_nvs() const {
         return ret;
     }
 
-    ret = nvs_set_blob(nvs_handle, "config", current_config_, sizeof(antenna_switch_config_t));
+    // Save all config except bands
+    ret = nvs_set_blob(nvs_handle, "config", current_config_, sizeof(antenna_switch_config_t) - sizeof(current_config_->bands));
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Error saving configuration to NVS: %s", esp_err_to_name(ret));
         nvs_close(nvs_handle);
         return ret;
+    }
+
+    // Save per-radio band-tables
+    for (int r = 0; r < 2; ++r) {
+        for (int i = 0; i < current_config_->num_bands; ++i) {
+            char key[40];
+            snprintf(key, sizeof(key), "band_r%d_%d_desc", r, i);
+            nvs_set_str(nvs_handle, key, current_config_->bands[r][i].description);
+
+            snprintf(key, sizeof(key), "band_r%d_%d_start", r, i);
+            nvs_set_u32(nvs_handle, key, current_config_->bands[r][i].start_freq);
+
+            snprintf(key, sizeof(key), "band_r%d_%d_end", r, i);
+            nvs_set_u32(nvs_handle, key, current_config_->bands[r][i].end_freq);
+
+            for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
+                snprintf(key, sizeof(key), "band_r%d_%d_port%d", r, i, j);
+                nvs_set_u8(nvs_handle, key, current_config_->bands[r][i].antenna_ports[j] ? 1 : 0);
+            }
+        }
     }
 
     ret = nvs_commit(nvs_handle);
@@ -143,11 +187,39 @@ esp_err_t ConfigManager::load_from_nvs() const {
         return ret;
     }
 
-    size_t required_size = sizeof(antenna_switch_config_t);
+    // Load all config except bands
+    size_t required_size = sizeof(antenna_switch_config_t) - sizeof(current_config_->bands);
     ret = nvs_get_blob(nvs_handle, "config", current_config_, &required_size);
+    if (ret != ESP_OK) {
+        nvs_close(nvs_handle);
+        return ret;
+    }
+
+    // Load per-radio band-tables
+    for (int r = 0; r < 2; ++r) {
+        for (int i = 0; i < current_config_->num_bands; ++i) {
+            char key[40];
+            size_t len = sizeof(current_config_->bands[r][i].description);
+            snprintf(key, sizeof(key), "band_r%d_%d_desc", r, i);
+            nvs_get_str(nvs_handle, key, current_config_->bands[r][i].description, &len);
+
+            snprintf(key, sizeof(key), "band_r%d_%d_start", r, i);
+            nvs_get_u32(nvs_handle, key, &current_config_->bands[r][i].start_freq);
+
+            snprintf(key, sizeof(key), "band_r%d_%d_end", r, i);
+            nvs_get_u32(nvs_handle, key, &current_config_->bands[r][i].end_freq);
+
+            for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
+                snprintf(key, sizeof(key), "band_r%d_%d_port%d", r, i, j);
+                uint8_t val = 0;
+                nvs_get_u8(nvs_handle, key, &val);
+                current_config_->bands[r][i].antenna_ports[j] = (val != 0);
+            }
+        }
+    }
 
     nvs_close(nvs_handle);
-    return ret;
+    return ESP_OK;
 }
 
 void ConfigManager::add_observer(const std::function<void(const antenna_switch_config_t &)> &observer) {
