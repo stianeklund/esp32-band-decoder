@@ -68,6 +68,13 @@ esp_err_t ConfigManager::init() const {
         current_config_->radio_operation_mode = RADIO_OP_MODE_SINGLE_A; // Default to Radio A only
         current_config_->interlock_auto_resolves_conflict = true; // Default to true for safety if concurrent mode is chosen
 
+        // Initialize last_used_antenna
+        for (int r = 0; r < 2; ++r) {
+            for (int i = 0; i < MAX_BANDS; ++i) {
+                current_config_->last_used_antenna[r][i] = 0; // 0 means no preference
+            }
+        }
+
         // Set default bands for both radios
         const char* default_band_names[10] = {
             "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
@@ -172,7 +179,48 @@ esp_err_t ConfigManager::save_to_nvs() const {
 
     ret = nvs_commit(nvs_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Error committing NVS changes: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error committing NVS changes for bands: %s", esp_err_to_name(ret));
+        // Continue to save other fields even if band commit fails for some reason,
+        // but preserve the error.
+    }
+
+    // Save radio_operation_mode and interlock_auto_resolves_conflict
+    esp_err_t radio_op_mode_err = nvs_set_u8(nvs_handle, "radio_op_mode", static_cast<uint8_t>(current_config_->radio_operation_mode));
+    if (radio_op_mode_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error saving radio_operation_mode: %s", esp_err_to_name(radio_op_mode_err));
+        if (ret == ESP_OK) ret = radio_op_mode_err; // Preserve first error
+    }
+
+    esp_err_t interlock_err = nvs_set_u8(nvs_handle, "interlock_auto", static_cast<uint8_t>(current_config_->interlock_auto_resolves_conflict));
+    if (interlock_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error saving interlock_auto_resolves_conflict: %s", esp_err_to_name(interlock_err));
+        if (ret == ESP_OK) ret = interlock_err; // Preserve first error
+    }
+    
+    // Final commit for the newly added fields
+    esp_err_t final_commit_err = nvs_commit(nvs_handle);
+    if (final_commit_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error committing NVS changes for radio/interlock: %s", esp_err_to_name(final_commit_err));
+        if (ret == ESP_OK) ret = final_commit_err; // Preserve first error
+    }
+
+    // Save last_used_antenna for each radio and band
+    for (int r_idx = 0; r_idx < 2; ++r_idx) {
+        for (int b_idx = 0; b_idx < MAX_BANDS; ++b_idx) {
+            char key[20];
+            snprintf(key, sizeof(key), "lua_r%d_b%d", r_idx, b_idx);
+            esp_err_t lua_err = nvs_set_u8(nvs_handle, key, current_config_->last_used_antenna[r_idx][b_idx]);
+            if (lua_err != ESP_OK) {
+                ESP_LOGE(TAG, "Error saving %s: %s", key, esp_err_to_name(lua_err));
+                if (ret == ESP_OK) ret = lua_err; // Preserve first error
+            }
+        }
+    }
+    
+    esp_err_t lua_commit_err = nvs_commit(nvs_handle);
+    if (lua_commit_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error committing NVS changes for last_used_antenna: %s", esp_err_to_name(lua_commit_err));
+        if (ret == ESP_OK) ret = lua_commit_err; // Preserve first error
     }
 
     nvs_close(nvs_handle);
@@ -197,23 +245,80 @@ esp_err_t ConfigManager::load_from_nvs() const {
 
     // Load per-radio band-tables
     for (int r = 0; r < 2; ++r) {
-        for (int i = 0; i < current_config_->num_bands; ++i) {
-            char key[40];
-            size_t len = sizeof(current_config_->bands[r][i].description);
-            snprintf(key, sizeof(key), "band_r%d_%d_desc", r, i);
-            nvs_get_str(nvs_handle, key, current_config_->bands[r][i].description, &len);
+        // Ensure num_bands is valid before using it in loop
+        if (current_config_->num_bands > 0 && current_config_->num_bands <= MAX_BANDS) {
+            for (int i = 0; i < current_config_->num_bands; ++i) {
+                char key[40];
+                size_t len = sizeof(current_config_->bands[r][i].description);
+                snprintf(key, sizeof(key), "band_r%d_%d_desc", r, i);
+                // ESP_LOGD(TAG, "Loading NVS key: %s", key);
+                esp_err_t band_err = nvs_get_str(nvs_handle, key, current_config_->bands[r][i].description, &len);
+                if (band_err == ESP_ERR_NVS_NOT_FOUND) {
+                    // ESP_LOGW(TAG, "Band description not found for radio %d, band %d. Using default.", r, i);
+                    // Default already set by init or blob load, or could set specific default here
+                }
 
-            snprintf(key, sizeof(key), "band_r%d_%d_start", r, i);
-            nvs_get_u32(nvs_handle, key, &current_config_->bands[r][i].start_freq);
 
-            snprintf(key, sizeof(key), "band_r%d_%d_end", r, i);
-            nvs_get_u32(nvs_handle, key, &current_config_->bands[r][i].end_freq);
+                snprintf(key, sizeof(key), "band_r%d_%d_start", r, i);
+                nvs_get_u32(nvs_handle, key, &current_config_->bands[r][i].start_freq);
 
-            for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
-                snprintf(key, sizeof(key), "band_r%d_%d_port%d", r, i, j);
-                uint8_t val = 0;
-                nvs_get_u8(nvs_handle, key, &val);
-                current_config_->bands[r][i].antenna_ports[j] = (val != 0);
+                snprintf(key, sizeof(key), "band_r%d_%d_end", r, i);
+                nvs_get_u32(nvs_handle, key, &current_config_->bands[r][i].end_freq);
+
+                for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
+                    snprintf(key, sizeof(key), "band_r%d_%d_port%d", r, i, j);
+                    uint8_t val = 0; // Default to false if not found
+                    nvs_get_u8(nvs_handle, key, &val);
+                    current_config_->bands[r][i].antenna_ports[j] = (val != 0);
+                }
+            }
+        } else {
+            ESP_LOGW(TAG, "Invalid num_bands (%d) found in loaded config, skipping band data load.", current_config_->num_bands);
+            // Potentially reset num_bands to a safe default if it's out of whack
+            // current_config_->num_bands = 10; // Or some other default
+        }
+    }
+
+    // Load radio_operation_mode
+    uint8_t radio_op_mode_val;
+    esp_err_t err_rom = nvs_get_u8(nvs_handle, "radio_op_mode", &radio_op_mode_val);
+    if (err_rom == ESP_OK) {
+        current_config_->radio_operation_mode = static_cast<radio_operation_mode_t>(radio_op_mode_val);
+    } else if (err_rom == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "radio_operation_mode not found in NVS, using default (SINGLE_A).");
+        current_config_->radio_operation_mode = RADIO_OP_MODE_SINGLE_A;
+    } else {
+        ESP_LOGE(TAG, "Error loading radio_operation_mode: %s", esp_err_to_name(err_rom));
+        // Keep existing value or default if error
+    }
+
+    // Load interlock_auto_resolves_conflict
+    uint8_t interlock_val;
+    esp_err_t err_ia = nvs_get_u8(nvs_handle, "interlock_auto", &interlock_val);
+    if (err_ia == ESP_OK) {
+        current_config_->interlock_auto_resolves_conflict = static_cast<bool>(interlock_val);
+    } else if (err_ia == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "interlock_auto_resolves_conflict not found in NVS, using default (true).");
+        current_config_->interlock_auto_resolves_conflict = true;
+    } else {
+        ESP_LOGE(TAG, "Error loading interlock_auto_resolves_conflict: %s", esp_err_to_name(err_ia));
+        // Keep existing value or default if error
+    }
+
+    // Load last_used_antenna for each radio and band
+    for (int r_idx = 0; r_idx < 2; ++r_idx) {
+        for (int b_idx = 0; b_idx < MAX_BANDS; ++b_idx) {
+            char key[20];
+            snprintf(key, sizeof(key), "lua_r%d_b%d", r_idx, b_idx);
+            uint8_t val = 0; // Default to 0 (no preference)
+            esp_err_t lua_err = nvs_get_u8(nvs_handle, key, &val);
+            if (lua_err == ESP_OK) {
+                current_config_->last_used_antenna[r_idx][b_idx] = val;
+            } else if (lua_err == ESP_ERR_NVS_NOT_FOUND) {
+                current_config_->last_used_antenna[r_idx][b_idx] = 0; // Explicitly set default
+            } else {
+                ESP_LOGE(TAG, "Error loading %s: %s. Defaulting to 0.", key, esp_err_to_name(lua_err));
+                current_config_->last_used_antenna[r_idx][b_idx] = 0; // Default on error
             }
         }
     }

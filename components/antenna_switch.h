@@ -54,6 +54,7 @@ typedef struct {
     char mqtt_client_id[32];
     char mqtt_topic[64];
     radio_operation_mode_t radio_operation_mode;
+    uint8_t last_used_antenna[2][MAX_BANDS]; // Stores 1-based relay_id for Radio A/B per band, 0 for none
 } antenna_switch_config_t;
 
 // Enum to identify Radio A or Radio B

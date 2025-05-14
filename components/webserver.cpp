@@ -679,7 +679,8 @@ static esp_err_t reset_config_handler(httpd_req_t *req) {
         "", // mqtt_password
         "esp32-antenna-switch", // mqtt_client_id
         "omnirig/radio_info", // mqtt_topic
-        RADIO_OP_MODE_SINGLE_A // radio_operation_mode (default to Radio A only)
+        RADIO_OP_MODE_SINGLE_A, // radio_operation_mode (default to Radio A only)
+        { {0} } // last_used_antenna[2][MAX_BANDS] initialized to all zeros
     };
 
     if (const esp_err_t ret = antenna_switch_set_config(&default_config); ret != ESP_OK) {
