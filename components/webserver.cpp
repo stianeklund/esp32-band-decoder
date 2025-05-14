@@ -110,44 +110,24 @@ static esp_err_t config_get_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    const std::string resp_str = generate_config_html(config);
-    if (resp_str.empty()) {
-        ESP_LOGE(TAG, "Failed to generate HTML");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to generate HTML");
+    // The HTML will be sent in chunks by generate_config_html_chunked
+    // The call to the old generate_config_html and its empty check are removed.
+    httpd_resp_set_type(req, "text/html");
+    esp_err_t gen_err = generate_config_html_chunked(req, config);
+
+    if (gen_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to generate or send config HTML: %s", esp_err_to_name(gen_err));
+        // If headers haven't been sent, an error response might be possible,
+        // but httpd_resp_send_chunk might have already started sending.
+        // For now, just return the error. The connection might be closed abruptly.
         return ESP_FAIL;
     }
 
-    ESP_LOGD(TAG, "HTML generated successfully, length: %d", resp_str.length());
-
-    ESP_LOGD(TAG, "Sending response");
-    if (const esp_err_t send_ret = httpd_resp_send(req, resp_str.c_str(), resp_str.length()); send_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to send response: %s", esp_err_to_name(send_ret));
-        return ESP_FAIL;
-    }
-
-    ESP_LOGV(TAG, "Response sent successfully");
+    ESP_LOGD(TAG, "Config HTML sent successfully in chunks");
     return ESP_OK;
 }
 
-static int find_active_port(const uint32_t current_freq, const antenna_switch_config_t &config, int &active_antenna) {
-    active_antenna = 0;
-    constexpr size_t RADIO_IDX = 0;  // or choose based on runtime
-    for (int i = 0; i < config.num_bands; i++) {
-        const auto &band = config.bands[RADIO_IDX][i];
-        if (current_freq >= band.start_freq && current_freq <= band.end_freq) {
-            // Find first enabled antenna port for this band
-            for (int j = 0; j < config.num_antenna_ports; j++) {
-                if (band.antenna_ports[j]) {
-                    // Convert to 1-based index (this is because antenna port selection starts at 1)
-                    active_antenna = j + 1;
-                    break;
-                }
-            }
-            break;
-        }
-    }
-    return active_antenna;
-}
+// Removed unused function find_active_port
 
 static esp_err_t status_get_handler(httpd_req_t *req) {
     // Get current frequency from CAT parser

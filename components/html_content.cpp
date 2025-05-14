@@ -18,17 +18,29 @@ const char *HTML_HEADER = R"(
         :root[data-theme="light"] {
             --primary-color: #3498db;
             --secondary-color: #2c3e50;
-            --background-color: #ecf0f1;
+            --page-background-color: #ecf0f1;
             --text-color: #34495e;
-            --border-color: #bdc3c7;
+            --border-color: #bdc3c7; /* General borders, e.g., table cell lines */
+            --card-background-color: #ffffff;
+            --input-background-color: #ffffff;
+            --input-border-color: #bdc3c7;
+            --button-default-bg-color: #e0e0e0;
+            --button-default-border-color: #dddddd;
+            --th-text-color: #ffffff;
         }
         
         :root[data-theme="dark"] {
             --primary-color: #4a9eff;
             --secondary-color: #a8c7fa;
-            --background-color: #121212;
+            --page-background-color: #121212;
             --text-color: #e0e0e0;
-            --border-color: #2d2d2d;
+            --border-color: #2d2d2d; /* General borders, e.g., table cell lines */
+            --card-background-color: #1e1e1e;
+            --input-background-color: #2d2d2d;
+            --input-border-color: #404040;
+            --button-default-bg-color: #2d2d2d;
+            --button-default-border-color: #404040;
+            --th-text-color: #ffffff;
         }
         
         :root {
@@ -42,7 +54,7 @@ const char *HTML_HEADER = R"(
             max-width: 1200px;
             margin: 0 auto;
             padding: 15px;
-            background-color: var(--background-color);
+            background-color: var(--page-background-color);
         }
 
         h1, h2 {
@@ -60,7 +72,7 @@ const char *HTML_HEADER = R"(
         }
 
         .status-box {
-            background-color: white;
+            background-color: var(--card-background-color);
             border-radius: 10px;
             padding: 15px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -91,7 +103,7 @@ const char *HTML_HEADER = R"(
 
         th {
             font-weight: bold;
-            color: white;
+            color: var(--th-text-color);
             background-color: var(--primary-color);
         }
 
@@ -108,9 +120,9 @@ const char *HTML_HEADER = R"(
 
         .relay-button {
             padding: 12px 8px;
-            border: 1px solid #ddd;
+            border: 1px solid var(--button-default-border-color);
             border-radius: 8px;
-            background-color: #e0e0e0;  /* Default state - OFF */
+            background-color: var(--button-default-bg-color);  /* Default state - OFF */
             color: var(--text-color);
             cursor: pointer;
             transition: all 0.3s ease;
@@ -183,7 +195,7 @@ const char *HTML_HEADER = R"(
 
         /* Form responsiveness */
         .config-form {
-            background-color: white;
+            background-color: var(--card-background-color);
             padding: 15px;
             border-radius: 10px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -207,7 +219,9 @@ const char *HTML_HEADER = R"(
             padding: 10px;
             margin: 5px 0;
             display: inline-block;
-            border: 1px solid var(--border-color);
+            background-color: var(--input-background-color);
+            color: var(--text-color);
+            border: 1px solid var(--input-border-color);
             border-radius: 4px;
             box-sizing: border-box;
             transition: border-color 0.3s ease;
@@ -231,7 +245,7 @@ const char *HTML_HEADER = R"(
         }
 
         .relay-group {
-            background-color: #f5f6fa;
+            background-color: var(--card-background-color);
             border-radius: 8px;
             padding: 15px;
         }
@@ -243,7 +257,7 @@ const char *HTML_HEADER = R"(
         }
 
         .auto-mode-container {
-            background-color: white;
+            background-color: var(--card-background-color);
             border-radius: 10px;
             padding: 20px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
@@ -293,23 +307,30 @@ const char *HTML_HEADER = R"(
 
         /* Configuration page specific */
         .config-form {
-            background-color: var(--background-color);
+            background-color: var(--card-background-color);
             color: var(--text-color);
-            border: 1px solid var(--border-color);
+            border: 1px solid var(--input-border-color);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
 
         .config-form table {
-            background-color: var(--background-color);
+            background-color: var(--card-background-color);
             color: var(--text-color);
-            border: 1px solid var(--border-color);
+            border: 1px solid var(--input-border-color);
+            margin: 20px 0;
+            width: 100%;
+            border-radius: 8px;
         }
 
         .config-form input[type="text"],
         .config-form input[type="number"],
         .config-form select {
-            background-color: var(--background-color);
+            background-color: var(--input-background-color);
             color: var(--text-color);
-            border: 1px solid var(--border-color);
+            border: 1px solid var(--input-border-color);
         }
 
         .config-form input[type="checkbox"] {
@@ -365,37 +386,37 @@ const char *HTML_HEADER = R"(
 
         /* Dark mode styles */
         [data-theme="dark"] body {
-            background-color: var(--background-color);
+            background-color: var(--page-background-color);
         }
 
         [data-theme="dark"] .status-box,
         [data-theme="dark"] .relay-group,
         [data-theme="dark"] .auto-mode-container {
-            background-color: #1e1e1e;
+            background-color: var(--card-background-color);
         }
 
         [data-theme="dark"] .config-form {
-            background-color: #1e1e1e;
-            border-color: #404040;
+            background-color: var(--card-background-color);
+            border-color: var(--input-border-color);
         }
 
         [data-theme="dark"] .config-form table {
-            background-color: #1e1e1e;
-            border-color: #404040;
+            background-color: var(--card-background-color);
+            border-color: var(--input-border-color);
         }
 
         [data-theme="dark"] input[type="text"],
         [data-theme="dark"] input[type="number"],
         [data-theme="dark"] select {
-            background-color: #2d2d2d;
+            background-color: var(--input-background-color);
             color: var(--text-color);
-            border-color: var(--border-color);
+            border-color: var(--input-border-color);
         }
 
         [data-theme="dark"] .relay-button {
-            background-color: #2d2d2d;
+            background-color: var(--button-default-bg-color);
             color: var(--text-color);
-            border-color: #404040;
+            border-color: var(--button-default-border-color);
         }
 
         [data-theme="dark"] .relay-button.active {
@@ -476,7 +497,6 @@ std::string generate_root_html(const antenna_switch_config_t &config, const char
     ss << "<h2>Current Status (Radio A)</h2>"; // Clarify this is for Radio A
     ss << "<table>";
     ss << "<tr><th>Frequency</th><td id='current-frequency'>Updating...</td></tr>";
-    // Corrected line: removed the extra </div> from here
     ss << "<tr><th>Port</th><td><span id='active-antenna'>Updating...</span></td></tr>";
     ss << "</table>";
     ss << "</div>"; // End of Radio A status-box
@@ -512,6 +532,8 @@ std::string generate_root_html(const antenna_switch_config_t &config, const char
             <div class="relay-group">
                 <h3>Radio A</h3>
                 <div class="relay-grid">)";
+
+// This is only really applicable to the KC868-A16 or any other configuration with two groups of 8 outputs
 
 // First 8 relays (Radio A)
 for (int i = 0; i < 8; i++) {
@@ -758,10 +780,10 @@ ss << R"(
                     });
                     
                     // Add debug logging
-                    console.debug("Status update received:", data);
-                    console.debug("Transmit state:", data.transmitting);
-                    console.debug("Active antenna:", data.antenna);
-                    console.debug("Current frequency:", data.frequency);
+                    // console.debug("Status update received:", data);
+                    // console.debug("Transmit state:", data.transmitting);
+                    // console.debug("Active antenna:", data.antenna);
+                    // console.debug("Current frequency:", data.frequency);
             
                     // Modify button update logic to handle Radio A and B separately
                     document.querySelectorAll('.relay-button').forEach(button => {
@@ -819,246 +841,280 @@ ss << R"(
     return ss.str();
 }
 
-std::string generate_config_html(const antenna_switch_config_t &config) {
-    std::stringstream ss;
+esp_err_t generate_config_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config) {
+    esp_err_t ret = ESP_OK;
+
+    // Helper lambda to send a stringstream's content as a chunk
+    auto send_ss_chunk = [&](std::stringstream& stream) -> esp_err_t {
+        std::string chunk_str = stream.str();
+        stream.str(""); // Clear the stringstream for reuse
+        stream.clear(); // Clear error flags (like eof, fail, bad)
+        if (chunk_str.empty()) return ESP_OK;
+        esp_err_t send_ret = httpd_resp_send_chunk(req, chunk_str.c_str(), chunk_str.length());
+        if (send_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send chunk: %s", esp_err_to_name(send_ret));
+        }
+        return send_ret;
+    };
+
+    // Helper lambda to send a C-string literal as a chunk
+    auto send_cstr_chunk = [&](const char* cstr_chunk) -> esp_err_t {
+        if (cstr_chunk == nullptr || cstr_chunk[0] == '\0') return ESP_OK;
+        esp_err_t send_ret = httpd_resp_send_chunk(req, cstr_chunk, strlen(cstr_chunk));
+         if (send_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send cstr chunk: %s", esp_err_to_name(send_ret));
+        }
+        return send_ret;
+    };
 
     // Check for potential errors before starting to generate HTML
     if (config.num_bands <= 0 || config.num_bands > MAX_BANDS) {
         ESP_LOGE(TAG, "Invalid number of bands: %d (should be between 1 and %d)",
                  config.num_bands, MAX_BANDS);
-        return ""; // Return empty string to indicate error
+        // Cannot easily send an HTTP error if chunking has started.
+        // This check should ideally be done before calling this function or before sending the first chunk.
+        return ESP_ERR_INVALID_ARG;
     }
     if (config.num_antenna_ports <= 0 || config.num_antenna_ports > MAX_ANTENNA_PORTS) {
         ESP_LOGE(TAG, "Invalid number of antenna ports: %d (should be between 1 and %d)",
                  config.num_antenna_ports, MAX_ANTENNA_PORTS);
-        return ""; // Return empty string to indicate error
+        return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGI(TAG, "Generating HTML for config: %d bands, %d antenna ports", config.num_bands, config.num_antenna_ports);
-    ESP_LOGI(TAG, "Debug: num_bands = %d, num_antenna_ports = %d", config.num_bands, config.num_antenna_ports);
+    ESP_LOGD(TAG, "Generating HTML for config: %d bands, %d antenna ports", config.num_bands, config.num_antenna_ports);
+    ESP_LOGD(TAG, "Debug: num_bands = %d, num_antenna_ports = %d", config.num_bands, config.num_antenna_ports);
+    
+    std::stringstream ss_buffer; // Use this for building smaller parts
 
-    ss << HTML_HEADER;
-    ss << "<h1>Relay Configuration</h1>";
-    ss << "<form id='configForm' class='config-form' onsubmit='submitConfig(event)' style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 10px; padding: 20px;'>";
-    ss << "<div class='form-group' style='margin-bottom: 20px;'>";
-    ss << "<label for='num_bands' style='color: var(--text-color);'>Number of bands:</label>";
-    ss << "<input type='number' id='num_bands' name='num_bands' value='" << std::to_string(config.num_bands)
+    ret = send_cstr_chunk(HTML_HEADER);
+    if (ret != ESP_OK) return ret;
+
+    ss_buffer << "<h1>Relay Configuration</h1>";
+    ss_buffer << "<form id='configForm' class='config-form' onsubmit='submitConfig(event)'>";
+    ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
+    ss_buffer << "<label for='num_bands'>Number of bands:</label>";
+    ss_buffer << "<input type='number' id='num_bands' name='num_bands' value='" << std::to_string(config.num_bands)
             << "' min='1' max='" << MAX_BANDS << "' onchange='updateBandRows()'>";
-    ss << "</div>";
-    ss << "<div class='form-group' style='margin-bottom: 20px;'>";
-    ss << "<h2>Switch Configuration</h2>";
-    ss << "<label for='num_antenna_ports' style='color: var(--text-color);'>Number of outputs:</label>";
-    ss << "<input type='number' id='num_antenna_ports' name='num_antenna_ports' value='"
+    ss_buffer << "</div>";
+    ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
+    ss_buffer << "<h2>Switch Configuration</h2>";
+    ss_buffer << "<label for='num_antenna_ports'>Number of outputs:</label>";
+    ss_buffer << "<input type='number' id='num_antenna_ports' name='num_antenna_ports' value='"
             << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "' onchange='updateAntennaPorts()'>";
-    ss << "</div>";
+    ss_buffer << "</div>";
 
     // Radio Operation Mode Dropdown
-    ss << "<div class='form-group'>";
-    ss << "<label for='radio_operation_mode'>Radio Operation Mode:</label>";
-    ss << "<select id='radio_operation_mode' name='radio_operation_mode' onchange='toggleInterlockVisibility()'>";
-    ss << "<option value='SINGLE_A' " << (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A ? "selected" : "") << ">Radio A Only</option>";
-    ss << "<option value='ALTERNATING_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_ALTERNATING_AB ? "selected" : "") << ">Alternating (A or B, one at a time)</option>";
-    ss << "<option value='CONCURRENT_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "selected" : "") << ">Concurrent (A and B, different antennas)</option>";
-    ss << "</select>";
-    ss << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='radio_operation_mode'>Radio Operation Mode:</label>";
+    ss_buffer << "<select id='radio_operation_mode' name='radio_operation_mode' onchange='toggleInterlockVisibility()'>";
+    ss_buffer << "<option value='SINGLE_A' " << (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A ? "selected" : "") << ">Radio A Only</option>";
+    ss_buffer << "<option value='ALTERNATING_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_ALTERNATING_AB ? "selected" : "") << ">Alternating (A or B, one at a time)</option>";
+    ss_buffer << "<option value='CONCURRENT_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "selected" : "") << ">Concurrent (A and B, different antennas)</option>";
+    ss_buffer << "</select>";
+    ss_buffer << "</div>";
 
     // Interlock Option (conditionally visible)
-    ss << "<div class='form-group' id='interlock_options_div' style='display: "
+    ss_buffer << "<div class='form-group' id='interlock_options_div' style='display: "
        << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "block" : "none") << ";'>";
-    ss << "<label><input type='checkbox' name='interlock_auto_resolves_conflict' "
+    ss_buffer << "<label><input type='checkbox' name='interlock_auto_resolves_conflict' "
        << (config.interlock_auto_resolves_conflict ? "checked" : "")
        << "> Automatically resolve same-antenna conflict (for Concurrent mode)</label>";
-    ss << "</div>";
+    ss_buffer << "</div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
 
     // The "Configure Bands for Radio:" dropdown was removed as both Radio A and B 
     // configurations are now displayed and editable simultaneously in the table.
 
-    ss << "<h2>UART Configuration</h2>";
-    ss << "<div class='form-group' style='margin-bottom: 20px;'>";
-    ss << "<label for='uart_baud_rate'>Baud Rate:</label>";
-    ss << "<select id='uart_baud_rate' name='uart_baud_rate'>";
+    ss_buffer << "<h2>UART Configuration</h2>";
+    ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
+    ss_buffer << "<label for='uart_baud_rate'>Baud Rate:</label>";
+    ss_buffer << "<select id='uart_baud_rate' name='uart_baud_rate'>";
     for (const int baud_rates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200}; const int rate: baud_rates) {
-        ss << "<option value='" << rate << "' "
+        ss_buffer << "<option value='" << rate << "' "
                 << (config.uart_baud_rate == rate ? "selected" : "")
                 << ">" << rate << "</option>";
     }
-    ss << "</select></div>";
+    ss_buffer << "</select></div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='uart_parity'>Parity:</label>";
-    ss << "<select id='uart_parity' name='uart_parity'>";
-    ss << "<option value='0' " << (config.uart_parity == 0 ? "selected" : "") << ">None</option>";
-    ss << "<option value='2' " << (config.uart_parity == 2 ? "selected" : "") << ">Even</option>";
-    ss << "<option value='3' " << (config.uart_parity == 3 ? "selected" : "") << ">Odd</option>";
-    ss << "</select></div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_parity'>Parity:</label>";
+    ss_buffer << "<select id='uart_parity' name='uart_parity'>";
+    ss_buffer << "<option value='0' " << (config.uart_parity == 0 ? "selected" : "") << ">None</option>";
+    ss_buffer << "<option value='2' " << (config.uart_parity == 2 ? "selected" : "") << ">Even</option>";
+    ss_buffer << "<option value='3' " << (config.uart_parity == 3 ? "selected" : "") << ">Odd</option>";
+    ss_buffer << "</select></div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='uart_stop_bits'>Stop Bits:</label>";
-    ss << "<select id='uart_stop_bits' name='uart_stop_bits'>";
-    ss << "<option value='1' " << (config.uart_stop_bits == 1 ? "selected" : "") << ">1</option>";
-    ss << "<option value='2' " << (config.uart_stop_bits == 2 ? "selected" : "") << ">1.5</option>";
-    ss << "<option value='3' " << (config.uart_stop_bits == 3 ? "selected" : "") << ">2</option>";
-    ss << "</select></div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_stop_bits'>Stop Bits:</label>";
+    ss_buffer << "<select id='uart_stop_bits' name='uart_stop_bits'>";
+    ss_buffer << "<option value='1' " << (config.uart_stop_bits == 1 ? "selected" : "") << ">1</option>";
+    ss_buffer << "<option value='2' " << (config.uart_stop_bits == 2 ? "selected" : "") << ">1.5</option>";
+    ss_buffer << "<option value='3' " << (config.uart_stop_bits == 3 ? "selected" : "") << ">2</option>";
+    ss_buffer << "</select></div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='uart_flow_ctrl'>Flow Control:</label>";
-    ss << "<select id='uart_flow_ctrl' name='uart_flow_ctrl'>";
-    ss << "<option value='0' " << (config.uart_flow_ctrl == 0 ? "selected" : "") << ">None</option>";
-    ss << "<option value='1' " << (config.uart_flow_ctrl == 1 ? "selected" : "") << ">RTS</option>";
-    ss << "<option value='2' " << (config.uart_flow_ctrl == 2 ? "selected" : "") << ">CTS</option>";
-    ss << "<option value='3' " << (config.uart_flow_ctrl == 3 ? "selected" : "") << ">CTS/RTS</option>";
-    ss << "</select></div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_flow_ctrl'>Flow Control:</label>";
+    ss_buffer << "<select id='uart_flow_ctrl' name='uart_flow_ctrl'>";
+    ss_buffer << "<option value='0' " << (config.uart_flow_ctrl == 0 ? "selected" : "") << ">None</option>";
+    ss_buffer << "<option value='1' " << (config.uart_flow_ctrl == 1 ? "selected" : "") << ">RTS</option>";
+    ss_buffer << "<option value='2' " << (config.uart_flow_ctrl == 2 ? "selected" : "") << ">CTS</option>";
+    ss_buffer << "<option value='3' " << (config.uart_flow_ctrl == 3 ? "selected" : "") << ">CTS/RTS</option>";
+    ss_buffer << "</select></div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='uart_tx_pin'>UART TX Pin:</label>";
-    ss << "<select id='uart_tx_pin' name='uart_tx_pin'>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_tx_pin'>UART TX Pin:</label>";
+    ss_buffer << "<select id='uart_tx_pin' name='uart_tx_pin'>";
     for (int pin = 0; pin <= 39; pin++) {
-        ss << "<option value='" << pin << "' "
+        ss_buffer << "<option value='" << pin << "' "
            << (config.uart_tx_pin == pin ? "selected" : "")
            << ">GPIO" << pin << "</option>";
     }
-    ss << "</select></div>";
+    ss_buffer << "</select></div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='uart_rx_pin'>UART RX Pin:</label>";
-    ss << "<select id='uart_rx_pin' name='uart_rx_pin'>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_rx_pin'>UART RX Pin:</label>";
+    ss_buffer << "<select id='uart_rx_pin' name='uart_rx_pin'>";
     for (int pin = 0; pin <= 39; pin++) {
-        ss << "<option value='" << pin << "' "
+        ss_buffer << "<option value='" << pin << "' "
            << (config.uart_rx_pin == pin ? "selected" : "")
            << ">GPIO" << pin << "</option>";
     }
-    ss << "</select></div>";
+    ss_buffer << "</select></div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
 
-    ss << "<h2>MQTT Configuration</h2>";
-    ss << "<div class='form-group'>";
-    ss << "<label>";
-    ss << "<input type='checkbox' name='mqtt_enabled' " << (config.mqtt_enabled ? "checked" : "") << ">";
-    ss << " Enable MQTT";
-    ss << "</label>";
-    ss << "</div>";
+    ss_buffer << "<h2>MQTT Configuration</h2>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='mqtt_enabled' " << (config.mqtt_enabled ? "checked" : "") << ">";
+    ss_buffer << " Enable MQTT";
+    ss_buffer << "</label>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='mqtt_broker'>MQTT Broker:</label>";
-    ss << "<input type='text' id='mqtt_broker' name='mqtt_broker' value='" << config.mqtt_broker << "'>";
-    ss << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_broker'>MQTT Broker:</label>";
+    ss_buffer << "<input type='text' id='mqtt_broker' name='mqtt_broker' value='" << config.mqtt_broker << "'>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='mqtt_port'>MQTT Port:</label>";
-    ss << "<input type='number' id='mqtt_port' name='mqtt_port' value='" << config.mqtt_port << "'>";
-    ss << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_port'>MQTT Port:</label>";
+    ss_buffer << "<input type='number' id='mqtt_port' name='mqtt_port' value='" << config.mqtt_port << "'>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='mqtt_rig_id'>Rig ID:</label>";
-    ss << "<input type='text' id='mqtt_rig_id' name='mqtt_rig_id' value='" << config.mqtt_rig_id << "'>";
-    ss << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_rig_id'>Rig ID:</label>";
+    ss_buffer << "<input type='text' id='mqtt_rig_id' name='mqtt_rig_id' value='" << config.mqtt_rig_id << "'>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='mqtt_username'>MQTT Username:</label>";
-    ss << "<input type='text' id='mqtt_username' name='mqtt_username' value='" << (config.mqtt_username[0] != '\0' ? config.mqtt_username : "") << "'>";
-    ss << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_username'>MQTT Username:</label>";
+    ss_buffer << "<input type='text' id='mqtt_username' name='mqtt_username' value='" << (config.mqtt_username[0] != '\0' ? config.mqtt_username : "") << "'>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='mqtt_password'>MQTT Password:</label>";
-    ss << "<input type='password' id='mqtt_password' name='mqtt_password' value='" << (config.mqtt_password[0] != '\0' ? config.mqtt_password : "") << "'>";
-    ss << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_password'>MQTT Password:</label>";
+    ss_buffer << "<input type='password' id='mqtt_password' name='mqtt_password' value='" << (config.mqtt_password[0] != '\0' ? config.mqtt_password : "") << "'>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='mqtt_client_id'>MQTT Client ID:</label>";
-    ss << "<input type='text' id='mqtt_client_id' name='mqtt_client_id' value='" << config.mqtt_client_id << "'>";
-    ss << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_client_id'>MQTT Client ID:</label>";
+    ss_buffer << "<input type='text' id='mqtt_client_id' name='mqtt_client_id' value='" << config.mqtt_client_id << "'>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='form-group'>";
-    ss << "<label for='mqtt_topic'>MQTT Topic:</label>";
-    ss << "<input type='text' id='mqtt_topic' name='mqtt_topic' value='" << config.mqtt_topic << "'>";
-    ss << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_topic'>MQTT Topic:</label>";
+    ss_buffer << "<input type='text' id='mqtt_topic' name='mqtt_topic' value='" << config.mqtt_topic << "'>";
+    ss_buffer << "</div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
 
-    ss << "<table style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color); margin: 20px 0;'>";
-    ss << "<thead style='background-color: var(--primary-color); color: white;'>";
-    ss << "<tr>";
-    ss << "<th>Band</th>";
-    ss << "<th>Start Freq</th>";
-    ss << "<th>End Freq</th>";
-    ss << "<th id='antenna_ports_a_header'>Antenna Ports (Radio A)</th>";
-    ss << "<th id='antenna_ports_b_header'>Antenna Ports (Radio B)</th>";
-    ss << "</tr>";
-    ss << "</thead>";
-    ss << "<tbody>";
+    ss_buffer << "<table>";
+    ss_buffer << "<thead style='background-color: var(--primary-color); color: white;'>";
+    ss_buffer << "<tr>";
+    ss_buffer << "<th>Band</th>";
+    ss_buffer << "<th>Start Freq</th>";
+    ss_buffer << "<th>End Freq</th>";
+    ss_buffer << "<th id='antenna_ports_a_header'>Antenna Ports (Radio A)</th>";
+    ss_buffer << "<th id='antenna_ports_b_header'>Antenna Ports (Radio B)</th>";
+    ss_buffer << "</tr>";
+    ss_buffer << "</thead>";
+    ss_buffer << "<tbody>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
 
     for (int i = 0; i < config.num_bands; i++) {
-        ss << "<tr>";
-        ss << "<td><select name='band_" << i << "' onchange='updateFrequencies(this, " << i << ")'>";
+        ss_buffer << "<tr>";
+        ss_buffer << "<td><select name='band_" << i << "' onchange='updateFrequencies(this, " << i << ")'>";
 
         // Find matching band from description
         std::string selected_band;
-        for (const auto &[band_name, band_info]: band_info) {
-            if (strcmp(config.bands[0][i].description, band_info.name) == 0) {
-                selected_band = band_name;
+        for (const auto &[band_name_key, band_val]: band_info) { // Renamed band_info to band_val to avoid conflict
+            if (strcmp(config.bands[0][i].description, band_val.name) == 0) {
+                selected_band = band_name_key;
                 break;
             }
         }
 
         // Generate options with correct selection
-        for (const auto &[band_name, band_info]: band_info) {
-            ss << "<option value='" << band_name << "' "
-               << (band_name == selected_band ? "selected" : "")
-               << ">" << band_info.name << "</option>";
+        for (const auto &[band_name_key, band_val]: band_info) { // Renamed band_info to band_val
+            ss_buffer << "<option value='" << band_name_key << "' "
+               << (band_name_key == selected_band ? "selected" : "")
+               << ">" << band_val.name << "</option>";
         }
 
-        ss << "</select></td>";
-        ss << "<td>" << config.bands[0][i].start_freq << "</td>"; // Frequencies assumed same for Radio A and B for a given band row
-        ss << "<td>" << config.bands[0][i].end_freq << "</td>";
+        ss_buffer << "</select></td>";
+        ss_buffer << "<td>" << config.bands[0][i].start_freq << "</td>"; // Frequencies assumed same for Radio A and B for a given band row
+        ss_buffer << "<td>" << config.bands[0][i].end_freq << "</td>";
         
         // Antenna Ports for Radio A
-        ss << "<td>";
+        ss_buffer << "<td>";
         for (int j = 0; j < config.num_antenna_ports; j++) {
-            ss << "<input type='checkbox' name='ports_a_" << i << "_" << j << "' value='1' "
+            ss_buffer << "<input type='checkbox' name='ports_a_" << i << "_" << j << "' value='1' "
                     << (config.bands[0][i].antenna_ports[j] ? "checked" : "") << ">" << (j + 1) << " ";
         }
-        ss << "</td>";
+        ss_buffer << "</td>";
 
         // Antenna Ports for Radio B
-        ss << "<td class='radio_b_ports_cell'>"; // Added class for easier JS targeting if needed
+        ss_buffer << "<td class='radio_b_ports_cell'>"; // Added class for easier JS targeting if needed
         for (int j = 0; j < config.num_antenna_ports; j++) {
-            // The config.bands[1] array element is part of the antenna_switch_config_t struct
-            // and its address will not be nullptr. The outer loop for 'i' (bands) ensures 
-            // 'i' is less than config.num_bands, and the inner loop for 'j' (ports) ensures 
-            // 'j' is less than config.num_antenna_ports.
-            // Thus, direct access is safe within the defined bounds.
-            // If an old configuration didn't populate bands[1], it would likely be zero-initialized,
-            // making antenna_ports[j] false, which is an acceptable default.
             bool radio_b_port_checked = config.bands[1][i].antenna_ports[j];
-            ss << "<input type='checkbox' name='ports_b_" << i << "_" << j << "' value='1' "
+            ss_buffer << "<input type='checkbox' name='ports_b_" << i << "_" << j << "' value='1' "
                     << (radio_b_port_checked ? "checked" : "") << ">" << (j + 1) << " ";
         }
-        ss << "</td></tr>";
+        ss_buffer << "</td></tr>";
+        ret = send_ss_chunk(ss_buffer); // Send each row as a chunk
+        if (ret != ESP_OK) return ret;
     }
 
-    ss << "</tbody>";
-    ss << "</table>";
+    ss_buffer << "</tbody>";
+    ss_buffer << "</table>";
 
-    ss << "<div class='auto-mode-container' style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color);'>";
-    ss << "<h2 style='color: var(--secondary-color);'>Auto Mode</h2>";
-    ss << "<label>";
-    ss << "<input type='checkbox' name='auto_mode' " << (config.auto_mode ? "checked" : "") << ">";
-    ss << " Enable Automatic band selection";
-    ss << "</label>";
-    ss << "</div>";
+    ss_buffer << "<div class='auto-mode-container'>";
+    ss_buffer << "<h2>Auto Mode</h2>";
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='auto_mode' " << (config.auto_mode ? "checked" : "") << ">";
+    ss_buffer << " Enable Automatic band selection";
+    ss_buffer << "</label>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='auto-mode-container' style='background-color: var(--background-color); color: var(--text-color); border: 1px solid var(--border-color);'>";
-    ss << "<h2 style='color: var(--secondary-color);'>Data Sources</h2>";
-    ss << "<label>";
-    ss << "<input type='checkbox' name='allow_concurrent_data_sources' " << (config.allow_concurrent_data_sources ? "checked" : "") << ">";
-    ss << " Allow concurrent UART and MQTT data sources";
-    ss << "</label>";
-    ss << "</div>";
+    ss_buffer << "<div class='auto-mode-container'>";
+    ss_buffer << "<h2>Data Sources</h2>";
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='allow_concurrent_data_sources' " << (config.allow_concurrent_data_sources ? "checked" : "") << ">";
+    ss_buffer << " Allow concurrent UART and MQTT data sources";
+    ss_buffer << "</label>";
+    ss_buffer << "</div>";
 
-    ss << "<div class='button-container' style='margin: 20px 0;'>";
-    ss << "<input type='submit' value='Update Configuration' class='button' style='background-color: var(--primary-color); color: white;'>";
-    ss << "</div>";
-    ss << "</form>";
+    ss_buffer << "<div class='button-container' style='margin: 20px 0;'>";
+    ss_buffer << "<input type='submit' value='Update Configuration' class='button'>";
+    ss_buffer << "</div>";
+    ss_buffer << "</form>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
 
-    // Add JavaScript for form submission
-    ss << R"(
+    // Send JavaScript in manageable parts.
+    ss_buffer << R"(
     <script>
     // Theme handling
     function setTheme(theme) {
@@ -1090,8 +1146,6 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             interlock_auto_resolves_conflict: formData.get('interlock_auto_resolves_conflict') === 'on',
             num_bands: parseInt(formData.get('num_bands')),
             num_antenna_ports: parseInt(formData.get('num_antenna_ports')),
-            // tcp_host: formData.get('tcp_host'),
-            // tcp_port: parseInt(formData.get('tcp_port')), // tcp_port seems removed from struct/UI
             uart_baud_rate: parseInt(formData.get('uart_baud_rate')) || 9600,
             uart_parity: parseInt(formData.get('uart_parity')) || 0,
             uart_stop_bits: parseInt(formData.get('uart_stop_bits')) || 1,
@@ -1106,7 +1160,6 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             mqtt_password: formData.get('mqtt_password') || '',
             mqtt_client_id: formData.get('mqtt_client_id') || 'core-mosquitto',
             mqtt_topic: formData.get('mqtt_topic') || 'omnirig/frequent/radio_info',
-            // The 'radio' field from the form (A/B selector for band config UI) has been removed.
             bands: []
         };
         
@@ -1118,12 +1171,10 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
                 antenna_ports_b: []
             };
             
-            // Process antenna ports for Radio A
             for (let j = 0; j < config.num_antenna_ports; j++) {
                 band.antenna_ports_a[j] = formData.get(`ports_a_${i}_${j}`) === '1';
             }
 
-            // Process antenna ports for Radio B
             for (let j = 0; j < config.num_antenna_ports; j++) {
                 band.antenna_ports_b[j] = formData.get(`ports_b_${i}_${j}`) === '1';
             }
@@ -1149,18 +1200,24 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             alert('Failed to update configuration');
         }
     }
-    
-    // Create a mapping of band frequencies
+
     const bandFrequencies = {
-)";
+    )"; // End of the first major script R-string, includes start of bandFrequencies
+    ret = send_ss_chunk(ss_buffer); // Send the first part of JS including "const bandFrequencies = {"
+    if (ret != ESP_OK) return ret;
 
 // Add the band frequencies mapping
+// ss_buffer is now empty due to send_ss_chunk
 for (const auto &[fst, snd] : band_info) {
-    ss << "'" << fst << "': {start: " << snd.start_freq 
-       << ", end: " << snd.end_freq << "},\n";
+    // Properties are sent in the next chunk
+    ss_buffer << "    '" << fst << "': {start: " << snd.start_freq 
+               << ", end: " << snd.end_freq << "},\n";
 }
+    ret = send_ss_chunk(ss_buffer); // Send the properties chunk
+    if (ret != ESP_OK) return ret;
 
-ss << R"(
+    // ss_buffer is now empty. The next chunk will close the object and add more functions.
+    ss_buffer << R"(// -- Properties sent, now close bandFrequencies object and define remaining JS --
     };
 
     function updateFrequencies(selectElement, rowIndex) {
@@ -1169,7 +1226,6 @@ ss << R"(
         const row = selectElement.closest('tr');
         const cells = row.cells;
         
-        // Update start and end frequency cells
         cells[1].textContent = frequencies.start;
         cells[2].textContent = frequencies.end;
     }
@@ -1182,8 +1238,7 @@ ss << R"(
             const bandSelect = row.querySelector('select[name^="band_"]');
             const bandIndex = bandSelect.name.split('_')[1];
 
-            // Update Radio A ports
-            const portCellA = row.cells[3]; // Antenna ports (Radio A) cell
+            const portCellA = row.cells[3]; 
             const existingStatesA = Array.from(portCellA.querySelectorAll('input[type="checkbox"]'))
                 .map(cb => cb.checked);
             let portsHtmlA = '';
@@ -1193,9 +1248,8 @@ ss << R"(
             }
             portCellA.innerHTML = portsHtmlA;
 
-            // Update Radio B ports
-            const portCellB = row.cells[4]; // Antenna ports (Radio B) cell
-            if (portCellB) { // Ensure the cell exists
+            const portCellB = row.cells[4]; 
+            if (portCellB) { 
                 const existingStatesB = Array.from(portCellB.querySelectorAll('input[type="checkbox"]'))
                     .map(cb => cb.checked);
                 let portsHtmlB = '';
@@ -1225,7 +1279,6 @@ ss << R"(
         const numPorts = parseInt(document.getElementById('num_antenna_ports').value);
         const tbody = document.querySelector('tbody');
         
-        // Store existing configurations before updating
         const existingConfig = [];
         const existingRows = tbody.querySelectorAll('tr');
         existingRows.forEach((row, i) => {
@@ -1239,46 +1292,39 @@ ss << R"(
             };
         });
         
-        // Create a document fragment to batch DOM updates
         const fragment = document.createDocumentFragment();
         
-        // Generate all rows at once
         for (let i = 0; i < numBands; i++) {
             const row = document.createElement('tr');
             
-            // Band selection cell
             const bandCell = document.createElement('td');
             const bandSelect = document.createElement('select');
             bandSelect.name = `band_${i}`;
             bandSelect.setAttribute('onchange', `updateFrequencies(this, ${i})`);
             
-            // Create band options HTML string once
             let optionsHtml = '';
             Object.entries(bandFrequencies).forEach(([band, freq]) => {
                 optionsHtml += `<option value="${band}">${band}</option>`;
             });
             bandSelect.innerHTML = optionsHtml;
-            
-            // Set initial band value based on the description in the config
-            const bandDescription = document.querySelector(`select[name="band_${i}"]`).value;
-            if (bandDescription) {
-                bandSelect.value = bandDescription;
+
+            if (existingConfig[i] && existingConfig[i].band) {
+                 bandSelect.value = existingConfig[i].band;
             } else {
-                // Fallback to default band based on index
-                const defaultBand = Object.entries(bandFrequencies)[i % Object.keys(bandFrequencies).length];
-                bandSelect.value = defaultBand[0];
+                const defaultBandKey = Object.keys(bandFrequencies)[i % Object.keys(bandFrequencies).length];
+                if (defaultBandKey) bandSelect.value = defaultBandKey;
             }
             
             bandCell.appendChild(bandSelect);
             
-            // Frequency cells
             const startFreqCell = document.createElement('td');
             const endFreqCell = document.createElement('td');
-            const selectedBand = bandFrequencies[bandSelect.value];
-            startFreqCell.textContent = selectedBand.start;
-            endFreqCell.textContent = selectedBand.end;
+            const selectedBandData = bandFrequencies[bandSelect.value];
+            if (selectedBandData) {
+                startFreqCell.textContent = selectedBandData.start;
+                endFreqCell.textContent = selectedBandData.end;
+            }
             
-            // Antenna ports cell for Radio A
             const portsCellA = document.createElement('td');
             let portsHtmlA = '';
             for (let j = 0; j < numPorts; j++) {
@@ -1287,7 +1333,6 @@ ss << R"(
             }
             portsCellA.innerHTML = portsHtmlA;
 
-            // Antenna ports cell for Radio B
             const portsCellB = document.createElement('td');
             portsCellB.classList.add('radio_b_ports_cell');
             let portsHtmlB = '';
@@ -1305,12 +1350,11 @@ ss << R"(
             fragment.appendChild(row);
         }
         
-        // Clear and update tbody in one operation
         tbody.innerHTML = '';
         tbody.appendChild(fragment);
+        toggleRadioBPortVisibility(); // Ensure visibility is correct after rebuilding rows
     }
 
-    // Add event listeners with debouncing
     document.getElementById('num_antenna_ports').addEventListener('change', debounce(updateAntennaPorts, 250));
     document.getElementById('num_bands').addEventListener('change', debounce(updateBandRows, 250));
 
@@ -1328,26 +1372,34 @@ ss << R"(
             cell.style.display = showRadioBPorts ? '' : 'none';
         });
 
-        // Also toggle interlock visibility based on concurrent mode
         const interlockDiv = document.getElementById('interlock_options_div');
-        if (mode === 'CONCURRENT_AB') {
-            interlockDiv.style.display = 'block';
-        } else {
-            interlockDiv.style.display = 'none';
+        if (interlockDiv) { // Check if element exists
+            if (mode === 'CONCURRENT_AB') {
+                interlockDiv.style.display = 'block';
+            } else {
+                interlockDiv.style.display = 'none';
+            }
         }
     }
-    // Add event listener for radio operation mode change
     document.getElementById('radio_operation_mode').addEventListener('change', toggleRadioBPortVisibility);
     
-    // Initial call to set visibility based on loaded config
-    toggleRadioBPortVisibility();
+    toggleRadioBPortVisibility(); // Initial call
     </script>)";
-    ss << "<div class='button-container' style='margin: 20px 0;'>";
-    ss << "<a href='/' class='button' style='background-color: var(--primary-color); color: white;'>Back to Home</a>";
-    ss << "<form action='/reset-config' method='post' style='display: inline;'>";
-    ss << "<input type='submit' value='Reset Configuration' class='button' style='background-color: #e74c3c; color: white;' onclick='return confirm(\"Are you sure you want to reset the configuration?\");'>";
-    ss << "</form>";
-    ss << "</div>";
-    ss << HTML_FOOTER;
-    return ss.str();
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    ss_buffer << "<div class='button-container' style='margin: 20px 0;'>";
+    ss_buffer << "<a href='/' class='button'>Back to Home</a>";
+    ss_buffer << "<form action='/reset-config' method='post' style='display: inline;'>";
+    ss_buffer << "<input type='submit' value='Reset Configuration' class='button' style='background-color: #e74c3c; color: white;' onclick='return confirm(\"Are you sure you want to reset the configuration?\");'>";
+    ss_buffer << "</form>";
+    ss_buffer << "</div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    ret = send_cstr_chunk(HTML_FOOTER);
+    if (ret != ESP_OK) return ret;
+
+    // Send final empty chunk to terminate the response
+    return httpd_resp_send_chunk(req, nullptr, 0);
 }
