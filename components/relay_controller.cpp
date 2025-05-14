@@ -187,7 +187,7 @@ esp_err_t RelayController::turn_off_all_relays_except(const int relay_to_keep_on
         currently_selected_relay_ = relay_to_keep_on;
         relay_states_[relay_to_keep_on] = true;
         last_relay_change_ = std::chrono::steady_clock::now();
-        ESP_LOGI(TAG, "All relays turned off except relay %d", relay_to_keep_on);
+        ESP_LOGD(TAG, "All relays turned off except relay %d", relay_to_keep_on);
     }
     
     return ret;
