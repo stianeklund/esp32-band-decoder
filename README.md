@@ -1,19 +1,26 @@
-# ESP32 Antenna Switch Controller
+# KC868-A16 ESP32 Antenna Switch Controller
 
-This project implements an antenna switch controller using an ESP32 microcontroller. The controller manages multiple
-relays to switch between different antennas based on the current operating frequency or manual selection.
-The ESP32 itself interfaces with a Kincony KC868-A16 board, however the long term goal is to have this code run on that
-board itself.
+
+This project uses a Kincony KC868-A16 to drive a antenna switch.
+
+The KC868-A16's mosfet outputs can be used to drive relays to switch between different antennas based on the current operating frequency (limited CAT command support), or manual selection.
+This project supports the Kincony KC868-A16 board, but can be compiled for ESP32 / ESP32S3 etc.
 
 ## Features
 
-- Automatic antenna switching based on frequency
-- Manual antenna selection (somewhat..)
-- TCP Client to interface with KC868-A16 to drive antenna relays
-- CAT command parsing to extrapolate frequency information
+- Automatic antenna switching based on frequency (very fast)
+- Hot switch protection (don't switch if transmitting)
+- Supports multiple radios (currently only support for 1 CAT driven)
+- Different switching modes (Concurrent, Alternating and Radio A only)
+- Port conflict resolution functionality
+- Manual antenna selection with support for multiple inputs (e.g 2x6 switches)
+- Supports both UART or MQTT (or both at the same time) for CAT / band data
+- Adjustable number of outputs and supported bands
+- ~~TCP Client to interface with KC868-A16 to drive antenna relays~~
+- CAT command parsing to extrapolate band information & transmit state
 - Web interface for configuration and control
 - Wi-Fi connectivity for remote access
-- SmartConfig for easy Wi-Fi setup, requires iOS / Android app I think
+- SmartConfig for easy Wi-Fi setup. iOS/Android or Windows apps can be used
 
 ## Components
 
@@ -22,7 +29,9 @@ The project consists of several key components:
 1. **Relay Controller**: Manages the physical relays connected to different antennas.
 2. **Antenna Switch**: Handles the logic for selecting the appropriate antenna based on frequency or user input.
 3. **CAT Parser**: Interprets CAT commands for integration with radio transceivers.
-4. **TCP Client**: Enables remote control and status updates via TCP protocol.
+4. **TCP Client**: ~~Enables remote control and status updates via TCP protocol.~~
+3. **MQTT Client**: Supports MQTT to listen for specific events to parse transceiver status.
+4. **UDP Client**: ~~Enables remote control and status updates via UDP protocol.~~
 5. **Wi-Fi Manager**: Manages Wi-Fi connectivity for the ESP32.
 6. **Web Server**: Provides a web interface for configuration and control.
 
@@ -37,31 +46,43 @@ This project uses the ESP-IDF framework. To build and flash the project:
 
 ## Configuration
 
-The antenna switch can be configured through the web interface or by modifying the `antenna_switch_config_t` structure
-in the code. This includes setting up frequency bands, antenna ports, and TCP communication settings.
+The antenna switch can be configured through the web interface or by modifying the `antenna_switch_config_t`.
+This includes setting up frequency bands, antenna ports, and communication settings.
 
-![](https://github.com/stianeklund/esp32-band-decoder/blob/master/webconfig.png)
+![](https://github.com/stianeklund/esp32-band-decoder/blob/kc868/screenshots/Antenna_controller.png)
+![](https://github.com/stianeklund/esp32-band-decoder/blob/kc868/screenshots/band_definition.png)
+
+---
+
+Transmit state is indicated by the relay / output turning red
+![Transmit indication](https://github.com/stianeklund/esp32-band-decoder/blob/kc868/screenshots/Transmit_Indication.png)
+Legal / valid antenna alternatives are indicated with a blue button, and green indicates the currently selected port / relay
+
+![Alternative antenna](https://github.com/stianeklund/esp32-band-decoder/blob/kc868/screenshots/Alternative_antenna.png)
 
 ## TODO
 
-* Hot switch protection (don't switch if transmitting)
-* Add support for RS485 to interface with the KC868 directly rather than over WiFI
-* Interlock
-* Port to to run on kc868 directly
+* Add CAT polling support
+* Improve / harden interlock functionality (hasn't been fully tested).
+* Remove / refactor TCP & UDP client's: these are leftovers from when this project code interfaced with the KC868-A16 instead of running on it natively.
 
-### NOTE / WARNING: 
+### NOTE / WARNING:
 
-Every time we change the output state of the mosfets on the KC868 it saves the state to NVS, 
-This needs to somehow be turned off or custom firmware needs to be written (porting this project) to minimize the
-amount of writes to NVS for longevity reasons
+The interlock functionality is not fully tested or fully featured.
+Currently the functionality is built so that it's not possible to select the same antenna port for Radio A or B, but there is no logic
+to avoid selecting another antenna for the same band.
+
+CAT data over UART requires data to be fed to UART without the KC868-A16 being able to inquire back, this is due to my own configuration as
+I use the RS232 lines on the radio I built a "sniffer" to grab band data.
+
+Future versions will likely include optional support for polling.
+
 
 ## Usage
 
-Once flashed and powered on, the ESP32 will start the antenna switch controller. You can interact with it via:
+Once flashed and powered on, the ESP32 will start the antenna switch controller.
+TODO Add more details on functionality
 
-1. The web interface (connect to the ESP32's IP address)
-2. TCP commands sent to the configured IP and port
-3. CAT commands via the UART interface
 
 ## License
 
