@@ -473,15 +473,25 @@ std::string generate_root_html(const antenna_switch_config_t &config, const char
     ss << "<h1>Antenna Controller</h1>";
     ss << "<div class='status-container'>";
     ss << "<div class='status-box'>";
-    ss << "<h2>Current Status</h2>";
+    ss << "<h2>Current Status (Radio A)</h2>"; // Clarify this is for Radio A
     ss << "<table>";
     ss << "<tr><th>Frequency</th><td id='current-frequency'>Updating...</td></tr>";
-    ss << "<tr><th>Port</th><td>";
-    ss << "<span id='active-antenna'>Updating...</span>";
-    ss << "</div>";
-    ss << "</td></tr>";
+    // Corrected line: removed the extra </div> from here
+    ss << "<tr><th>Port</th><td><span id='active-antenna'>Updating...</span></td></tr>";
     ss << "</table>";
-    ss << "</div>";
+    ss << "</div>"; // End of Radio A status-box
+
+// Conditionally add Radio B status box:
+    if (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A) {
+        ss << "<div class='status-box'>";
+        ss << "<h2>Current Status (Radio B)</h2>";
+        ss << "<table>";
+        ss << "<tr><th>Frequency</th><td id='current-frequency-b'>Updating...</td></tr>";
+        ss << "<tr><th>Port</th><td><span id='active-antenna-b'>Updating...</span></td></tr>";
+        ss << "</table>";
+        ss << "</div>"; // End of Radio B status-box
+    }
+
     ss << R"(
         <div class="status-box">
             <h2>Network Information</h2>
@@ -719,6 +729,24 @@ ss << R"(
                     const freqMHz = (data.frequency / 1000000).toFixed(3);
                     document.getElementById("current-frequency").textContent = freqMHz + " MHz";
                     document.getElementById("active-antenna").textContent = data.antenna;
+
+                    // Update Radio B status display if elements exist
+                    const freqBElement = document.getElementById("current-frequency-b");
+                    const antennaBElement = document.getElementById("active-antenna-b");
+
+                    if (freqBElement && antennaBElement) {
+                        if (data.hasOwnProperty('frequency_b') && data.frequency_b > 0) {
+                            const freqBMHz = (data.frequency_b / 1000000).toFixed(3);
+                            freqBElement.textContent = freqBMHz + " MHz";
+                        } else {
+                            freqBElement.textContent = "N/A";
+                        }
+                        if (data.hasOwnProperty('antenna_b')) {
+                            antennaBElement.textContent = data.antenna_b;
+                        } else {
+                            antennaBElement.textContent = "None";
+                        }
+                    }
                     
                     // Get the active antenna number from the relay states
                     const buttons = document.querySelectorAll('.relay-button');
@@ -735,34 +763,42 @@ ss << R"(
                     console.debug("Active antenna:", data.antenna);
                     console.debug("Current frequency:", data.frequency);
             
-                    // Update button states based on the status data
+                    // Modify button update logic to handle Radio A and B separately
                     document.querySelectorAll('.relay-button').forEach(button => {
                         const relayNum = parseInt(button.getAttribute('data-relay'));
+                        
+                        let isTransmittingForThisRelay = false;
+                        let availableAntennasForThisRelayGroup = [];
+                        const RELAYS_PER_RADIO_JS = 8; // Hardcode for JS context
+
+                        if (relayNum <= RELAYS_PER_RADIO_JS) { // Radio A relays (1-8)
+                            isTransmittingForThisRelay = data.transmitting;
+                            availableAntennasForThisRelayGroup = data.available_antennas || [];
+                        } else { // Radio B relays (9-16)
+                            isTransmittingForThisRelay = data.transmitting_b; // Use data.transmitting_b
+                            availableAntennasForThisRelayGroup = data.available_antennas_b || []; // Use data.available_antennas_b
+                        }
                 
-                        // Check if this relay supports the current frequency
-                        const supportsCurrentFreq = data.available_antennas.includes(relayNum);
+                        const supportsCurrentFreq = availableAntennasForThisRelayGroup.includes(relayNum);
                 
-                        // First, remove all special classes
                         button.classList.remove('multi-band', 'transmitting');
                 
                         if (button.classList.contains('active')) {
-                            // This is the active relay
-                            if (data.transmitting) {
+                            if (isTransmittingForThisRelay) {
                                 button.classList.add('transmitting');
-                                console.debug(`Adding transmitting class to relay ${relayNum}`);
+                                // console.debug(`Adding transmitting class to relay ${relayNum}`);
                             } else {
-                                console.debug(`Relay ${relayNum} is active but not transmitting`);
+                                // console.debug(`Relay ${relayNum} is active but not transmitting`);
                             }
                         } else {
-                            // For inactive relays, only show multi-band if they support current frequency
                             if (supportsCurrentFreq) {
                                 button.classList.add('multi-band');
-                                console.debug(`Relay ${relayNum} supports current frequency`);
+                                // console.debug(`Relay ${relayNum} supports current frequency`);
                             }
-                            // Reset styles
-                            button.style.backgroundColor = '';
-                            button.style.borderColor = '';
-                            button.style.color = '';
+                            // Reset styles (already handled by CSS, but can be explicit if needed)
+                            // button.style.backgroundColor = '';
+                            // button.style.borderColor = '';
+                            // button.style.color = '';
                         }
                     });
                 })
@@ -834,15 +870,8 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
        << "> Automatically resolve same-antenna conflict (for Concurrent mode)</label>";
     ss << "</div>";
 
-    // Radio selector for band configuration (seems to be for UI to pick which radio's bands to show/edit, distinct from operation mode)
-    // Keeping this as its removal was not explicitly requested.
-    ss << "<div class='form-group'>";
-    ss << "<label for='radio'>Configure Bands for Radio:</label>";
-    ss << "<select id='radio' name='radio'>";
-    ss << "<option value='A'>A</option>";
-    ss << "<option value='B'>B</option>";
-    ss << "</select>";
-    ss << "</div>";
+    // The "Configure Bands for Radio:" dropdown was removed as both Radio A and B 
+    // configurations are now displayed and editable simultaneously in the table.
 
     ss << "<h2>UART Configuration</h2>";
     ss << "<div class='form-group' style='margin-bottom: 20px;'>";
@@ -949,7 +978,8 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
     ss << "<th>Band</th>";
     ss << "<th>Start Freq</th>";
     ss << "<th>End Freq</th>";
-    ss << "<th>Antenna Ports</th>";
+    ss << "<th id='antenna_ports_a_header'>Antenna Ports (Radio A)</th>";
+    ss << "<th id='antenna_ports_b_header'>Antenna Ports (Radio B)</th>";
     ss << "</tr>";
     ss << "</thead>";
     ss << "<tbody>";
@@ -975,17 +1005,31 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
         }
 
         ss << "</select></td>";
-        ss << "<td>" << config.bands[0][i].start_freq << "</td>";
+        ss << "<td>" << config.bands[0][i].start_freq << "</td>"; // Frequencies assumed same for Radio A and B for a given band row
         ss << "<td>" << config.bands[0][i].end_freq << "</td>";
+        
+        // Antenna Ports for Radio A
         ss << "<td>";
-
-        // Generate checkboxes for each antenna port
         for (int j = 0; j < config.num_antenna_ports; j++) {
-            ss << "<input type='checkbox' name='a" << i << "_" << j << "' value='1' "
+            ss << "<input type='checkbox' name='ports_a_" << i << "_" << j << "' value='1' "
                     << (config.bands[0][i].antenna_ports[j] ? "checked" : "") << ">" << (j + 1) << " ";
         }
+        ss << "</td>";
 
-
+        // Antenna Ports for Radio B
+        ss << "<td class='radio_b_ports_cell'>"; // Added class for easier JS targeting if needed
+        for (int j = 0; j < config.num_antenna_ports; j++) {
+            // The config.bands[1] array element is part of the antenna_switch_config_t struct
+            // and its address will not be nullptr. The outer loop for 'i' (bands) ensures 
+            // 'i' is less than config.num_bands, and the inner loop for 'j' (ports) ensures 
+            // 'j' is less than config.num_antenna_ports.
+            // Thus, direct access is safe within the defined bounds.
+            // If an old configuration didn't populate bands[1], it would likely be zero-initialized,
+            // making antenna_ports[j] false, which is an acceptable default.
+            bool radio_b_port_checked = config.bands[1][i].antenna_ports[j];
+            ss << "<input type='checkbox' name='ports_b_" << i << "_" << j << "' value='1' "
+                    << (radio_b_port_checked ? "checked" : "") << ">" << (j + 1) << " ";
+        }
         ss << "</td></tr>";
     }
 
@@ -1046,8 +1090,8 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             interlock_auto_resolves_conflict: formData.get('interlock_auto_resolves_conflict') === 'on',
             num_bands: parseInt(formData.get('num_bands')),
             num_antenna_ports: parseInt(formData.get('num_antenna_ports')),
-            // tcp_host: formData.get('tcp_host'), // Assuming TCP host/port are not part of this config struct anymore or handled elsewhere
-            tcp_port: parseInt(formData.get('tcp_port')),
+            // tcp_host: formData.get('tcp_host'),
+            // tcp_port: parseInt(formData.get('tcp_port')), // tcp_port seems removed from struct/UI
             uart_baud_rate: parseInt(formData.get('uart_baud_rate')) || 9600,
             uart_parity: parseInt(formData.get('uart_parity')) || 0,
             uart_stop_bits: parseInt(formData.get('uart_stop_bits')) || 1,
@@ -1062,9 +1106,7 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
             mqtt_password: formData.get('mqtt_password') || '',
             mqtt_client_id: formData.get('mqtt_client_id') || 'core-mosquitto',
             mqtt_topic: formData.get('mqtt_topic') || 'omnirig/frequent/radio_info',
-            // The 'radio' field from the form (A/B selector for band config UI) might need to be sent if backend uses it
-            // For now, assuming it's UI only for selecting which set of bands to show.
-            // radio: formData.get('radio'), 
+            // The 'radio' field from the form (A/B selector for band config UI) has been removed.
             bands: []
         };
         
@@ -1072,12 +1114,18 @@ std::string generate_config_html(const antenna_switch_config_t &config) {
         for (let i = 0; i < config.num_bands; i++) {
             const band = {
                 description: formData.get(`band_${i}`),
-                antenna_ports: []
+                antenna_ports_a: [],
+                antenna_ports_b: []
             };
             
-            // Process antenna ports
+            // Process antenna ports for Radio A
             for (let j = 0; j < config.num_antenna_ports; j++) {
-                band.antenna_ports[j] = formData.get(`a${i}_${j}`) === '1';
+                band.antenna_ports_a[j] = formData.get(`ports_a_${i}_${j}`) === '1';
+            }
+
+            // Process antenna ports for Radio B
+            for (let j = 0; j < config.num_antenna_ports; j++) {
+                band.antenna_ports_b[j] = formData.get(`ports_b_${i}_${j}`) === '1';
             }
             config.bands.push(band);
         }
@@ -1131,21 +1179,32 @@ ss << R"(
         const rows = document.querySelectorAll('tbody tr');
         
         rows.forEach((row) => {
-            const portCell = row.cells[3]; // Antenna ports cell
             const bandSelect = row.querySelector('select[name^="band_"]');
             const bandIndex = bandSelect.name.split('_')[1];
-            
-            // Store existing checkbox states
-            const existingStates = Array.from(portCell.querySelectorAll('input[type="checkbox"]'))
+
+            // Update Radio A ports
+            const portCellA = row.cells[3]; // Antenna ports (Radio A) cell
+            const existingStatesA = Array.from(portCellA.querySelectorAll('input[type="checkbox"]'))
                 .map(cb => cb.checked);
-            
-            let portsHtml = '';
+            let portsHtmlA = '';
             for (let j = 0; j < numPorts; j++) {
-                const isChecked = existingStates[j] ? 'checked' : '';
-                portsHtml += `<input type="checkbox" name="a${bandIndex}_${j}" value="1" ${isChecked}>${j + 1} `;
+                const isChecked = existingStatesA[j] ? 'checked' : '';
+                portsHtmlA += `<input type="checkbox" name="ports_a_${bandIndex}_${j}" value="1" ${isChecked}>${j + 1} `;
             }
-            
-            portCell.innerHTML = portsHtml;
+            portCellA.innerHTML = portsHtmlA;
+
+            // Update Radio B ports
+            const portCellB = row.cells[4]; // Antenna ports (Radio B) cell
+            if (portCellB) { // Ensure the cell exists
+                const existingStatesB = Array.from(portCellB.querySelectorAll('input[type="checkbox"]'))
+                    .map(cb => cb.checked);
+                let portsHtmlB = '';
+                for (let j = 0; j < numPorts; j++) {
+                    const isChecked = existingStatesB[j] ? 'checked' : '';
+                    portsHtmlB += `<input type="checkbox" name="ports_b_${bandIndex}_${j}" value="1" ${isChecked}>${j + 1} `;
+                }
+                portCellB.innerHTML = portsHtmlB;
+            }
         });
     }
 
@@ -1171,10 +1230,12 @@ ss << R"(
         const existingRows = tbody.querySelectorAll('tr');
         existingRows.forEach((row, i) => {
             const bandSelect = row.querySelector(`select[name="band_${i}"]`);
-            const checkboxes = row.querySelectorAll('input[type="checkbox"]');
+            const checkboxesA = row.cells[3].querySelectorAll('input[type="checkbox"]');
+            const checkboxesB = row.cells[4].querySelectorAll('input[type="checkbox"]');
             existingConfig[i] = {
                 band: bandSelect ? bandSelect.value : null,
-                ports: Array.from(checkboxes).map(cb => cb.checked)
+                ports_a: Array.from(checkboxesA).map(cb => cb.checked),
+                ports_b: Array.from(checkboxesB).map(cb => cb.checked)
             };
         });
         
@@ -1217,19 +1278,30 @@ ss << R"(
             startFreqCell.textContent = selectedBand.start;
             endFreqCell.textContent = selectedBand.end;
             
-            // Antenna ports cell - create HTML string instead of multiple DOM operations
-            const portsCell = document.createElement('td');
-            let portsHtml = '';
+            // Antenna ports cell for Radio A
+            const portsCellA = document.createElement('td');
+            let portsHtmlA = '';
             for (let j = 0; j < numPorts; j++) {
-                const isChecked = existingConfig[i] && existingConfig[i].ports[j] ? 'checked' : '';
-                portsHtml += `<input type="checkbox" name="a${i}_${j}" value="1" ${isChecked}>${j + 1} `;
+                const isCheckedA = existingConfig[i] && existingConfig[i].ports_a && existingConfig[i].ports_a[j] ? 'checked' : '';
+                portsHtmlA += `<input type="checkbox" name="ports_a_${i}_${j}" value="1" ${isCheckedA}>${j + 1} `;
             }
-            portsCell.innerHTML = portsHtml;
+            portsCellA.innerHTML = portsHtmlA;
+
+            // Antenna ports cell for Radio B
+            const portsCellB = document.createElement('td');
+            portsCellB.classList.add('radio_b_ports_cell');
+            let portsHtmlB = '';
+            for (let j = 0; j < numPorts; j++) {
+                const isCheckedB = existingConfig[i] && existingConfig[i].ports_b && existingConfig[i].ports_b[j] ? 'checked' : '';
+                portsHtmlB += `<input type="checkbox" name="ports_b_${i}_${j}" value="1" ${isCheckedB}>${j + 1} `;
+            }
+            portsCellB.innerHTML = portsHtmlB;
             
             row.appendChild(bandCell);
             row.appendChild(startFreqCell);
             row.appendChild(endFreqCell);
-            row.appendChild(portsCell);
+            row.appendChild(portsCellA);
+            row.appendChild(portsCellB);
             fragment.appendChild(row);
         }
         
@@ -1242,8 +1314,21 @@ ss << R"(
     document.getElementById('num_antenna_ports').addEventListener('change', debounce(updateAntennaPorts, 250));
     document.getElementById('num_bands').addEventListener('change', debounce(updateBandRows, 250));
 
-    function toggleInterlockVisibility() {
+    function toggleRadioBPortVisibility() {
         const mode = document.getElementById('radio_operation_mode').value;
+        const radioBPortHeader = document.getElementById('antenna_ports_b_header');
+        const radioBPortCells = document.querySelectorAll('.radio_b_ports_cell');
+
+        const showRadioBPorts = mode !== 'SINGLE_A';
+        
+        if (radioBPortHeader) {
+            radioBPortHeader.style.display = showRadioBPorts ? '' : 'none';
+        }
+        radioBPortCells.forEach(cell => {
+            cell.style.display = showRadioBPorts ? '' : 'none';
+        });
+
+        // Also toggle interlock visibility based on concurrent mode
         const interlockDiv = document.getElementById('interlock_options_div');
         if (mode === 'CONCURRENT_AB') {
             interlockDiv.style.display = 'block';
@@ -1251,8 +1336,11 @@ ss << R"(
             interlockDiv.style.display = 'none';
         }
     }
+    // Add event listener for radio operation mode change
+    document.getElementById('radio_operation_mode').addEventListener('change', toggleRadioBPortVisibility);
+    
     // Initial call to set visibility based on loaded config
-    toggleInterlockVisibility();
+    toggleRadioBPortVisibility();
     </script>)";
     ss << "<div class='button-container' style='margin: 20px 0;'>";
     ss << "<a href='/' class='button' style='background-color: var(--primary-color); color: white;'>Back to Home</a>";
