@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "cat_parser.h"
+#include "config_manager.h"
 
 MQTTClient &MQTTClient::instance() {
     static MQTTClient instance;
@@ -19,7 +20,7 @@ esp_err_t MQTTClient::init() {
     const auto &config = ConfigManager::instance().get_config();
 
     if (!config.mqtt_enabled) {
-        ESP_LOGI(TAG, "MQTT is disabled in configuration");
+        ESP_LOGD(TAG, "MQTT is disabled in configuration");
         return ESP_OK;
     }
 
@@ -116,7 +117,7 @@ void MQTTClient::parse_radio_info(const cJSON *json) {
             if (frequency_callback_) {
                 frequency_callback_(new_freq);
             }
-            ESP_LOGI(TAG, "Frequency changed via MQTT to: %lu", new_freq);
+            ESP_LOGV(TAG, "Frequency changed via MQTT to: %lu", new_freq);
             cat_parser_set_frequency(new_freq);
         }
     }
@@ -160,13 +161,13 @@ void MQTTClient::mqtt_event_handler(void *handler_args, esp_event_base_t base, i
             break;
 
         case MQTT_EVENT_DATA:
-            ESP_LOGD(TAG, "Received MQTT data on topic: %.*s", event->topic_len, event->topic);
-            ESP_LOGD(TAG, "Data: %.*s", event->data_len, event->data);
+            ESP_LOGV(TAG, "Received MQTT data on topic: %.*s", event->topic_len, event->topic);
+            ESP_LOGV(TAG, "Data: %.*s", event->data_len, event->data);
             client->handle_radio_info(event->data, event->data_len);
             break;
 
         default:
-            ESP_LOGD(TAG, "MQTT event received: %d", event->event_id);
+            ESP_LOGV(TAG, "MQTT event received: %d", event->event_id);
             break;
     }
 }
