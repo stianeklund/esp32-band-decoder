@@ -1,14 +1,14 @@
 #include "system_initializer.h"
 
-#include <antenna_switch.h>
-#include <cat_parser.h>
+#include "antenna_switch.h"
+#include "cat_parser.h"
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <esp_netif_types.h>
-#include <my_mqtt_client.h>
+#include "my_mqtt_client.h"
 #include <nvs.h>
 #include <nvs_flash.h>
-#include <wifi_manager.hpp>
+#include "wifi_manager.hpp"
 
 #include "esp_check.h"
 #include "esp_err.h"
@@ -92,11 +92,11 @@ esp_err_t SystemInitializer::initialize_basic() {
 
 esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_out) {
     // Initialize antenna switch configuration
-    ESP_RETURN_ON_ERROR(antenna_switch_init(), TAG, "Failed to initialize antenna switch");
+    ESP_RETURN_ON_ERROR(AntennaSwitch::instance().init(), TAG, "Failed to initialize antenna switch");
 
     // Get the configuration
     antenna_switch_config_t config;
-    ESP_RETURN_ON_ERROR(antenna_switch_get_config(&config), TAG,
+    ESP_RETURN_ON_ERROR(AntennaSwitch::instance().get_config(&config), TAG,
                         "Failed to get antenna switch configuration");
 
     // Initialize CAT parser
@@ -112,7 +112,7 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
             if (mqtt_ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to connect MQTT client: %s", esp_err_to_name(mqtt_ret));
             } else {
-                mqtt_ret = MQTTClient::instance().subscribe_to_omnirig_topics(config.mqtt_rig_id);
+                mqtt_ret = MQTTClient::instance().subscribe_to_omnirig_topics(); // Call updated: no rig_id
                 if (mqtt_ret != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to subscribe to MQTT topics: %s", esp_err_to_name(mqtt_ret));
                 }
@@ -140,7 +140,7 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
     
     // Set the relay controller in antenna switch
     *relay_controller_out = &relay_controller;
-    antenna_switch_set_relay_controller(*relay_controller_out);
+    AntennaSwitch::instance().set_relay_controller(*relay_controller_out);
 
     // Now wait for network if needed
     if (!is_valid_ip()) {
@@ -175,6 +175,6 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
 
     // Set the relay controller in antenna switch
     *relay_controller_out = &relay_controller;
-    antenna_switch_set_relay_controller(*relay_controller_out);
+    AntennaSwitch::instance().set_relay_controller(*relay_controller_out);
     return ESP_OK;
 }

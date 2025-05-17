@@ -1,13 +1,12 @@
-#include "html_content.h"
+#include "include/html_content.h"
 
 #include <cstring>
 #include <sstream>
 #include <esp_log.h>
 
-auto TAG = "HTML";
+const char *HtmlContent::TAG = "HTML";
 
-// ReSharper disable once CppUseAuto
-const char *HTML_HEADER = R"(
+const char *HtmlContent::HTML_HEADER = R"(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -467,12 +466,12 @@ const char *HTML_HEADER = R"(
 )";
 
 // ReSharper disable once CppUseAuto
-const char *HTML_FOOTER = R"(
+const char *HtmlContent::HTML_FOOTER = R"(
 </body>
 </html>
 )";
 
-const std::map<std::string, BandInfo> band_info = {
+const std::map<std::string_view, HtmlContent::BandInfo> HtmlContent::band_info = {
     {"160m", {"160m", 1800000, 2000000}},
     {"80m", {"80m", 3500000, 4000000}},
     {"40m", {"40m", 7000000, 7300000}},
@@ -488,9 +487,9 @@ const std::map<std::string, BandInfo> band_info = {
     // {"70cm", {"70cm", 420000000, 450000000}}
 };
 
-std::string generate_root_html(const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr) {
+std::string HtmlContent::generate_root_html(const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr) {
     std::stringstream ss;
-    ss << HTML_HEADER;
+    ss << HtmlContent::HTML_HEADER;
     ss << "<h1>Antenna Controller</h1>";
     ss << "<div class='status-container'>";
     ss << "<div class='status-box'>";
@@ -837,22 +836,22 @@ ss << R"(
         setInterval(updateStatus, STATUS_UPDATE_INTERVAL);
     </script>
     )";
-    ss << HTML_FOOTER;
+    ss << HtmlContent::HTML_FOOTER;
     return ss.str();
 }
 
-esp_err_t generate_config_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config) {
+esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config) {
     esp_err_t ret = ESP_OK;
 
     // Helper lambda to send a stringstream's content as a chunk
     auto send_ss_chunk = [&](std::stringstream& stream) -> esp_err_t {
-        std::string chunk_str = stream.str();
-        stream.str(""); // Clear the stringstream for reuse
+        const std::string chunk_str = stream.str();
+        stream.str(std::string()); // Clear the stringstream for reuse
         stream.clear(); // Clear error flags (like eof, fail, bad)
         if (chunk_str.empty()) return ESP_OK;
         esp_err_t send_ret = httpd_resp_send_chunk(req, chunk_str.c_str(), chunk_str.length());
         if (send_ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to send chunk: %s", esp_err_to_name(send_ret));
+            ESP_LOGE(HtmlContent::TAG, "Failed to send chunk: %s", esp_err_to_name(send_ret));
         }
         return send_ret;
     };
@@ -860,33 +859,33 @@ esp_err_t generate_config_html_chunked(httpd_req_t *req, const antenna_switch_co
     // Helper lambda to send a C-string literal as a chunk
     auto send_cstr_chunk = [&](const char* cstr_chunk) -> esp_err_t {
         if (cstr_chunk == nullptr || cstr_chunk[0] == '\0') return ESP_OK;
-        esp_err_t send_ret = httpd_resp_send_chunk(req, cstr_chunk, strlen(cstr_chunk));
+        const esp_err_t send_ret = httpd_resp_send_chunk(req, cstr_chunk, strlen(cstr_chunk));
          if (send_ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to send cstr chunk: %s", esp_err_to_name(send_ret));
+            ESP_LOGE(HtmlContent::TAG, "Failed to send cstr chunk: %s", esp_err_to_name(send_ret));
         }
         return send_ret;
     };
 
     // Check for potential errors before starting to generate HTML
     if (config.num_bands <= 0 || config.num_bands > MAX_BANDS) {
-        ESP_LOGE(TAG, "Invalid number of bands: %d (should be between 1 and %d)",
+        ESP_LOGE(HtmlContent::TAG, "Invalid number of bands: %d (should be between 1 and %d)",
                  config.num_bands, MAX_BANDS);
         // Cannot easily send an HTTP error if chunking has started.
         // This check should ideally be done before calling this function or before sending the first chunk.
         return ESP_ERR_INVALID_ARG;
     }
     if (config.num_antenna_ports <= 0 || config.num_antenna_ports > MAX_ANTENNA_PORTS) {
-        ESP_LOGE(TAG, "Invalid number of antenna ports: %d (should be between 1 and %d)",
+        ESP_LOGE(HtmlContent::TAG, "Invalid number of antenna ports: %d (should be between 1 and %d)",
                  config.num_antenna_ports, MAX_ANTENNA_PORTS);
         return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGD(TAG, "Generating HTML for config: %d bands, %d antenna ports", config.num_bands, config.num_antenna_ports);
-    ESP_LOGD(TAG, "Debug: num_bands = %d, num_antenna_ports = %d", config.num_bands, config.num_antenna_ports);
+    ESP_LOGD(HtmlContent::TAG, "Generating HTML for config: %d bands, %d antenna ports", config.num_bands, config.num_antenna_ports);
+    ESP_LOGD(HtmlContent::TAG, "Debug: num_bands = %d, num_antenna_ports = %d", config.num_bands, config.num_antenna_ports);
     
     std::stringstream ss_buffer; // Use this for building smaller parts
 
-    ret = send_cstr_chunk(HTML_HEADER);
+    ret = send_cstr_chunk(HtmlContent::HTML_HEADER);
     if (ret != ESP_OK) return ret;
 
     ss_buffer << "<h1>Relay Configuration</h1>";
@@ -1049,7 +1048,7 @@ esp_err_t generate_config_html_chunked(httpd_req_t *req, const antenna_switch_co
 
         // Find matching band from description
         std::string selected_band;
-        for (const auto &[band_name_key, band_val]: band_info) { // Renamed band_info to band_val to avoid conflict
+        for (const auto &[band_name_key, band_val]: HtmlContent::band_info) { // Renamed band_info to band_val to avoid conflict
             if (strcmp(config.bands[0][i].description, band_val.name) == 0) {
                 selected_band = band_name_key;
                 break;
@@ -1057,7 +1056,7 @@ esp_err_t generate_config_html_chunked(httpd_req_t *req, const antenna_switch_co
         }
 
         // Generate options with correct selection
-        for (const auto &[band_name_key, band_val]: band_info) { // Renamed band_info to band_val
+        for (const auto &[band_name_key, band_val]: HtmlContent::band_info) { // Renamed band_info to band_val
             ss_buffer << "<option value='" << band_name_key << "' "
                << (band_name_key == selected_band ? "selected" : "")
                << ">" << band_val.name << "</option>";
@@ -1208,7 +1207,7 @@ esp_err_t generate_config_html_chunked(httpd_req_t *req, const antenna_switch_co
 
 // Add the band frequencies mapping
 // ss_buffer is now empty due to send_ss_chunk
-for (const auto &[fst, snd] : band_info) {
+for (const auto &[fst, snd] : HtmlContent::band_info) {
     // Properties are sent in the next chunk
     ss_buffer << "    '" << fst << "': {start: " << snd.start_freq 
                << ", end: " << snd.end_freq << "},\n";
@@ -1397,7 +1396,7 @@ for (const auto &[fst, snd] : band_info) {
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
 
-    ret = send_cstr_chunk(HTML_FOOTER);
+    ret = send_cstr_chunk(HtmlContent::HTML_FOOTER);
     if (ret != ESP_OK) return ret;
 
     // Send final empty chunk to terminate the response

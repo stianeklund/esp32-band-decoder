@@ -52,7 +52,7 @@ private:
     static void smartconfig_task(void* parm);
     
     // Credential management
-    esp_err_t save_credentials(const char* ssid, const char* password);
+    static esp_err_t save_credentials(const char* ssid, const char* password);
     esp_err_t load_credentials(char* ssid, size_t ssid_size, 
                              char* password, size_t password_size);
 

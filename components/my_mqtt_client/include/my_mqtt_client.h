@@ -14,10 +14,10 @@ public:
     static MQTTClient& instance();
     esp_err_t init();  // Use configuration instead of parameters
     esp_err_t connect() const;
-    esp_err_t subscribe_to_topics(const char* rig_id);
+    // Removed subscribe_to_topics declaration as it's not defined
     esp_err_t publish_message(const char* topic, const char* message) const;
     void set_frequency_callback(std::function<void(uint32_t)> callback);
-    esp_err_t subscribe_to_omnirig_topics(const char* rig_id) const;
+    esp_err_t subscribe_to_omnirig_topics() const; // Removed unused rig_id parameter
     void handle_radio_info(const char* data, int data_len);
     void parse_radio_info(const cJSON* json);
     void set_has_serial_data(bool has_data);

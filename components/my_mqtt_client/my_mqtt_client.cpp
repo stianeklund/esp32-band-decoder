@@ -66,7 +66,7 @@ esp_err_t MQTTClient::connect() const {
     return ESP_OK;
 }
 
-esp_err_t MQTTClient::subscribe_to_omnirig_topics(const char *rig_id) const {
+esp_err_t MQTTClient::subscribe_to_omnirig_topics() const { // Removed unused rig_id parameter
     const auto &config = ConfigManager::instance().get_config();
 
     ESP_LOGI(TAG, "Attempting to subscribe to topic: %s", config.mqtt_topic);
@@ -149,7 +149,7 @@ void MQTTClient::mqtt_event_handler(void *handler_args, esp_event_base_t base, i
         case MQTT_EVENT_CONNECTED: {
             ESP_LOGI(TAG, "MQTT Connected to broker");
 
-            if (const esp_err_t err = client->subscribe_to_omnirig_topics("radio1"); err != ESP_OK) {
+            if (const esp_err_t err = client->subscribe_to_omnirig_topics(); err != ESP_OK) { // Call updated: no rig_id
                 ESP_LOGE(TAG, "Failed to subscribe to MQTT topics");
             }
             break;

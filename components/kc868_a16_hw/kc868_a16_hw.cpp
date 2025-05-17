@@ -1,16 +1,17 @@
-#include "kc868_a16_hw.h"
+// ReSharper disable CppRedundantParentheses
+#include "include/kc868_a16_hw.h"
 #include "esp_log.h"
 
-static const char* TAG = "KC868_A16_HW";
+static auto TAG = "KC868_A16_HW";
 static uint16_t output_state = 0;
 
-static esp_err_t write_pcf8574(uint8_t addr, uint8_t data) {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
+    const i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_write_byte(cmd, data, true);
     i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(50));
+    const esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(cmd);
     
     // Add a small delay after each I2C operation
@@ -20,8 +21,8 @@ static esp_err_t write_pcf8574(uint8_t addr, uint8_t data) {
 
 esp_err_t kc868_a16_hw_init() {
     ESP_LOGI(TAG, "Initializing KC868-A16 hardware");
-    
-    i2c_config_t conf = {
+
+    constexpr i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = I2C_MASTER_SDA_IO,
         .scl_io_num = I2C_MASTER_SCL_IO,
@@ -63,14 +64,14 @@ esp_err_t kc868_a16_hw_init() {
     return ESP_OK;
 }
 
-esp_err_t kc868_a16_set_output(uint8_t output_num, bool state) {
+esp_err_t kc868_a16_set_output(const uint8_t output_num, const bool state) {
     if (output_num >= 16) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t pcf_addr = (output_num < 8) ? PCF8574_OUTPUT_ADDR_1 : PCF8574_OUTPUT_ADDR_2;
-    uint8_t bit_pos = output_num % 8;
-    uint8_t current_byte = (output_num < 8) ? 
+    const uint8_t pcf_addr = (output_num < 8) ? PCF8574_OUTPUT_ADDR_1 : PCF8574_OUTPUT_ADDR_2;
+    const uint8_t bit_pos = output_num % 8;
+    uint8_t current_byte = (output_num < 8) ?
         (output_state & 0xFF) : ((output_state >> 8) & 0xFF);
 
     if (state) {
@@ -81,8 +82,9 @@ esp_err_t kc868_a16_set_output(uint8_t output_num, bool state) {
 
     // Add a small delay before changing state
     vTaskDelay(pdMS_TO_TICKS(10));
-    
-    esp_err_t ret = write_pcf8574(pcf_addr, current_byte);
+
+    const esp_err_t ret = write_pcf8574(pcf_addr, current_byte);
+
     if (ret == ESP_OK) {
         if (output_num < 8) {
             output_state = (output_state & 0xFF00) | current_byte;
@@ -95,20 +97,20 @@ esp_err_t kc868_a16_set_output(uint8_t output_num, bool state) {
     return ret;
 }
 
-esp_err_t kc868_a16_get_output_state(uint8_t output_num, bool* state) {
+esp_err_t kc868_a16_get_output_state(const uint8_t output_num, bool* state) {
     if (output_num >= 16 || state == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint16_t mask = 1 << output_num;
+    const uint16_t mask = 1 << output_num;
     *state = !(output_state & mask);  // Invert because PCF8574 is active low
     return ESP_OK;
 }
 
-esp_err_t kc868_a16_set_all_outputs(uint16_t state_mask) {
+esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
     // Convert to PCF8574 active low logic
-    uint8_t low_byte = ~(state_mask & 0xFF);
-    uint8_t high_byte = ~((state_mask >> 8) & 0xFF);
+    const uint8_t low_byte = ~(state_mask & 0xFF);
+    const uint8_t high_byte = ~((state_mask >> 8) & 0xFF);
 
     esp_err_t ret = write_pcf8574(PCF8574_OUTPUT_ADDR_1, low_byte);
     if (ret != ESP_OK) return ret;
