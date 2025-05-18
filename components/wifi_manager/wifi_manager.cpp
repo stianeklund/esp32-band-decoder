@@ -152,14 +152,7 @@ void WifiManager::event_handler(void* arg, const esp_event_base_t event_base,
         // Add a small delay to ensure connection status propagates
         vTaskDelay(pdMS_TO_TICKS(100));
 
-        if (const esp_err_t ret = WebServer::instance().start(); ret != ESP_OK)
-        {
-            ESP_LOGE(TAG, "Failed to start webserver: %s", esp_err_to_name(ret));
-        }
-        else
-        {
-            ESP_LOGI(TAG, "Webserver started successfully");
-        }
+        // Webserver is now started in main.cpp after full system initialization
     }
     else if (event_base == SC_EVENT && event_id == SC_EVENT_SCAN_DONE)
     {
