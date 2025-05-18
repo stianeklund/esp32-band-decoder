@@ -37,8 +37,8 @@ typedef struct {
     uint8_t uart_parity;
     uint8_t uart_stop_bits;
     uint8_t uart_flow_ctrl;
-    int8_t uart_tx_pin;  // GPIO pin number for UART TX
-    int8_t uart_rx_pin;  // GPIO pin number for UART RX
+    int8_t uart_tx_pin;  // GPIO pin for UART TX
+    int8_t uart_rx_pin;  // GPIO pin for UART RX
     bool mqtt_enabled;
     bool allow_concurrent_data_sources;
     bool interlock_auto_resolves_conflict; // Renamed from interlock_enabled
@@ -51,6 +51,7 @@ typedef struct {
     char mqtt_topic[64];
     radio_operation_mode_t radio_operation_mode;
     uint8_t last_used_antenna[2][MAX_BANDS]; // Stores 1-based relay_id for Radio A/B per band, 0 for none
+    char relay_names[16][32]; // Custom names for each relay (16 relays, 32 chars each)
 } antenna_switch_config_t;
 
 // Enum to identify Radio A or Radio B
@@ -85,7 +86,8 @@ public:
 
     // Extended API: select by radio (default Radio A)
     esp_err_t set_relay_for_antenna(int relay_id, int band_number, RadioID radio, bool state);
-    inline esp_err_t set_relay_for_antenna(int relay_id, int band_number, bool state) {
+
+    esp_err_t set_relay_for_antenna(const int relay_id, const int band_number, const bool state) {
         return set_relay_for_antenna(relay_id, band_number, RadioID::A, state);
     }
 

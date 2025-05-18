@@ -536,8 +536,15 @@ std::string HtmlContent::generate_root_html(const antenna_switch_config_t &confi
 
 // First 8 relays (Radio A)
 for (int i = 0; i < 8; i++) {
+    // Ensure the relay name is properly escaped for HTML and use default if empty
+    std::string relay_name;
+    if (config.relay_names[i][0] != '\0') {
+        relay_name = config.relay_names[i];
+    } else {
+        relay_name = "Relay " + std::to_string(i + 1);
+    }
     ss << "<button class='relay-button' data-relay='" << (i + 1) << "' onclick='toggleRelay(" << (i + 1) << ")'>"
-       << "Relay " << (i + 1) << "</button>";
+       << relay_name << "</button>";
 }
 
 // Conditionally render Radio B block
@@ -549,8 +556,15 @@ if (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A) {
                 <h3>Radio B</h3>
                 <div class="relay-grid">)";
     for (int i = 8; i < 16; i++) {
+        // Ensure the relay name is properly escaped for HTML and use default if empty
+        std::string relay_name;
+        if (config.relay_names[i][0] != '\0') {
+            relay_name = config.relay_names[i];
+        } else {
+            relay_name = "Relay " + std::to_string(i + 1);
+        }
         ss << "<button class='relay-button' data-relay='" << (i + 1) << "' onclick='toggleRelay(" << (i + 1) << ")'>"
-           << "Relay " << (i + 1) << "</button>";
+           << relay_name << "</button>";
     }
     ss << R"(
                 </div>
@@ -649,7 +663,12 @@ ss << R"(
                 
                 // If the relay was turned on, update the active antenna display
                 if (result.state) {
-                    document.getElementById("active-antenna").textContent = "Antenna " + relay;
+                    const relayButton = document.querySelector(`button[data-relay="${relay}"]`);
+                    if (relayButton && relayButton.textContent.trim() && relayButton.textContent.trim() !== `Relay ${relay}`) {
+                        document.getElementById("active-antenna").textContent = relayButton.textContent.trim();
+                    } else {
+                        document.getElementById("active-antenna").textContent = "Relay " + relay;
+                    }
                 }
 
                 // Check if this relay supports multiple bands
@@ -749,7 +768,22 @@ ss << R"(
                     // Convert Hz to MHz and format with 3 decimal places
                     const freqMHz = (data.frequency / 1000000).toFixed(3);
                     document.getElementById("current-frequency").textContent = freqMHz + " MHz";
-                    document.getElementById("active-antenna").textContent = data.antenna;
+                    // If antenna is a number, convert to custom name
+                    if (!isNaN(data.antenna.replace("Antenna ", "")) && data.antenna.startsWith("Antenna ")) {
+                        const antennaNum = parseInt(data.antenna.replace("Antenna ", ""));
+                        if (antennaNum > 0 && antennaNum <= 16) {
+                            const relayButton = document.querySelector(`button[data-relay="${antennaNum}"]`);
+                            if (relayButton && relayButton.textContent.trim() && relayButton.textContent.trim() !== `Relay ${antennaNum}`) {
+                                document.getElementById("active-antenna").textContent = relayButton.textContent.trim();
+                            } else {
+                                document.getElementById("active-antenna").textContent = `Relay ${antennaNum}`;
+                            }
+                        } else {
+                            document.getElementById("active-antenna").textContent = data.antenna;
+                        }
+                    } else {
+                        document.getElementById("active-antenna").textContent = data.antenna;
+                    }
 
                     // Update Radio B status display if elements exist
                     const freqBElement = document.getElementById("current-frequency-b");
@@ -763,7 +797,21 @@ ss << R"(
                             freqBElement.textContent = "N/A";
                         }
                         if (data.hasOwnProperty('antenna_b')) {
-                            antennaBElement.textContent = data.antenna_b;
+                            if (!isNaN(data.antenna_b.replace("Antenna ", "")) && data.antenna_b.startsWith("Antenna ")) {
+                                const antennaBNum = parseInt(data.antenna_b.replace("Antenna ", ""));
+                                if (antennaBNum > 0 && antennaBNum <= 16) {
+                                    const relayButton = document.querySelector(`button[data-relay="${antennaBNum}"]`);
+                                    if (relayButton && relayButton.textContent.trim() && relayButton.textContent.trim() !== `Relay ${antennaBNum}`) {
+                                        antennaBElement.textContent = relayButton.textContent.trim();
+                                    } else {
+                                        antennaBElement.textContent = `Relay ${antennaBNum}`;
+                                    }
+                                } else {
+                                    antennaBElement.textContent = data.antenna_b;
+                                }
+                            } else {
+                                antennaBElement.textContent = data.antenna_b;
+                            }
                         } else {
                             antennaBElement.textContent = "None";
                         }
@@ -1105,6 +1153,37 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "</label>";
     ss_buffer << "</div>";
 
+    ss_buffer << "<div class='relay-names-container' style='background-color: var(--card-background-color); border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 30px;'>";
+    ss_buffer << "<h2>Relay Names</h2>";
+    ss_buffer << "<p>Configure names for each relay:</p>";
+    
+    ss_buffer << "<table class='relay-names-table' style='width: 100%; border-collapse: collapse; margin-top: 15px;'>";
+    ss_buffer << "<thead><tr><th>Relay</th><th>Custom Name</th></tr></thead>";
+    ss_buffer << "<tbody>";
+    
+    // First 8 relays (Radio A)
+    for (int i = 0; i < 8; i++) {
+        // Use default name if custom name is empty
+        std::string display_name;
+        if (config.relay_names[i][0] != '\0') {
+            display_name = config.relay_names[i];
+        } else {
+            display_name = "Relay " + std::to_string(i + 1);
+        }
+        
+        ss_buffer << "<tr>";
+        ss_buffer << "<td>Relay " << (i + 1) << " (Radio A)</td>";
+        ss_buffer << "<td><input type='text' name='relay_name_" << i << "' value='" 
+                  << display_name << "' maxlength='31' onchange='mirrorRelayName(" << i << ", " << (i + 8) << ")'></td>";
+        ss_buffer << "</tr>";
+    }
+    
+    // We don't need to show Radio B relay names in the configuration page
+    // They are automatically mirrored from Radio A
+    
+    ss_buffer << "</tbody></table>";
+    ss_buffer << "</div>";
+
     ss_buffer << "<div class='button-container' style='margin: 20px 0;'>";
     ss_buffer << "<input type='submit' value='Update Configuration' class='button'>";
     ss_buffer << "</div>";
@@ -1159,8 +1238,22 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
             mqtt_password: formData.get('mqtt_password') || '',
             mqtt_client_id: formData.get('mqtt_client_id') || 'core-mosquitto',
             mqtt_topic: formData.get('mqtt_topic') || 'omnirig/frequent/radio_info',
-            bands: []
+            bands: [],
+            relay_names: []
         };
+        
+        // Process relay names
+        for (let i = 0; i < 8; i++) {
+            // Get Radio A relay name, use default if empty
+            let name = formData.get(`relay_name_${i}`);
+            if (!name || name.trim() === '') {
+                name = `Relay ${i+1}`;
+            }
+            config.relay_names[i] = name;
+            
+            // Mirror to Radio B (i+8)
+            config.relay_names[i+8] = name;
+        }
         
         // Process bands
         for (let i = 0; i < config.num_bands; i++) {
@@ -1357,18 +1450,39 @@ for (const auto &[fst, snd] : HtmlContent::band_info) {
     document.getElementById('num_antenna_ports').addEventListener('change', debounce(updateAntennaPorts, 250));
     document.getElementById('num_bands').addEventListener('change', debounce(updateBandRows, 250));
 
+    function mirrorRelayName(sourceIndex, targetIndex) {
+        // When a Radio A relay name is changed, update the corresponding Radio B relay name
+        // in the form data that will be submitted (even though we don't show the B inputs)
+        const sourceInput = document.querySelector(`input[name="relay_name_${sourceIndex}"]`);
+        if (sourceInput) {
+            // Create a hidden input for the Radio B relay if it doesn't exist
+            let targetInput = document.querySelector(`input[name="relay_name_${targetIndex}"]`);
+            if (!targetInput) {
+                targetInput = document.createElement('input');
+                targetInput.type = 'hidden';
+                targetInput.name = `relay_name_${targetIndex}`;
+                document.getElementById('configForm').appendChild(targetInput);
+            }
+            targetInput.value = sourceInput.value;
+        }
+    }
+
     function toggleRadioBPortVisibility() {
         const mode = document.getElementById('radio_operation_mode').value;
         const radioBPortHeader = document.getElementById('antenna_ports_b_header');
         const radioBPortCells = document.querySelectorAll('.radio_b_ports_cell');
+        const radioBRelayRows = document.querySelectorAll('.radio_b_relay_row');
 
-        const showRadioBPorts = mode !== 'SINGLE_A';
+        const showRadioB = mode !== 'SINGLE_A';
         
         if (radioBPortHeader) {
-            radioBPortHeader.style.display = showRadioBPorts ? '' : 'none';
+            radioBPortHeader.style.display = showRadioB ? '' : 'none';
         }
         radioBPortCells.forEach(cell => {
-            cell.style.display = showRadioBPorts ? '' : 'none';
+            cell.style.display = showRadioB ? '' : 'none';
+        });
+        radioBRelayRows.forEach(row => {
+            row.style.display = showRadioB ? '' : 'none';
         });
 
         const interlockDiv = document.getElementById('interlock_options_div');

@@ -75,6 +75,12 @@ esp_err_t ConfigManager::init() const {
             }
         }
 
+        // Initialize relay names with defaults
+        for (int i = 0; i < 16; i++) {
+            snprintf(current_config_->relay_names[i], sizeof(current_config_->relay_names[i]), 
+                    "Relay %d", i + 1);
+        }
+
         // Set default bands for both radios
         const char* default_band_names[10] = {
             "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
@@ -292,6 +298,23 @@ esp_err_t ConfigManager::save_to_nvs() const {
         ESP_LOGE(TAG, "Error committing NVS changes for last_used_antenna: %s", esp_err_to_name(lua_commit_err));
         if (ret == ESP_OK) ret = lua_commit_err; // Preserve first error
     }
+    
+    // Save relay names
+    for (int i = 0; i < 16; i++) {
+        char key[20];
+        snprintf(key, sizeof(key), "relay_name_%d", i);
+        esp_err_t name_err = nvs_set_str(nvs_handle, key, current_config_->relay_names[i]);
+        if (name_err != ESP_OK) {
+            ESP_LOGE(TAG, "Error saving relay name %d: %s", i, esp_err_to_name(name_err));
+            if (ret == ESP_OK) ret = name_err; // Preserve first error
+        }
+    }
+    
+    esp_err_t names_commit_err = nvs_commit(nvs_handle);
+    if (names_commit_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error committing NVS changes for relay names: %s", esp_err_to_name(names_commit_err));
+        if (ret == ESP_OK) ret = names_commit_err; // Preserve first error
+    }
 
     nvs_close(nvs_handle);
     return ret;
@@ -488,6 +511,29 @@ esp_err_t ConfigManager::load_from_nvs() const {
                 ESP_LOGE(TAG, "Error loading %s: %s. Defaulting to 0.", key, esp_err_to_name(lua_err));
                 current_config_->last_used_antenna[r_idx][b_idx] = 0; // Default on error
             }
+        }
+    }
+
+    // Load relay names
+    for (int i = 0; i < 16; i++) {
+        char key[20];
+        snprintf(key, sizeof(key), "relay_name_%d", i);
+        size_t len = sizeof(current_config_->relay_names[i]);
+        esp_err_t name_err = nvs_get_str(nvs_handle, key, current_config_->relay_names[i], &len);
+        
+        if (name_err == ESP_ERR_NVS_NOT_FOUND) {
+            // If name not found, set default
+            snprintf(current_config_->relay_names[i], sizeof(current_config_->relay_names[i]), 
+                    "Relay %d", i + 1);
+        } else if (name_err != ESP_OK) {
+            ESP_LOGE(TAG, "Error loading relay name %d: %s", i, esp_err_to_name(name_err));
+            // Set default on error
+            snprintf(current_config_->relay_names[i], sizeof(current_config_->relay_names[i]), 
+                    "Relay %d", i + 1);
+        }
+        // Ensure null termination
+        else if (len == sizeof(current_config_->relay_names[i])) {
+            current_config_->relay_names[i][len-1] = '\0';
         }
     }
 

@@ -387,6 +387,20 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     if (cJSON_IsString(mqtt_broker)) {
         strncpy(new_config.mqtt_broker, mqtt_broker->valuestring, sizeof(new_config.mqtt_broker) - 1);
     }
+    
+    // Parse relay names
+    const cJSON *relay_names = cJSON_GetObjectItem(root, "relay_names");
+    if (cJSON_IsArray(relay_names)) {
+        const int num_names = cJSON_GetArraySize(relay_names);
+        for (int i = 0; i < num_names && i < 16; i++) {
+            const cJSON *name = cJSON_GetArrayItem(relay_names, i);
+            if (cJSON_IsString(name) && name->valuestring != nullptr) {
+                strncpy(new_config.relay_names[i], name->valuestring, sizeof(new_config.relay_names[i]) - 1);
+                new_config.relay_names[i][sizeof(new_config.relay_names[i]) - 1] = '\0';
+                ESP_LOGI(TAG, "Relay %d name: %s", i+1, new_config.relay_names[i]);
+            }
+        }
+    }
 
     const cJSON *mqtt_port = cJSON_GetObjectItem(root, "mqtt_port");
     if (cJSON_IsNumber(mqtt_port)) {
