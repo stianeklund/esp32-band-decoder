@@ -10,6 +10,7 @@
 #include "restart_manager.h"
 #include "system_initializer.h"
 #include "relay_controller.h"
+#include "webserver.h"
 #include "wifi_manager.hpp"
 
 static auto TAG = "MAIN";
@@ -84,6 +85,34 @@ extern "C" [[noreturn]] void app_main(void) {
 
     g_relay_controller = relay_controller;
     ESP_LOGI(TAG, "Antenna Switch Controller initialized successfully");
+
+    // Initialize WebServer
+    ESP_LOGI(TAG, "Initializing WebServer...");
+    if (WebServer::instance().init() != ESP_OK) { 
+        ESP_LOGE(TAG, "Failed to initialize WebServer");
+        if (ret == ESP_OK) ret = ESP_FAIL; 
+        goto error_handler;
+    }
+    
+    // Start WebServer (which now also registers core handlers)
+    ESP_LOGI(TAG, "Starting WebServer and registering core handlers...");
+    if (WebServer::instance().start() != ESP_OK) { 
+        ESP_LOGE(TAG, "Failed to start WebServer or register core handlers");
+        if (ret == ESP_OK) ret = ESP_FAIL; 
+        // WebServer::start() should handle its own cleanup (stopping m_server) on failure
+        goto error_handler;
+    }
+    
+    // Register WebServer URI handlers
+    ESP_LOGI(TAG, "Registering WebServer URI handlers...");
+    if (WebServer::instance().register_uri_handlers() != ESP_OK) { 
+        ESP_LOGE(TAG, "Failed to register WebServer URI handlers");
+        if (ret == ESP_OK) ret = ESP_FAIL; 
+        WebServer::instance().stop(); // Stop the server if handlers fail
+        goto error_handler;
+    }
+
+    ESP_LOGI(TAG, "WebServer started and all handlers registered successfully.");
 
     // Main loop
     while (true) {
