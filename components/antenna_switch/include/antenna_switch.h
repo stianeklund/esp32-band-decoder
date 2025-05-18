@@ -73,6 +73,7 @@ public:
     esp_err_t init();
     esp_err_t set_config(const antenna_switch_config_t *config);
     esp_err_t get_config(antenna_switch_config_t *config);
+    const antenna_switch_config_t& get_config_ref() const;
     esp_err_t set_frequency(uint32_t frequency);
     esp_err_t set_auto_mode(bool auto_mode);
     esp_err_t set_relay(int relay_id, bool state);

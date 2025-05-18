@@ -60,6 +60,10 @@ esp_err_t AntennaSwitch::get_config(antenna_switch_config_t *config) {
     return ESP_OK;
 }
 
+const antenna_switch_config_t& AntennaSwitch::get_config_ref() const {
+    return ConfigManager::instance().get_config();
+}
+
 esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
     ESP_LOGV(TAG, "Setting antenna for frequency: %lu Hz", frequency);
 
