@@ -56,18 +56,20 @@ public:
     static esp_err_t relay_status_handler(httpd_req_t *req);
     static esp_err_t relay_control_handler(httpd_req_t *req);
 
+    /**
+     * Register URI handlers for the web server.
+     * This must be called after init() and before start().
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t register_uri_handlers() const;
+
 private:
     // Private constructor for singleton pattern
     WebServer();
 
     // Delete copy constructor and assignment operator
-    WebServer(const WebServer&) = delete;
-    WebServer& operator=(const WebServer&) = delete;
-
-
-
-    // Private helper methods
-    esp_err_t register_handlers() const;
+    WebServer(const WebServer&);
+    WebServer& operator=(const WebServer&);
     
     // Member variables
     httpd_handle_t m_server;

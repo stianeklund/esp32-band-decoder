@@ -164,8 +164,8 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
         ("Antenna " + std::to_string(active_antenna_a_num)).c_str() : "None");
     cJSON_AddBoolToObject(root, "transmitting", is_transmitting);
     
-    // Refine available_antennas logic for Radio A
     std::vector<int> available_antennas_a;
+
     if (current_freq > 0) { // Only if frequency is known for Radio A
         for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
             const auto &band_cfg = config.bands[0][band_idx]; // Radio A band config (bands[0])
@@ -201,13 +201,13 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
 
         // Placeholder for Radio B frequency and transmit state.
         // These would need a proper source, e.g., a second CAT parser instance or MQTT.
-        uint32_t current_freq_b = 0; 
-        bool is_transmitting_b = false; 
+        constexpr uint32_t current_freq_b = 0;
+        constexpr auto is_transmitting_b = false;
         cJSON_AddNumberToObject(root, "frequency_b", current_freq_b);
         cJSON_AddBoolToObject(root, "transmitting_b", is_transmitting_b);
 
         // Placeholder for available_antennas_b. This will be empty until current_freq_b is known.
-        std::vector<int> available_antennas_b_list;
+
         // Example logic if current_freq_b were available:
         /*
         if (current_freq_b > 0) {
@@ -226,7 +226,8 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
         }
         */
         cJSON *antennas_b_json = cJSON_CreateArray();
-        for (int antenna : available_antennas_b_list) {
+
+        for (constexpr std::vector<int> available_antennas_b_list; int antenna : available_antennas_b_list) {
             cJSON_AddItemToArray(antennas_b_json, cJSON_CreateNumber(antenna));
         }
         cJSON_AddItemToObject(root, "available_antennas_b", antennas_b_json);
@@ -234,6 +235,7 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
 
     char *json_string = cJSON_Print(root);
     ESP_LOGD(TAG, "Sending JSON response: %s", json_string);
+
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json_string);
 
@@ -286,6 +288,7 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     // Parse radio_operation_mode
     const cJSON *radio_op_mode_json = cJSON_GetObjectItem(root, "radio_operation_mode");
     if (cJSON_IsString(radio_op_mode_json) && radio_op_mode_json->valuestring != nullptr) {
+
         if (strcmp(radio_op_mode_json->valuestring, "SINGLE_A") == 0) {
             new_config.radio_operation_mode = RADIO_OP_MODE_SINGLE_A;
         } else if (strcmp(radio_op_mode_json->valuestring, "ALTERNATING_AB") == 0) {
@@ -760,8 +763,15 @@ esp_err_t WebServer::relay_control_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-esp_err_t WebServer::register_handlers() const
+esp_err_t WebServer::register_uri_handlers() const
 {
+    // Register global error handler first
+    esp_err_t ret = httpd_register_err_handler(m_server, HTTPD_500_INTERNAL_SERVER_ERROR, error_handler);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register error handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
     static constexpr httpd_uri_t root = {
         .uri       = "/",
         .method    = HTTP_GET,
@@ -832,8 +842,7 @@ esp_err_t WebServer::register_handlers() const
         .user_ctx = nullptr
     };
 
-    ESP_LOGD(TAG, "Registering URI handlers");
-    esp_err_t ret;
+    ESP_LOGV(TAG, "Registering URI handlers");
     
     ret = httpd_register_uri_handler(m_server, &root);
     if (ret != ESP_OK) {
@@ -903,13 +912,14 @@ esp_err_t WebServer::init() {
     
     m_config = HTTPD_DEFAULT_CONFIG();
     m_config.stack_size = 8192;
+    m_config.task_priority = tskIDLE_PRIORITY+5;
     m_config.max_uri_handlers = 12;
-    m_config.max_resp_headers = 8;
-    m_config.lru_purge_enable = true;  // Enable LRU purging for large requests
-    m_config.recv_wait_timeout = 10;
+    m_config.max_resp_headers = 4;
+    m_config.lru_purge_enable = true;    // Enable LRU purging for large requests
+    m_config.recv_wait_timeout = 5;
     m_config.uri_match_fn = httpd_uri_match_wildcard;
-    m_config.keep_alive_enable = false;  // Disable keep-alive to force connection closure
-    m_config.max_open_sockets = 7;       // Set maximum concurrent connections
+    m_config.keep_alive_enable = false;
+    m_config.max_open_sockets = 3;
 
     return ESP_OK;
 }
@@ -932,18 +942,10 @@ esp_err_t WebServer::start() {
             return ret;
         }
 
-        // Register global error handler
-        httpd_register_err_handler(m_server, HTTPD_500_INTERNAL_SERVER_ERROR, error_handler);
+        // URI handlers and error handlers are now registered via a separate call 
+        // to register_uri_handlers() from main.cpp before calling start().
 
-        // Register URI handlers
-        ret = register_handlers();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Error registering URI handlers: %s", esp_err_to_name(ret));
-            stop();
-            return ret;
-        }
-
-        ESP_LOGI(TAG, "Server started successfully");
+        ESP_LOGI(TAG, "Server daemon started successfully. URI Handlers should be registered separately.");
     }
     return ESP_OK;
 }
