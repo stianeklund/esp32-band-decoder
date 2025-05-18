@@ -79,19 +79,20 @@ esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
     constexpr auto current_radio_context = RadioID::A;
 
     for (int i = 0; i < config.num_bands; i++) { // i is band_index
+        // ReSharper disable once CppTooWideScopeInitStatement
         const auto &band_config_for_radio = config.bands[radio_idx_numeric][i];
         if (frequency >= band_config_for_radio.start_freq &&
             frequency <= band_config_for_radio.end_freq) {
             
             int target_relay_id = 0;
-            uint8_t preferred_antenna = config.last_used_antenna[radio_idx_numeric][i];
+            const uint8_t preferred_antenna = config.last_used_antenna[radio_idx_numeric][i];
 
             // Check if preferred antenna is valid (1-based) and configured for this band
             if (preferred_antenna != 0 && 
                 preferred_antenna <= config.num_antenna_ports &&
                 band_config_for_radio.antenna_ports[preferred_antenna - 1]) {
                 target_relay_id = preferred_antenna;
-                ESP_LOGI(TAG, "Using preferred antenna %d for Radio %c, Band %d (Freq: %lu Hz)",
+                ESP_LOGD(TAG, "Using preferred antenna %d for Radio %c, Band %d (Freq: %lu Hz)",
                          target_relay_id, (current_radio_context == RadioID::A ? 'A' : 'B'), i, frequency);
             } else {
                 // Fallback: Find the first available antenna port for this band
@@ -130,10 +131,17 @@ esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
 esp_err_t AntennaSwitch::set_auto_mode(const bool auto_mode) {
     ESP_LOGD(TAG, "Setting auto mode: %s", auto_mode ? "ON" : "OFF");
 
-    auto config = ConfigManager::instance().get_config();
-    config.auto_mode = auto_mode;
+    const auto config_ptr = std::make_unique<antenna_switch_config_t>();
+    if (!config_ptr) {
+        ESP_LOGE(TAG, "Failed to allocate memory for config in set_auto_mode");
+        return ESP_ERR_NO_MEM;
+    }
+    // Populate the heap-allocated config with current settings
+    *config_ptr = ConfigManager::instance().get_config(); // Copy from ConfigManager's version
 
-    return ConfigManager::instance().update_config(config);
+    config_ptr->auto_mode = auto_mode;
+
+    return ConfigManager::instance().update_config(*config_ptr);
 }
 
 esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
@@ -162,50 +170,59 @@ esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
 
     // All interlock and safety logic is now handled by RelayController::execute_relay_change
     // The band_number is -1 here as this is a direct relay set, not tied to a specific band's auto-selection.
-    esp_err_t err = relay_controller_->set_relay_for_antenna(relay_id, /*band_number=*/-1, radio, state);
+    const esp_err_t err = relay_controller_->set_relay_for_antenna(relay_id, /*band_number=*/-1, radio, state);
 
     // If turning a relay ON successfully, update last_used_antenna preference
     if (state && err == ESP_OK) {
-        antenna_switch_config_t current_cfg; // Get a mutable copy
-        if (get_config(&current_cfg) == ESP_OK) {
-            // Use cat_parser_get_frequency() to determine the current band context.
-            // This assumes the CAT frequency is relevant for the radio whose relay is being changed.
-            uint32_t current_freq = cat_parser_get_frequency(); 
-            int band_idx = -1;
-            size_t radio_numeric_idx = static_cast<size_t>(radio);
+        auto current_cfg_ptr = std::make_unique<antenna_switch_config_t>();
+        if (!current_cfg_ptr) {
+            ESP_LOGE(TAG, "Failed to allocate memory for config in set_relay; skipping preference update.");
+            // Note: The relay operation itself (err) was successful. We log and skip preference update.
+        } else {
+            if (get_config(current_cfg_ptr.get()) == ESP_OK) {
+                // Use cat_parser_get_frequency() to determine the current band context.
+                // This assumes the CAT frequency is relevant for the radio whose relay is being changed.
+                const uint32_t current_freq = cat_parser_get_frequency();
+                int band_idx = -1;
+                const size_t radio_numeric_idx = static_cast<size_t>(radio);
 
-            // Find band_idx for the current frequency on the specific radio
-            for (int i = 0; i < current_cfg.num_bands; i++) {
-                const auto& band_config_for_radio = current_cfg.bands[radio_numeric_idx][i];
-                if (current_freq >= band_config_for_radio.start_freq && current_freq <= band_config_for_radio.end_freq) {
-                    band_idx = i;
-                    break;
+                // Find band_idx for the current frequency on the specific radio
+                for (int i = 0; i < current_cfg_ptr->num_bands; i++) {
+                    // ReSharper disable once CppTooWideScopeInitStatement
+                    const auto& band_config_for_radio = current_cfg_ptr->bands[radio_numeric_idx][i];
+                    if (current_freq >= band_config_for_radio.start_freq && current_freq <= band_config_for_radio.end_freq) {
+                        band_idx = i;
+                        break;
+                    }
                 }
-            }
 
-            if (band_idx != -1) {
-                // Check if the selected relay is actually configured for this band for this radio
-                if (relay_id > 0 && relay_id <= current_cfg.num_antenna_ports &&
-                    current_cfg.bands[radio_numeric_idx][band_idx].antenna_ports[relay_id - 1]) {
+                if (band_idx != -1) {
+                    // Check if the selected relay is actually configured for this band for this radio
+                    if (relay_id > 0 && relay_id <= current_cfg_ptr->num_antenna_ports &&
+                        current_cfg_ptr->bands[radio_numeric_idx][band_idx].antenna_ports[relay_id - 1]) {
 
-                    if (current_cfg.last_used_antenna[radio_numeric_idx][band_idx] != static_cast<uint8_t>(relay_id)) {
-                        ESP_LOGI(TAG, "Updating last used antenna for Radio %c, Band %d to Relay %d (Freq: %lu Hz)",
-                                 (radio == RadioID::A ? 'A' : 'B'), band_idx, relay_id, current_freq);
-                        current_cfg.last_used_antenna[radio_numeric_idx][band_idx] = static_cast<uint8_t>(relay_id);
-                        
-                        // Persist this change by calling update_config which handles saving to NVS
-                        esp_err_t save_err = ConfigManager::instance().update_config(current_cfg);
-                        if (save_err != ESP_OK) {
-                            ESP_LOGE(TAG, "Failed to save updated last_used_antenna: %s", esp_err_to_name(save_err));
+                        if (current_cfg_ptr->last_used_antenna[radio_numeric_idx][band_idx] != static_cast<uint8_t>(relay_id)) {
+                            ESP_LOGD(TAG, "Updating last used antenna for Radio %c, Band %d to Relay %d (Freq: %lu Hz)",
+                                     (radio == RadioID::A ? 'A' : 'B'), band_idx, relay_id, current_freq);
+                            current_cfg_ptr->last_used_antenna[radio_numeric_idx][band_idx] = static_cast<uint8_t>(relay_id);
+
+                            // Persist this change by calling update_config which handles saving to NVS
+                            const esp_err_t save_err = ConfigManager::instance().update_config(*current_cfg_ptr);
+
+                            if (save_err != ESP_OK) {
+                                ESP_LOGE(TAG, "Failed to save updated last_used_antenna: %s", esp_err_to_name(save_err));
+                            }
                         }
+                    } else {
+                        ESP_LOGW(TAG, "Relay %d is not configured for Radio %c, Band %d (Freq: %lu Hz). Not updating preference.",
+                                 relay_id, (radio == RadioID::A ? 'A' : 'B'), band_idx, current_freq);
                     }
                 } else {
-                    ESP_LOGW(TAG, "Relay %d is not configured for Radio %c, Band %d (Freq: %lu Hz). Not updating preference.",
-                             relay_id, (radio == RadioID::A ? 'A' : 'B'), band_idx, current_freq);
+                    ESP_LOGD(TAG, "No current band found for Radio %c at Freq: %lu Hz. Not updating preference for relay %d.",
+                             (radio == RadioID::A ? 'A' : 'B'), current_freq, relay_id);
                 }
             } else {
-                ESP_LOGD(TAG, "No current band found for Radio %c at Freq: %lu Hz. Not updating preference for relay %d.",
-                         (radio == RadioID::A ? 'A' : 'B'), current_freq, relay_id);
+                ESP_LOGE(TAG, "Failed to get_config in set_relay; skipping preference update.");
             }
         }
     }
@@ -244,17 +261,22 @@ esp_err_t AntennaSwitch::get_relay_state(const int relay_id, bool *state) {
 esp_err_t AntennaSwitch::restart() {
     ESP_LOGI(TAG, "Restarting device...");
 
-    nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open("antenna_switch", NVS_READWRITE, &nvs_handle);
-
-    if (err == ESP_OK) {
-        nvs_commit(nvs_handle);
-        nvs_close(nvs_handle);
+    // Attempt to flush any pending configuration changes to NVS
+    ESP_LOGI(TAG, "Flushing pending configuration to NVS before restart...");
+    esp_err_t flush_err = ConfigManager::instance().flush_pending_save(pdMS_TO_TICKS(1000)); // Wait up to 1 second
+    if (flush_err == ESP_OK) {
+        ESP_LOGI(TAG, "Pending configuration successfully flushed to NVS.");
+    } else if (flush_err == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "Timeout flushing configuration to NVS before restart. Changes might not be saved.");
+    } else {
+        ESP_LOGE(TAG, "Error flushing configuration to NVS: %s. Changes might not be saved.", esp_err_to_name(flush_err));
     }
 
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Small delay to allow logging to complete and any other brief OS tasks
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     esp_restart();
+    return ESP_OK; // esp_restart() does not return
 }
 
 esp_err_t AntennaSwitch::set_relay_for_antenna(int relay_id, int band_number, RadioID radio, bool state) {

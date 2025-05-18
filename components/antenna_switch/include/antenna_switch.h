@@ -17,6 +17,13 @@ typedef enum {
     RADIO_OP_MODE_CONCURRENT_AB     // Radio A and Radio B can be active simultaneously on different antennas.
 } radio_operation_mode_t;
 
+// Enum for Antenna Switch operation mode
+// TODO implement whether or not we should rely on polling or AI2 for updates
+typedef enum {
+    AUTOMATIC, // Automatically selects antenna port based on band selection / setup
+    MANUAL,    // Requires manual selection
+} switch_operation_mode_t;
+
 #define MAX_BANDS 10
 #define MAX_ANTENNA_PORTS 8
 
@@ -84,7 +91,6 @@ public:
     // Set the relay controller reference
     void set_relay_controller(RelayController* controller);
 
-    // Extended API: select by radio (default Radio A)
     esp_err_t set_relay_for_antenna(int relay_id, int band_number, RadioID radio, bool state);
 
     esp_err_t set_relay_for_antenna(const int relay_id, const int band_number, const bool state) {
