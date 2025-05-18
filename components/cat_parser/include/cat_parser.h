@@ -62,6 +62,10 @@ private:
 
     esp_err_t process_ap_command(std::string_view command);
     esp_err_t process_ai_command(std::string_view command);
+    esp_err_t process_tx_command(std::string_view payload);
+    esp_err_t process_rx_command(std::string_view payload);
+
+    void process_accumulated_commands(std::string& accumulator); // Helper for uart_task
 
     static void uart_task_trampoline(void *arg);
 
@@ -80,7 +84,7 @@ private:
     int32_t rit_offset{0}; // RIT offset in Hz
     static constexpr auto TAG = "CAT_PARSER";
 
-    static CatParser *instance_;
+    // static CatParser *instance_; // Removed for pure Meyers' singleton
     std::atomic<bool> shutdown_requested;
     static constexpr int SERIAL_DATA_TIMEOUT_S = 5;  // 5 second timeout
     std::chrono::steady_clock::time_point last_serial_data_time;

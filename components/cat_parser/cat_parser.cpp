@@ -11,24 +11,21 @@
 #include <sys/param.h>
 #include "driver/gpio.h"
 #include <chrono>
-
-// Initialize static member
-CatParser *CatParser::instance_ = nullptr;
+#include <charconv>
 
 CatParser::CatParser()
     : uart2_queue(nullptr),
       shutdown_requested(false),
       last_serial_data_time(std::chrono::steady_clock::now()) {
-    if (instance_ == nullptr) {
-        instance_ = this;
-    }
 
     // Initialize command handlers
     command_handlers = {
-        {('F' << 8) | 'A', &CatParser::process_fa_command},
-        {('A' << 8) | 'I', &CatParser::process_ap_command},
-        {('A' << 8) | 'P', &CatParser::process_ap_command},
-        {('I' << 8) | 'F', &CatParser::process_if_command}
+        {'F' << 8 | 'A', &CatParser::process_fa_command},
+        {'A' << 8 | 'I', &CatParser::process_ai_command},
+        {'A' << 8 | 'P', &CatParser::process_ap_command},
+        {'I' << 8 | 'F', &CatParser::process_if_command},
+        {'T' << 8 | 'X', &CatParser::process_tx_command},
+        {'R' << 8 | 'X', &CatParser::process_rx_command}
     };
 }
 
@@ -38,10 +35,6 @@ CatParser::~CatParser() {
 
     // Give tasks time to shut down gracefully
     vTaskDelay(pdMS_TO_TICKS(200));
-
-    if (instance_ == this) {
-        instance_ = nullptr;
-    }
 
     // Cleanup UART resources
     if (uart2_queue != nullptr) {
@@ -56,7 +49,7 @@ CatParser &CatParser::instance() {
 }
 
 
-#define UART_TASK_STACK_SIZE 8192
+#define UART_TASK_STACK_SIZE 4096
 #define UART_QUEUE_SIZE 3
 
 esp_err_t CatParser::init() {
@@ -177,55 +170,28 @@ esp_err_t CatParser::init() {
 void CatParser::uart_task() {
     uart_event_t event;
     size_t buffered_size;
-    static char temp_buffer[128];
-    constexpr TickType_t xTicksToWait = pdMS_TO_TICKS(10);
-    int events_processed = 0;
+    uint8_t read_buf[128]; // Non-static local buffer
+    constexpr TickType_t xTicksToWait = pdMS_TO_TICKS(10); // Timeout for xQueueReceive
     std::string command_accumulator;
+    // Optional: Pre-reserve capacity if you have an estimate of typical command backlog size
+    // command_accumulator.reserve(256); 
+
+    ESP_LOGI(TAG, "CAT parser UART task started.");
 
     while (!shutdown_requested.load()) {
-        constexpr int MAX_EVENTS_PER_ITERATION = 5;
-        events_processed = 0;
-
-        while (events_processed < MAX_EVENTS_PER_ITERATION &&
-               xQueueReceive(uart2_queue, &event, xTicksToWait) == pdTRUE) {
-            events_processed++;
+        if (xQueueReceive(uart2_queue, &event, xTicksToWait) == pdTRUE) {
             MQTTClient::instance().set_has_serial_data(true);
             last_serial_data_time = std::chrono::steady_clock::now();
 
             switch (event.type) {
                 case UART_DATA: {
-                    if (uart_get_buffered_data_len(UART_NUM_2, &buffered_size) == ESP_OK) {
-                        const int len = uart_read_bytes(UART_NUM_2, temp_buffer,
-                                                        std::min(buffered_size, sizeof(temp_buffer) - 1),
-                                                        pdMS_TO_TICKS(1));
+                    if (uart_get_buffered_data_len(UART_NUM_2, &buffered_size) == ESP_OK && buffered_size > 0) {
+                        const int len = uart_read_bytes(UART_NUM_2, read_buf,
+                                                        std::min(buffered_size, sizeof(read_buf)),
+                                                        0); // No need to wait, data is already there
                         if (len > 0) {
-                            temp_buffer[len] = '\0';
-                            command_accumulator += temp_buffer;
-
-                            // Process complete commands
-                            size_t pos;
-                            while ((pos = command_accumulator.find(';')) != std::string::npos) {
-                                std::string cmd = command_accumulator.substr(0, pos);
-                                command_accumulator = command_accumulator.substr(pos + 1);
-                                ESP_LOGV(TAG, "Received:%s",cmd.c_str());
-
-                                // Only process FA and IF commands
-                                if (cmd.length() >= 2) {
-                                    if (cmd.substr(0, 2) == "FA") {
-                                        process_fa_command(cmd.substr(2));
-                                    } else if (cmd.substr(0, 2) == "IF") {
-                                        process_if_command(cmd.substr(2));
-                                    }
-                                    else if (cmd.substr(0, 2) == "TX") {
-                                        transmitting = true;
-                                    }
-                                    else if (cmd.substr(0, 2) == "RX") {
-                                        transmitting = false;
-                                    }
-
-                                    // Ignore all other commands
-                                }
-                            }
+                            command_accumulator.append(reinterpret_cast<char*>(read_buf), len);
+                            process_accumulated_commands(command_accumulator);
                         }
                     }
                     break;
@@ -233,25 +199,85 @@ void CatParser::uart_task() {
 
                 case UART_FIFO_OVF:
                 case UART_BUFFER_FULL:
-                    ESP_LOGW(TAG, "Buffer issue detected, flushing UART");
+                    ESP_LOGW(TAG, "UART buffer issue detected (type: %d), flushing UART and resetting queue.", event.type);
                     uart_flush_input(UART_NUM_2);
                     xQueueReset(uart2_queue);
-                    command_accumulator.clear(); // Clear accumulated data
+                    command_accumulator.clear(); // Clear any partial commands
                     break;
-
+                case UART_PARITY_ERR:
+                    ESP_LOGW(TAG, "UART parity error");
+                    break;
+                case UART_FRAME_ERR:
+                    ESP_LOGW(TAG, "UART frame error");
+                    break;
                 default:
                     break;
             }
+        } else {
+            // xQueueReceive timed out, no new UART event
+            if (auto now = std::chrono::steady_clock::now(); std::chrono::duration_cast<std::chrono::seconds>(
+                    now - last_serial_data_time).count() > SERIAL_DATA_TIMEOUT_S) {
+
+                // Check current state before setting to avoid redundant calls if already false
+                // This assumes MQTTClient::instance().get_has_serial_data() or similar exists,
+                // or that set_has_serial_data(false) is cheap.
+                // For now, using the existing direct call:
+                MQTTClient::instance().set_has_serial_data(false);
+            }
         }
-        // Check if serial data has become stale
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(
-                now - last_serial_data_time).count() > SERIAL_DATA_TIMEOUT_S) {
-            MQTTClient::instance().set_has_serial_data(false);
+        // Yield to allow other tasks to run. This is important for system responsiveness.
+        taskYIELD();
+    }
+    ESP_LOGI(TAG, "CAT parser UART task shutting down.");
+}
+
+void CatParser::process_accumulated_commands(std::string& accumulator) {
+    size_t process_start_pos = 0; 
+
+    while (process_start_pos < accumulator.length()) {
+        const size_t end_delim_pos = accumulator.find(';', process_start_pos);
+        
+        if (end_delim_pos == std::string::npos) {
+            // No more complete commands (no ';') in the remaining part of the accumulator.
+            // Break and leave the partial command (if any) for the next data arrival.
+            break; 
         }
 
-        // Always yield after processing events or timeout
-        taskYIELD();
+        // Create a view for the command string (from current start up to delimiter)
+        std::string_view cmd_full_str_view(&accumulator[process_start_pos], end_delim_pos - process_start_pos);
+        
+        ESP_LOGV(TAG, "Processing from accumulator: %.*s", static_cast<int>(cmd_full_str_view.length()), cmd_full_str_view.data());
+
+        if (cmd_full_str_view.length() >= 2) { // Command must be at least 2 chars
+            uint16_t cmd_code = static_cast<uint16_t>(cmd_full_str_view[0]) << 8 | cmd_full_str_view[1];
+
+            const std::string_view cmd_payload = cmd_full_str_view.length() > 2 ?
+                                           cmd_full_str_view.substr(2) :
+                                           std::string_view();
+
+            if (auto handler_it = command_handlers.find(cmd_code); handler_it != command_handlers.end()) {
+                if (handler_it->second) { // Check if the function pointer is not null
+                    const CommandHandler handler = handler_it->second;
+                    if (const esp_err_t ret = (this->*handler)(cmd_payload); ret != ESP_OK) {
+                        ESP_LOGW(TAG, "Command handler for '%.*s' returned error %s", 
+                                 static_cast<int>(cmd_full_str_view.substr(0,2).length()), cmd_full_str_view.substr(0,2).data(), 
+                                 esp_err_to_name(ret));
+                    }
+                }
+            } else {
+                ESP_LOGV(TAG, "No handler for command prefix: '%.*s'", static_cast<int>(cmd_full_str_view.substr(0,2).length()), cmd_full_str_view.substr(0,2).data());
+            }
+        } else if (!cmd_full_str_view.empty()) {
+            ESP_LOGD(TAG, "Short command received (length < 2): %.*s", static_cast<int>(cmd_full_str_view.length()), cmd_full_str_view.data());
+        }
+
+        // Advance start position past the processed command and its delimiter
+        process_start_pos = end_delim_pos + 1;
+    }
+
+    // After processing all complete commands, remove them from the beginning of the accumulator string
+    if (process_start_pos > 0) {
+        accumulator.erase(0, process_start_pos);
     }
 }
 
@@ -273,10 +299,10 @@ esp_err_t CatParser::handle_frequency_change(const uint32_t frequency) {
         return ESP_OK;
     }
 
-    // Get new frequency's band index
+    // Get a new frequency's band index
     const int new_band_index = get_band_index(frequency);
 
-    // Switch antenna if band changed or no valid band was set
+    // Switch antenna if the band changed or no valid band was set
     if (current_band_index != new_band_index) {
         ESP_LOGV(TAG, "Frequency requires band change, setting new antenna");
 
@@ -298,69 +324,78 @@ esp_err_t CatParser::handle_frequency_change(const uint32_t frequency) {
     return ESP_OK;
 }
 
-// TODO
+// ReSharper disable once CppMemberFunctionMayBeStatic
 esp_err_t CatParser::process_ai_command(const std::string_view command) {
-    char *endptr;
+    unsigned long ports_val;
+    const char* const start_ptr = command.data();
+    const char* const end_ptr = command.data() + command.length();
+    auto result = std::from_chars(start_ptr, end_ptr, ports_val);
 
-    // Convert string_view to C string for strtoul
-    const std::string ports_str(command);
-    const unsigned long ports = strtoul(ports_str.c_str(), &endptr, 10);
+    if (result.ec == std::errc() && result.ptr == end_ptr) {
+        ESP_LOGD(TAG, "Setting antenna ports (AI): %lu", ports_val);
 
-    if (*endptr != '\0') {
-        ESP_LOGE(TAG, "Invalid ports format in command: %.*s",
-                 static_cast<int>(command.length()), command.data());
-        return ESP_ERR_INVALID_ARG;
+        if (ports_val > UINT8_MAX) {
+            ESP_LOGE(TAG, "Ports value %lu for AI command exceeds uint8_t max", ports_val);
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        antenna_switch_config_t config; // Stack allocation of large struct
+        esp_err_t ret = AntennaSwitch::instance().get_config(&config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get config for AI command: %s", esp_err_to_name(ret));
+            return ret;
+        }
+
+        config.num_antenna_ports = static_cast<uint8_t>(ports_val);
+        ret = AntennaSwitch::instance().set_config(&config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set config for AI command: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        return ESP_OK;
     }
-
-    ESP_LOGD(TAG, "Setting antenna ports: %lu", ports);
-    antenna_switch_config_t config;
-    esp_err_t ret = AntennaSwitch::instance().get_config(&config);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get config: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    config.num_antenna_ports = ports;
-    ret = AntennaSwitch::instance().set_config(&config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set config: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    return ESP_OK;
+    ESP_LOGE(TAG, "Invalid ports format in AI command: %.*s",
+             static_cast<int>(command.length()), command.data());
+    return ESP_ERR_INVALID_ARG;
 }
+
+// ReSharper disable once CppMemberFunctionMayBeStatic
 esp_err_t CatParser::process_ap_command(const std::string_view command) {
-    char *endptr;
+    unsigned long ports_val;
+    const char* const start_ptr = command.data();
+    const char* const end_ptr = command.data() + command.length();
+    auto result = std::from_chars(start_ptr, end_ptr, ports_val);
 
-    // Convert string_view to C string for strtoul
-    const std::string ports_str(command);
-    const unsigned long ports = strtoul(ports_str.c_str(), &endptr, 10);
+    if (result.ec == std::errc() && result.ptr == end_ptr) {
+        ESP_LOGD(TAG, "Setting antenna ports (AP): %lu", ports_val);
 
-    if (*endptr != '\0') {
-        ESP_LOGE(TAG, "Invalid ports format in command: %.*s",
+        if (ports_val > UINT8_MAX) {
+            ESP_LOGE(TAG, "Ports value %lu for AP command exceeds uint8_t max", ports_val);
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        antenna_switch_config_t config; // Stack allocation of large struct
+        esp_err_t ret = AntennaSwitch::instance().get_config(&config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get config for AP command: %s", esp_err_to_name(ret));
+            return ret;
+        }
+
+        config.num_antenna_ports = static_cast<uint8_t>(ports_val);
+        ret = AntennaSwitch::instance().set_config(&config);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set config for AP command: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        return ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "Invalid ports format in AP command: %.*s",
                  static_cast<int>(command.length()), command.data());
         return ESP_ERR_INVALID_ARG;
     }
-
-    ESP_LOGD(TAG, "Setting antenna ports: %lu", ports);
-    antenna_switch_config_t config;
-    esp_err_t ret = AntennaSwitch::instance().get_config(&config);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get config: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    config.num_antenna_ports = ports;
-    ret = AntennaSwitch::instance().set_config(&config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set config: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    return ESP_OK;
 }
 
-void CatParser::handle_frequency_update(uint32_t frequency) {
+void CatParser::handle_frequency_update(const uint32_t frequency) {
     ESP_LOGD(TAG, "Handling frequency update: %lu Hz", frequency);
     handle_frequency_change(frequency);
 }
@@ -376,7 +411,7 @@ esp_err_t CatParser::process_command(const char *command) {
     size_t commands_processed = 0;
 
     while (start < cmd_str.length()) {
-        if (constexpr size_t MAX_COMMANDS_PER_BATCH = 5; commands_processed >= MAX_COMMANDS_PER_BATCH) {
+        if (constexpr size_t MAX_COMMANDS_PER_BATCH = 2; commands_processed >= MAX_COMMANDS_PER_BATCH) {
             taskYIELD(); // Allow other tasks to run
             commands_processed = 0;
         }
@@ -387,13 +422,14 @@ esp_err_t CatParser::process_command(const char *command) {
 
         if (end - start >= 2) {
             std::string_view cmd_view = cmd_str.substr(start, end - start);
-            uint16_t cmd_code = (static_cast<uint16_t>(cmd_view[0]) << 8) | cmd_view[1];
+            uint16_t cmd_code = static_cast<uint16_t>(cmd_view[0]) << 8 | cmd_view[1];
 
             if (auto handler_it = command_handlers.find(cmd_code); handler_it != command_handlers.end()) {
-                std::string_view param = (cmd_view.length() > 2) ? cmd_view.substr(2) : std::string_view();
+                const std::string_view param = cmd_view.length() > 2 ? cmd_view.substr(2) : std::string_view();
                 if (handler_it->second) {
                     const CommandHandler handler = handler_it->second;
-                    if (const esp_err_t ret = (this->*handler)(std::string(param)); ret != ESP_OK) {
+                    // Pass param directly as std::string_view, avoiding temporary std::string
+                    if (const esp_err_t ret = (this->*handler)(param); ret != ESP_OK) {
                         return ret;
                     }
                 }
@@ -407,7 +443,7 @@ esp_err_t CatParser::process_command(const char *command) {
 }
 
 int CatParser::get_band_index(const uint32_t freq) const {
-    // Use cached band index if frequency is current
+    // Use cached band index if the frequency is current
     if (freq == current_frequency && current_band_index != -1) {
         return current_band_index;
     }
@@ -425,7 +461,7 @@ int CatParser::get_band_index(const uint32_t freq) const {
 bool CatParser::is_same_band(const uint32_t freq1, const uint32_t freq2) const {
     const int band1 = get_band_index(freq1);
     const int band2 = get_band_index(freq2);
-    return (band1 != -1) && (band1 == band2);
+    return band1 != -1 && band1 == band2;
 }
 
 esp_err_t CatParser::process_if_command(const std::string_view command) {
@@ -435,20 +471,26 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
         return ESP_OK;
     }
 
-    char *endptr;
-    // Parse frequency (first 11 chars after "IF")
-    const std::string freq_str(command.substr(0, 11));
-    const auto frequency = strtoul(freq_str.c_str(), &endptr, 10);
-    if (*endptr != '\0') {
-        ESP_LOGW(TAG, "Invalid frequency in IF command: %s", freq_str.c_str());
-        return ESP_OK;
+    uint32_t frequency;
+    // Parse frequency (first 11 chars of the command payload)
+    const std::string_view freq_sv = command.substr(0, 11);
+    const char* const freq_start_ptr = freq_sv.data();
+    const char* const freq_end_ptr = freq_sv.data() + freq_sv.length();
+
+    // ReSharper disable once CppUseStructuredBinding
+    auto fc_result = std::from_chars(freq_start_ptr, freq_end_ptr, frequency);
+
+    if (fc_result.ec != std::errc() || fc_result.ptr != freq_end_ptr) {
+        ESP_LOGW(TAG, "Invalid frequency in IF command: %.*s", static_cast<int>(freq_sv.length()), freq_sv.data());
+        return ESP_OK; // Keep original behavior
     }
 
-    const auto new_tx_state = (command[26] == '1');
+    const auto new_tx_state = command[26] == '1';
 
     // Parse mode
     const char mode_char = command[27];
     std::string new_mode;
+
     switch (mode_char) {
         case '1':
             new_mode = "LSB";
@@ -496,19 +538,42 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
 }
 
 esp_err_t CatParser::process_fa_command(const std::string_view command) {
-    char *endptr;
+    uint32_t frequency;
+    const char* const start_ptr = command.data();
+    const char* const end_ptr = command.data() + command.length();
+    auto result = std::from_chars(start_ptr, end_ptr, frequency);
 
-    const std::string freq_str(command);
-    const auto frequency = strtoul(freq_str.c_str(), &endptr, 10);
-
-    if (*endptr != '\0') {
-        ESP_LOGE(TAG, "Invalid frequency format in command: %.*s",
-                 static_cast<int>(command.length()), command.data());
-        return ESP_OK;
+    if (result.ec == std::errc() && result.ptr == end_ptr) {
+        ESP_LOGV(TAG, "FA command frequency: %lu Hz", frequency);
+        return handle_frequency_change(frequency);
     }
 
-    ESP_LOGV(TAG, "FA command frequency: %lu Hz", frequency);
-    return handle_frequency_change(frequency);
+    ESP_LOGE(TAG, "Invalid frequency format in FA command: %.*s",
+             static_cast<int>(command.length()), command.data());
+    // We don't want to error here (I guess)
+    return ESP_OK;
+}
+
+esp_err_t CatParser::process_tx_command(std::string_view payload) {
+    (void)payload; // Mark as unused, as TX command typically doesn't have a payload
+    if (!transmitting) { // Only log and update if state actually changes
+        transmitting = true;
+        ESP_LOGI(TAG, "Radio started transmitting (TX command)");
+        // If other components need to be notified about TX state change directly from here, add calls.
+        // For example: AntennaSwitch::instance().notify_tx_state(true);
+    }
+    return ESP_OK;
+}
+
+esp_err_t CatParser::process_rx_command(std::string_view payload) {
+    (void)payload; // Mark as unused
+    if (transmitting) { // Only log and update if state actually changes
+        transmitting = false;
+        ESP_LOGI(TAG, "Radio stopped transmitting (RX command)");
+        // If other components need to be notified:
+        // AntennaSwitch::instance().notify_tx_state(false);
+    }
+    return ESP_OK;
 }
 
 void CatParser::uart_task_trampoline(void *arg) {
@@ -521,7 +586,8 @@ void CatParser::process_serial_data(const uint8_t* data, size_t len) {
     
     // Create a temporary buffer for the command
     char temp_buffer[128];
-    size_t copy_len = std::min(len, sizeof(temp_buffer) - 1);
+    const size_t copy_len = std::min(len, sizeof(temp_buffer) - 1);
+
     memcpy(temp_buffer, data, copy_len);
     temp_buffer[copy_len] = '\0';
 
