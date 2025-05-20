@@ -6,29 +6,168 @@
 #include "driver/gpio.h"
 #include <cstring>
 #include <sys/param.h>
+#include "freertos/FreeRTOS.h" // For task and semaphore functions
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 
 static auto TAG = "CONFIG_MANAGER";
 
 // Initialize static member
 ConfigManager *ConfigManager::instance_ = nullptr;
 
-ConfigManager::ConfigManager() {
-    current_config_ = new antenna_switch_config_t();
+ConfigManager::ConfigManager() : current_config_(new antenna_switch_config_t()), config_dirty_(false), nvs_writer_shutdown_requested_(false), nvs_writer_task_handle_(nullptr), nvs_save_signal_(nullptr) {
     if (instance_ == nullptr) {
         instance_ = this;
+    }
+
+    nvs_save_signal_ = xSemaphoreCreateBinary();
+    if (nvs_save_signal_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create NVS save semaphore! Async saving will not work.");
+    }
+
+    BaseType_t task_created = xTaskCreate(
+        nvs_writer_task_trampoline,
+        "nvs_writer_task",
+        NVS_WRITER_TASK_STACK_SIZE,
+        this, // Pass ConfigManager instance as argument
+        NVS_WRITER_TASK_PRIORITY,
+        &nvs_writer_task_handle_
+    );
+
+    if (task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create NVS writer task! Async saving will not work.");
+        if (nvs_save_signal_ != nullptr) {
+            vSemaphoreDelete(nvs_save_signal_);
+            nvs_save_signal_ = nullptr;
+        }
+        nvs_writer_task_handle_ = nullptr; // Ensure handle is null if task creation failed
+    } else {
+        ESP_LOGI(TAG, "NVS writer task created successfully.");
     }
 }
 
 ConfigManager::~ConfigManager() {
+    ESP_LOGI(TAG, "Shutting down ConfigManager and NVS writer task.");
+    nvs_writer_shutdown_requested_.store(true);
+
+    if (nvs_save_signal_ != nullptr) {
+        xSemaphoreGive(nvs_save_signal_); // Wake up the task so it can see the shutdown flag
+    }
+
+    // Wait a bit for the task to shut down. A more robust way would be for the task
+    // to signal back its termination, or use eTaskGetState to check.
+    // For now, assuming it self-deletes as per nvs_writer_task_trampoline.
+    if (nvs_writer_task_handle_ != nullptr) {
+        ESP_LOGD(TAG, "Waiting for NVS writer task to terminate...");
+        // vTaskDelay(pdMS_TO_TICKS(200));
+        // If the task doesn't self-delete, you might need:
+        // if (eTaskGetState(nvs_writer_task_handle_) != eDeleted) {
+        //    vTaskDelete(nvs_writer_task_handle_);
+        // }
+        // nvs_writer_task_handle_ = nullptr; // Cleared in trampoline
+    }
+
+    if (nvs_save_signal_ != nullptr) {
+        vSemaphoreDelete(nvs_save_signal_);
+        nvs_save_signal_ = nullptr;
+    }
     delete current_config_;
+    current_config_ = nullptr; // Good practice after delete
+    ESP_LOGI(TAG, "ConfigManager cleanup complete.");
 }
 
 ConfigManager &ConfigManager::instance() {
-    static ConfigManager instance;
+    static ConfigManager instance; // Meyers' singleton
     return instance;
 }
 
-esp_err_t ConfigManager::init() const {
+void ConfigManager::nvs_writer_task_trampoline(void *arg) {
+    ConfigManager *manager = static_cast<ConfigManager*>(arg);
+    manager->nvs_writer_task();
+    ESP_LOGI(TAG, "NVS writer task trampoline: task self-deleting.");
+    manager->nvs_writer_task_handle_ = nullptr; // Clear handle as task is self-deleting
+    vTaskDelete(nullptr); // Task self-deletes
+}
+
+void ConfigManager::nvs_writer_task() {
+    ESP_LOGI(TAG, "NVS writer task started.");
+    while (true) {
+        if (nvs_writer_shutdown_requested_.load()) {
+            ESP_LOGI(TAG, "NVS writer task: Shutdown requested, exiting.");
+            break;
+        }
+
+        // Wait for a signal to save, with a timeout to periodically check shutdown flag
+        if (xSemaphoreTake(nvs_save_signal_, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            if (nvs_writer_shutdown_requested_.load()) { // Re-check after wake-up
+                ESP_LOGI(TAG, "NVS writer task: Shutdown requested after semaphore take, exiting.");
+                break; 
+            }
+
+            if (config_dirty_.load()) {
+                ESP_LOGI(TAG, "NVS writer task: Configuration is dirty, saving to NVS.");
+                esp_err_t ret = save_to_nvs(); // This is const, so it's fine
+                if (ret == ESP_OK) {
+                    ESP_LOGI(TAG, "NVS writer task: Configuration saved successfully.");
+                    config_dirty_.store(false); // Clear dirty flag only on successful save
+                } else {
+                    ESP_LOGE(TAG, "NVS writer task: Failed to save configuration to NVS: %s. Will retry on next change.", esp_err_to_name(ret));
+                    // Keep dirty flag true to retry on next signal if save failed
+                }
+            } else {
+                ESP_LOGD(TAG, "NVS writer task: Signaled, but config not dirty.");
+            }
+        }
+        // If xSemaphoreTake timed out, the loop continues and checks nvs_writer_shutdown_requested_
+    }
+    ESP_LOGI(TAG, "NVS writer task finished.");
+}
+
+esp_err_t ConfigManager::flush_pending_save(TickType_t xTicksToWait)
+{
+    ESP_LOGI(TAG, "flush_pending_save called.");
+    if (!nvs_writer_task_handle_ && !nvs_save_signal_) { 
+        ESP_LOGE(TAG, "NVS writer task or semaphore not initialized, cannot flush.");
+        // If task handle is null but signal exists, it means task creation failed.
+        // If signal is null, constructor failed earlier.
+        return ESP_FAIL; 
+    }
+    // Check if the task is still running, in case it crashed.
+    // This is a basic check; a more robust system might use a task watchdog.
+    if (nvs_writer_task_handle_ != nullptr && eTaskGetState(nvs_writer_task_handle_) == eDeleted) {
+        ESP_LOGE(TAG, "NVS writer task is not running (deleted), cannot flush.");
+        nvs_writer_task_handle_ = nullptr; // Mark as not running
+        return ESP_FAIL;
+    }
+
+
+    if (config_dirty_.load()) {
+        ESP_LOGI(TAG, "Flush requested: Configuration is dirty, signaling NVS writer task.");
+        if (nvs_save_signal_ != nullptr) {
+            xSemaphoreGive(nvs_save_signal_);
+        } else {
+            ESP_LOGE(TAG, "NVS save signal not available for flush.");
+            return ESP_FAIL; // Should not happen if constructor succeeded
+        }
+
+        // Wait for the dirty flag to be cleared by the NVS writer task
+        ESP_LOGD(TAG, "Flush: Waiting for NVS save completion...");
+        TickType_t start_ticks = xTaskGetTickCount();
+        while (config_dirty_.load()) {
+            if ((xTaskGetTickCount() - start_ticks) >= xTicksToWait) {
+                ESP_LOGW(TAG, "Timeout waiting for NVS save completion during flush.");
+                return ESP_ERR_TIMEOUT; // Timed out
+            }
+            vTaskDelay(pdMS_TO_TICKS(20)); // Poll every 20ms
+        }
+        ESP_LOGI(TAG, "Flush: NVS save completed.");
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "Flush requested: No dirty configuration to save.");
+    return ESP_OK; // No dirty data
+}
+
+esp_err_t ConfigManager::init() { // Made non-const
     ESP_LOGI(TAG, "Initializing configuration manager");
 
     // Try to load from NVS
@@ -82,17 +221,19 @@ esp_err_t ConfigManager::init() const {
         }
 
         // Set default bands for both radios
-        const char* default_band_names[10] = {
-            "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
-        };
-        uint32_t default_start[10] = {
-            1800000, 3500000, 7000000, 10100000, 14000000, 18068000, 21000000, 24890000, 28000000, 50000000
-        };
-        uint32_t default_end[10] = {
-            2000000, 4000000, 7300000, 10150000, 14350000, 18168000, 21450000, 24990000, 29700000, 54000000
-        };
         for (int r = 0; r < 2; ++r) {
             for (int i = 0; i < 10; ++i) {
+
+                const uint32_t default_start[10] = {
+                    1800000, 3500000, 7000000, 10100000, 14000000, 18068000, 21000000, 24890000, 28000000, 50000000
+                };
+                const uint32_t default_end[10] = {
+                    2000000, 4000000, 7300000, 10150000, 14350000, 18168000, 21450000, 24990000, 29700000, 54000000
+                };
+                const char* default_band_names[10] = {
+                    "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
+                };
+
                 strncpy(current_config_->bands[r][i].description, default_band_names[i], sizeof(current_config_->bands[r][i].description));
                 current_config_->bands[r][i].start_freq = default_start[i];
                 current_config_->bands[r][i].end_freq = default_end[i];
@@ -102,14 +243,27 @@ esp_err_t ConfigManager::init() const {
             }
         }
 
-        // Save default configuration
-        ret = save_to_nvs();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to save default configuration: %s", esp_err_to_name(ret));
-            return ret;
+        // Schedule save of default configuration
+        config_dirty_.store(true);
+        if (nvs_save_signal_ != nullptr && nvs_writer_task_handle_ != nullptr) {
+            xSemaphoreGive(nvs_save_signal_);
+            ESP_LOGI(TAG, "Default configuration set and scheduled for NVS save.");
+        } else {
+            ESP_LOGE(TAG, "NVS save signal or task not available. Default configuration set in memory but not scheduled for NVS save. Attempting synchronous save.");
+            // Fallback to synchronous save if async mechanism is not ready
+            esp_err_t sync_save_ret = save_to_nvs();
+            if (sync_save_ret != ESP_OK) {
+                ESP_LOGE(TAG, "Fallback synchronous save of default config failed: %s", esp_err_to_name(sync_save_ret));
+                // Decide if this is a fatal error for init
+            } else {
+                ESP_LOGI(TAG, "Fallback synchronous save of default config successful.");
+                config_dirty_.store(false); // Synchronously saved, so not dirty anymore
+            }
         }
+        // Assuming scheduling the save (or sync save) is success for init's perspective here.
+        ret = ESP_OK; // Set ret to OK as we've handled the "not found" case by setting defaults.
     } else if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Error loading configuration: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Error loading configuration during init: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -133,10 +287,25 @@ esp_err_t ConfigManager::update_config(const antenna_switch_config_t &new_config
     // Update configuration
     *current_config_ = new_config;
 
-    // Save new configuration to NVS
-    if (const esp_err_t ret = save_to_nvs(); ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to save configuration: %s", esp_err_to_name(ret));
-        return ret;
+    // Schedule save of new configuration to NVS
+    config_dirty_.store(true);
+    if (nvs_save_signal_ != nullptr && nvs_writer_task_handle_ != nullptr) {
+        xSemaphoreGive(nvs_save_signal_);
+        ESP_LOGI(TAG, "Configuration updated and scheduled for NVS save.");
+    } else {
+        ESP_LOGE(TAG, "NVS save signal or task not available. Configuration updated in memory but not scheduled for NVS save. Attempting synchronous save.");
+        // Fallback to synchronous save
+        esp_err_t sync_save_ret = save_to_nvs();
+        if (sync_save_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Fallback synchronous save of updated config failed: %s", esp_err_to_name(sync_save_ret));
+            // Notify observers anyway, but return the error from saving
+            for (const auto &observer: observers_) {
+                observer(*current_config_);
+            }
+            return sync_save_ret; 
+        }
+        ESP_LOGI(TAG, "Fallback synchronous save of updated config successful.");
+        config_dirty_.store(false); // Synchronously saved
     }
 
     // Notify observers
