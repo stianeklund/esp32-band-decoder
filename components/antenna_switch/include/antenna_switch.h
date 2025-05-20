@@ -106,6 +106,21 @@ private:
     
     // Pointer to relay controller
     RelayController* relay_controller_ = nullptr;
+    int pre_tx_active_relay_radio_a_ = 0; // Stores active relay for A if B starts TX
+    int pre_tx_active_relay_radio_b_ = 0; // Stores active relay for B if A starts TX
+
+    // Helper to get active relay for a specific radio
+    int get_active_relay_for_radio(RadioID radio) const;
+
+    // Helper to update last used antenna preference
+    esp_err_t update_last_used_antenna_preference(int activated_relay_id, RadioID radio_of_activated_relay);
+
+public:
+    // ... existing public members ...
+    void on_radio_a_tx_start();
+    void on_radio_a_tx_stop();
+    void on_radio_b_tx_start(); // For future use when Radio B TX state is known
+    void on_radio_b_tx_stop();  // For future use
 };
 
 #endif // ANTENNA_SWITCH_H

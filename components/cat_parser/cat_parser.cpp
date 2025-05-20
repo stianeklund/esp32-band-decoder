@@ -4,15 +4,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include <cstring>
 #include "my_mqtt_client.h"
 #include <string>
 #include <string_view>
 #include "driver/gpio.h"
 #include <chrono>
 #include <charconv>
-#include <memory> // Added for std::unique_ptr
-#include "config_manager.h" // For ConfigManager::instance().save_to_nvs()
+#include <memory>
+#include "config_manager.h"
+#include "antenna_switch.h"
 
 CatParser::CatParser()
     : uart2_queue(nullptr),
@@ -172,7 +172,7 @@ esp_err_t CatParser::init() {
 void CatParser::uart_task() {
     uart_event_t event;
     size_t buffered_size;
-    uint8_t read_buf[128]; // Non-static local buffer
+    uint8_t read_buf[128];
     constexpr TickType_t xTicksToWait = pdMS_TO_TICKS(10); // Timeout for xQueueReceive
     std::string command_accumulator;
     command_accumulator.reserve(256); // Pre-reserve to reduce reallocations
@@ -196,17 +196,17 @@ void CatParser::uart_task() {
 
                             // Process complete commands from the accumulator
                             // A command sequence is considered complete if it ends with a ';'
-                            size_t last_semicolon_in_accumulator = command_accumulator.rfind(';');
-                
+                            const size_t last_semicolon_in_accumulator = command_accumulator.rfind(';');
+
                             if (last_semicolon_in_accumulator != std::string::npos) {
                                 // Extract the part of the accumulator that contains complete commands
-                                size_t process_len = last_semicolon_in_accumulator + 1;
-                                std::string_view commands_to_process_view(command_accumulator.data(), process_len);
+                                const size_t process_len = last_semicolon_in_accumulator + 1;
+                                const std::string_view commands_to_process_view(command_accumulator.data(), process_len);
                                 
                                 ESP_LOGV(TAG, "Processing from UART accumulator: %.*s", static_cast<int>(commands_to_process_view.length()), commands_to_process_view.data());
                                 
                                 // Call the centralized process_command
-                                if (esp_err_t ret = process_command(commands_to_process_view); ret != ESP_OK) {
+                                if (const esp_err_t ret = process_command(commands_to_process_view); ret != ESP_OK) {
                                      ESP_LOGW(TAG, "Error processing command block from UART: %s", esp_err_to_name(ret));
                                 }
 
@@ -265,7 +265,9 @@ esp_err_t CatParser::dispatch_one_command(std::string_view command_view) {
     if (handler_it != command_handlers.end()) {
         if (handler_it->second) { // Check if the function pointer is not null
             const CommandHandler handler = handler_it->second;
-            esp_err_t ret = (this->*handler)(cmd_payload);
+
+            const esp_err_t ret = (this->*handler)(cmd_payload);
+
             if (ret != ESP_OK) {
                 ESP_LOGW(TAG, "Command handler for '%.*s' returned error %s",
                          static_cast<int>(command_view.substr(0,2).length()), command_view.substr(0,2).data(),
@@ -292,12 +294,10 @@ esp_err_t CatParser::update_config() {
 }
 
 esp_err_t CatParser::handle_frequency_change(const uint32_t frequency) {
-    // Early return if frequency hasn't changed
     if (frequency == current_frequency) {
         return ESP_OK;
     }
 
-    // Get a new frequency's band index
     const int new_band_index = get_band_index(frequency);
 
     // Switch antenna if the band changed or no valid band was set
@@ -495,48 +495,43 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
 
     // Parse mode
     const char mode_char = command[27];
-    std::string new_mode;
+    std::string new_mode_str; // Renamed to avoid conflict with member `current_mode`
 
     switch (mode_char) {
-        case '1':
-            new_mode = "LSB";
-            break;
-        case '2':
-            new_mode = "USB";
-            break;
-        case '3':
-            new_mode = "CW-U";
-            break;
-        case '4':
-            new_mode = "FM";
-            break;
-        case '5':
-            new_mode = "AM";
-            break;
-        case '6':
-            new_mode = "DIG-L";
-            break;
-        case '7':
-            new_mode = "CW-L";
-            break;
-        case '9':
-            new_mode = "DIG-U";
-            break;
-        default:
-            new_mode = "UNKNOWN";
+        case '1': new_mode_str = "LSB"; break;
+        case '2': new_mode_str = "USB"; break;
+        case '3': new_mode_str = "CW-U"; break;
+        case '4': new_mode_str = "FM"; break;
+        case '5': new_mode_str = "AM"; break;
+        case '6': new_mode_str = "DIG-L"; break;
+        case '7': new_mode_str = "CW-L"; break;
+        case '9': new_mode_str = "DIG-U"; break;
+        default:  new_mode_str = "UNKNOWN";
     }
 
-    if (new_tx_state != transmitting) {
-        ESP_LOGI(TAG, "Radio %s", new_tx_state ? "started transmitting" : "stopped transmitting");
-    }
+    const bool tx_state_changed = new_tx_state != transmitting; // Compare new with current member state
+    std::string old_mode = current_mode;                   // Capture current mode before update
 
-    if (new_mode != current_mode) {
-        ESP_LOGV(TAG, "Mode changed to %s", new_mode.c_str());
-    }
-
-    // Update states
+    // Update internal states
     transmitting = new_tx_state;
-    current_mode = new_mode;
+    current_mode = new_mode_str;
+
+
+    if (tx_state_changed) {
+        ESP_LOGV(TAG, "Radio %s (IF command)", transmitting ? "started transmitting" : "stopped transmitting");
+        if (transmitting) {
+            AntennaSwitch::instance().on_radio_a_tx_start();
+        } else {
+            AntennaSwitch::instance().on_radio_a_tx_stop();
+        }
+    }
+
+    if (current_mode != old_mode && !tx_state_changed) {
+        ESP_LOGV(TAG, "Mode changed from %s to %s", old_mode.c_str(), current_mode.c_str());
+    } else if (current_mode != old_mode && tx_state_changed) {
+        ESP_LOGV(TAG, "Mode also changed from %s to %s", old_mode.c_str(), current_mode.c_str());
+    }
+
 
     ESP_LOGV(TAG, "IF command: freq=%lu Hz, mode=%s, tx=%d", frequency, current_mode.c_str(), transmitting);
 
@@ -564,24 +559,22 @@ esp_err_t CatParser::process_fa_command(const std::string_view command) {
     return ESP_OK;
 }
 
-esp_err_t CatParser::process_tx_command(std::string_view payload) {
-    (void)payload; // Mark as unused, as TX command typically doesn't have a payload
-    if (!transmitting) { // Only log and update if state actually changes
+esp_err_t CatParser::process_tx_command(const std::string_view payload) {
+    (void)payload; // ignore the payload, not needed here
+    if (!transmitting) {
         transmitting = true;
-        ESP_LOGI(TAG, "Radio started transmitting (TX command)");
-        // If other components need to be notified about TX state change directly from here, add calls.
-        // For example: AntennaSwitch::instance().notify_tx_state(true);
+        ESP_LOGD(TAG, "Radio started transmitting (TX command)");
+        AntennaSwitch::instance().on_radio_a_tx_start(); // Notify AntennaSwitch
     }
     return ESP_OK;
 }
 
-esp_err_t CatParser::process_rx_command(std::string_view payload) {
-    (void)payload; // Mark as unused
-    if (transmitting) { // Only log and update if state actually changes
+esp_err_t CatParser::process_rx_command(const std::string_view payload) {
+    (void)payload;
+    if (transmitting) {
         transmitting = false;
-        ESP_LOGI(TAG, "Radio stopped transmitting (RX command)");
-        // If other components need to be notified:
-        // AntennaSwitch::instance().notify_tx_state(false);
+        ESP_LOGD(TAG, "Radio stopped transmitting (RX command)");
+        AntennaSwitch::instance().on_radio_a_tx_stop(); // Notify AntennaSwitch
     }
     return ESP_OK;
 }
@@ -602,9 +595,8 @@ void CatParser::process_serial_data(const uint8_t* data, size_t len) {
     ESP_LOGV(TAG, "Processing from API (process_serial_data): %.*s", static_cast<int>(commands_view.length()), commands_view.data());
     
     // Call the centralized process_command
-    if (esp_err_t ret = process_command(commands_view); ret != ESP_OK) {
+    if (const esp_err_t ret = process_command(commands_view); ret != ESP_OK) {
         ESP_LOGW(TAG, "Error processing command block from process_serial_data: %s", esp_err_to_name(ret));
-        // Depending on requirements, you might want to propagate this error.
     }
 }
 

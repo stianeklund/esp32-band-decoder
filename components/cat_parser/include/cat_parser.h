@@ -23,7 +23,7 @@ public:
 
     esp_err_t init();
 
-    esp_err_t process_command(const char *command);
+    esp_err_t process_command(const char *command_cstr);
     void process_serial_data(const uint8_t* data, size_t len);
     void clear_serial_data();
 

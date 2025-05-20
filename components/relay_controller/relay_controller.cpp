@@ -55,9 +55,9 @@ esp_err_t RelayController::turn_off_all_relays() {
         return ESP_ERR_INVALID_STATE;
     }
     
-    std::lock_guard<std::mutex> lock(relay_mutex_);
-    
-    esp_err_t ret = kc868_a16_set_all_outputs(0);
+    std::lock_guard lock(relay_mutex_);
+
+    const esp_err_t ret = kc868_a16_set_all_outputs(0);
     if (ret == ESP_OK) {
         currently_selected_relay_ = 0;
         last_relay_change_ = std::chrono::steady_clock::now();
@@ -72,23 +72,7 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
         return ESP_ERR_INVALID_ARG;
     }
-
-    // Check if radio is transmitting
-    if (cat_parser_.is_transmitting()) {
-        ESP_LOGW(TAG, "Cannot change relays while transmitting");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    // Add a small delay to ensure transmit state is stable
-    vTaskDelay(pdMS_TO_TICKS(10));
-    
-    // Double check transmit state after delay
-    if (cat_parser_.is_transmitting()) {
-        ESP_LOGW(TAG, "Cannot change relays while transmitting");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    std::lock_guard<std::mutex> lock(relay_mutex_);
+    std::lock_guard lock(relay_mutex_);
     
     // Convert from 1-based to 0-based index for hardware
     const uint8_t hw_relay = relay_id - 1;
@@ -100,7 +84,7 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
     }
 
     // Note: kc868_a16_set_output handles the active-low conversion internally
-    esp_err_t ret = kc868_a16_set_output(hw_relay, state);
+    const esp_err_t ret = kc868_a16_set_output(hw_relay, state);
     if (ret == ESP_OK) {
         last_relay_change_ = std::chrono::steady_clock::now();
         // Update our internal state tracking with the logical state (not inverted)
@@ -174,7 +158,7 @@ esp_err_t RelayController::turn_off_all_relays_except(const int relay_to_keep_on
         return ESP_ERR_INVALID_ARG;
     }
 
-    std::lock_guard<std::mutex> lock(relay_mutex_);
+    std::lock_guard lock(relay_mutex_);
 
     if (should_delay()) {
         vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
@@ -217,7 +201,7 @@ bool RelayController::should_delay() const {
  }
 
 esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number, const RadioID radio, const bool state) {
-    std::lock_guard<std::mutex> lock(relay_mutex_);
+    std::lock_guard lock(relay_mutex_);
     const auto &cfg = ConfigManager::instance().get_config();
 
     // Check if radio is transmitting
@@ -286,7 +270,7 @@ esp_err_t RelayController::execute_relay_change(const int relay_id, const int ba
     // Combine masks and push to hardware
     // current_mask_[0] is for relays 1-8 (physical bits 0-7)
     // current_mask_[1] is for relays 9-16 (physical bits 8-15)
-    uint16_t hw_mask = current_mask_[0] | (static_cast<uint16_t>(current_mask_[1]) << RELAYS_PER_RADIO);
+    const uint16_t hw_mask = current_mask_[0] | (static_cast<uint16_t>(current_mask_[1]) << RELAYS_PER_RADIO);
 
     if (should_delay()) {
         vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
