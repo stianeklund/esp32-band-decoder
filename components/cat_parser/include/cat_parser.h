@@ -49,11 +49,9 @@ private:
     using CommandHandler = esp_err_t (CatParser::*)(std::string_view);
 
     void uart_task();
-
-    void uart0_to_uart2_task() const;
+    static void uart0_to_uart2_task();
 
     int get_band_index(uint32_t freq) const;
-
     bool is_same_band(uint32_t freq1, uint32_t freq2) const;
 
     esp_err_t process_fa_command(std::string_view command);
@@ -61,11 +59,13 @@ private:
     esp_err_t process_if_command(std::string_view command);
 
     esp_err_t process_ap_command(std::string_view command);
-    esp_err_t process_ai_command(std::string_view command);
+    esp_err_t process_ai_command(std::string_view command_payload);
+    static std::from_chars_result get_from_chars_result(std::string_view command, unsigned long& ports_val);
     esp_err_t process_tx_command(std::string_view payload);
     esp_err_t process_rx_command(std::string_view payload);
 
-    void process_accumulated_commands(std::string& accumulator); // Helper for uart_task
+    esp_err_t process_command(std::string_view commands_str_with_semicolons); // New core processor
+    esp_err_t dispatch_one_command(std::string_view command_view); 
 
     static void uart_task_trampoline(void *arg);
 
@@ -88,6 +88,7 @@ private:
     std::atomic<bool> shutdown_requested;
     static constexpr int SERIAL_DATA_TIMEOUT_S = 5;  // 5 second timeout
     std::chrono::steady_clock::time_point last_serial_data_time;
+    bool radio_provides_auto_updates_{false}; // True if Kenwood AI (Auto Information) from the radio is ON
 };
 
 // Legacy C-style interface

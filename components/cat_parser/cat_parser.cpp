@@ -8,10 +8,11 @@
 #include "my_mqtt_client.h"
 #include <string>
 #include <string_view>
-#include <sys/param.h>
 #include "driver/gpio.h"
 #include <chrono>
 #include <charconv>
+#include <memory> // Added for std::unique_ptr
+#include "config_manager.h" // For ConfigManager::instance().save_to_nvs()
 
 CatParser::CatParser()
     : uart2_queue(nullptr),
@@ -167,14 +168,14 @@ esp_err_t CatParser::init() {
     return ESP_OK;
 }
 
+// ReSharper disable once CppDFAUnreachableFunctionCall
 void CatParser::uart_task() {
     uart_event_t event;
     size_t buffered_size;
     uint8_t read_buf[128]; // Non-static local buffer
     constexpr TickType_t xTicksToWait = pdMS_TO_TICKS(10); // Timeout for xQueueReceive
     std::string command_accumulator;
-    // Optional: Pre-reserve capacity if you have an estimate of typical command backlog size
-    // command_accumulator.reserve(256); 
+    command_accumulator.reserve(256); // Pre-reserve to reduce reallocations
 
     ESP_LOGI(TAG, "CAT parser UART task started.");
 
@@ -188,10 +189,30 @@ void CatParser::uart_task() {
                     if (uart_get_buffered_data_len(UART_NUM_2, &buffered_size) == ESP_OK && buffered_size > 0) {
                         const int len = uart_read_bytes(UART_NUM_2, read_buf,
                                                         std::min(buffered_size, sizeof(read_buf)),
-                                                        0); // No need to wait, data is already there
+                                                        0); 
+
                         if (len > 0) {
                             command_accumulator.append(reinterpret_cast<char*>(read_buf), len);
-                            process_accumulated_commands(command_accumulator);
+
+                            // Process complete commands from the accumulator
+                            // A command sequence is considered complete if it ends with a ';'
+                            size_t last_semicolon_in_accumulator = command_accumulator.rfind(';');
+                
+                            if (last_semicolon_in_accumulator != std::string::npos) {
+                                // Extract the part of the accumulator that contains complete commands
+                                size_t process_len = last_semicolon_in_accumulator + 1;
+                                std::string_view commands_to_process_view(command_accumulator.data(), process_len);
+                                
+                                ESP_LOGV(TAG, "Processing from UART accumulator: %.*s", static_cast<int>(commands_to_process_view.length()), commands_to_process_view.data());
+                                
+                                // Call the centralized process_command
+                                if (esp_err_t ret = process_command(commands_to_process_view); ret != ESP_OK) {
+                                     ESP_LOGW(TAG, "Error processing command block from UART: %s", esp_err_to_name(ret));
+                                }
+
+                                // Erase processed commands from the accumulator
+                                command_accumulator.erase(0, process_len);
+                            }
                         }
                     }
                     break;
@@ -202,7 +223,7 @@ void CatParser::uart_task() {
                     ESP_LOGW(TAG, "UART buffer issue detected (type: %d), flushing UART and resetting queue.", event.type);
                     uart_flush_input(UART_NUM_2);
                     xQueueReset(uart2_queue);
-                    command_accumulator.clear(); // Clear any partial commands
+                    command_accumulator.clear(); 
                     break;
                 case UART_PARITY_ERR:
                     ESP_LOGW(TAG, "UART parity error");
@@ -214,71 +235,48 @@ void CatParser::uart_task() {
                     break;
             }
         } else {
-            // xQueueReceive timed out, no new UART event
+            // xQueueReceive timed out
             if (auto now = std::chrono::steady_clock::now(); std::chrono::duration_cast<std::chrono::seconds>(
                     now - last_serial_data_time).count() > SERIAL_DATA_TIMEOUT_S) {
-
-                // Check current state before setting to avoid redundant calls if already false
-                // This assumes MQTTClient::instance().get_has_serial_data() or similar exists,
-                // or that set_has_serial_data(false) is cheap.
-                // For now, using the existing direct call:
                 MQTTClient::instance().set_has_serial_data(false);
             }
         }
-        // Yield to allow other tasks to run. This is important for system responsiveness.
         taskYIELD();
     }
     ESP_LOGI(TAG, "CAT parser UART task shutting down.");
 }
 
-void CatParser::process_accumulated_commands(std::string& accumulator) {
-    size_t process_start_pos = 0; 
+void CatParser::uart0_to_uart2_task()
+{
+}
 
-    while (process_start_pos < accumulator.length()) {
-        const size_t end_delim_pos = accumulator.find(';', process_start_pos);
-        
-        if (end_delim_pos == std::string::npos) {
-            // No more complete commands (no ';') in the remaining part of the accumulator.
-            // Break and leave the partial command (if any) for the next data arrival.
-            break; 
+esp_err_t CatParser::dispatch_one_command(std::string_view command_view) {
+    if (command_view.length() < 2) { // Command must be at least 2 chars
+        if (!command_view.empty()) {
+            ESP_LOGD(TAG, "Short command received (length < 2): %.*s", static_cast<int>(command_view.length()), command_view.data());
         }
+        return ESP_OK; // Consistent with previous behavior of not erroring on short/empty segments
+    }
 
-        // Create a view for the command string (from current start up to delimiter)
-        std::string_view cmd_full_str_view(&accumulator[process_start_pos], end_delim_pos - process_start_pos);
-        
-        ESP_LOGV(TAG, "Processing from accumulator: %.*s", static_cast<int>(cmd_full_str_view.length()), cmd_full_str_view.data());
+    uint16_t cmd_code = static_cast<uint16_t>(command_view[0]) << 8 | command_view[1];
+    const std::string_view cmd_payload = command_view.length() > 2 ? command_view.substr(2) : std::string_view();
 
-        if (cmd_full_str_view.length() >= 2) { // Command must be at least 2 chars
-            uint16_t cmd_code = static_cast<uint16_t>(cmd_full_str_view[0]) << 8 | cmd_full_str_view[1];
-
-            const std::string_view cmd_payload = cmd_full_str_view.length() > 2 ?
-                                           cmd_full_str_view.substr(2) :
-                                           std::string_view();
-
-            if (auto handler_it = command_handlers.find(cmd_code); handler_it != command_handlers.end()) {
-                if (handler_it->second) { // Check if the function pointer is not null
-                    const CommandHandler handler = handler_it->second;
-                    if (const esp_err_t ret = (this->*handler)(cmd_payload); ret != ESP_OK) {
-                        ESP_LOGW(TAG, "Command handler for '%.*s' returned error %s", 
-                                 static_cast<int>(cmd_full_str_view.substr(0,2).length()), cmd_full_str_view.substr(0,2).data(), 
-                                 esp_err_to_name(ret));
-                    }
-                }
-            } else {
-                ESP_LOGV(TAG, "No handler for command prefix: '%.*s'", static_cast<int>(cmd_full_str_view.substr(0,2).length()), cmd_full_str_view.substr(0,2).data());
+    auto handler_it = command_handlers.find(cmd_code);
+    if (handler_it != command_handlers.end()) {
+        if (handler_it->second) { // Check if the function pointer is not null
+            const CommandHandler handler = handler_it->second;
+            esp_err_t ret = (this->*handler)(cmd_payload);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "Command handler for '%.*s' returned error %s",
+                         static_cast<int>(command_view.substr(0,2).length()), command_view.substr(0,2).data(),
+                         esp_err_to_name(ret));
             }
-        } else if (!cmd_full_str_view.empty()) {
-            ESP_LOGD(TAG, "Short command received (length < 2): %.*s", static_cast<int>(cmd_full_str_view.length()), cmd_full_str_view.data());
+            return ret; // Return the handler's result
         }
-
-        // Advance start position past the processed command and its delimiter
-        process_start_pos = end_delim_pos + 1;
+    } else {
+        ESP_LOGV(TAG, "No handler for command prefix: '%.*s'", static_cast<int>(command_view.substr(0,2).length()), command_view.substr(0,2).data());
     }
-
-    // After processing all complete commands, remove them from the beginning of the accumulator string
-    if (process_start_pos > 0) {
-        accumulator.erase(0, process_start_pos);
-    }
+    return ESP_OK; // No handler found or handler was null
 }
 
 esp_err_t CatParser::update_config() {
@@ -324,47 +322,60 @@ esp_err_t CatParser::handle_frequency_change(const uint32_t frequency) {
     return ESP_OK;
 }
 
-// ReSharper disable once CppMemberFunctionMayBeStatic
-esp_err_t CatParser::process_ai_command(const std::string_view command) {
-    unsigned long ports_val;
-    const char* const start_ptr = command.data();
-    const char* const end_ptr = command.data() + command.length();
-    auto result = std::from_chars(start_ptr, end_ptr, ports_val);
-
-    if (result.ec == std::errc() && result.ptr == end_ptr) {
-        ESP_LOGD(TAG, "Setting antenna ports (AI): %lu", ports_val);
-
-        if (ports_val > UINT8_MAX) {
-            ESP_LOGE(TAG, "Ports value %lu for AI command exceeds uint8_t max", ports_val);
-            return ESP_ERR_INVALID_ARG;
-        }
-
-        antenna_switch_config_t config; // Stack allocation of large struct
-        esp_err_t ret = AntennaSwitch::instance().get_config(&config);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to get config for AI command: %s", esp_err_to_name(ret));
-            return ret;
-        }
-
-        config.num_antenna_ports = static_cast<uint8_t>(ports_val);
-        ret = AntennaSwitch::instance().set_config(&config);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to set config for AI command: %s", esp_err_to_name(ret));
-            return ret;
-        }
+esp_err_t CatParser::process_ai_command(const std::string_view command_payload) {
+    if (command_payload.empty()) {
+        // This is a query command: AI;
+        // A Kenwood radio would respond AI<P1>; e.g. AI0; if no auto information,or AI2; if auto information
+        // For now, we just log that we received the query.
+        ESP_LOGV(TAG, "AI Query (AI;) received. Radio Auto Information is currently %s. Polling %s.",
+                 radio_provides_auto_updates_ ? "ON" : "OFF",
+                 radio_provides_auto_updates_ ? "not required" : "required");
+        // TODO: Implement response if this system needs to act as a device responding to AI;
         return ESP_OK;
     }
-    ESP_LOGE(TAG, "Invalid ports format in AI command: %.*s",
-             static_cast<int>(command.length()), command.data());
+
+    if (command_payload.length() == 1) {
+        // This is a set command: AI<P1>;
+        const char p1_val = command_payload[0];
+        ESP_LOGD(TAG, "Processing Kenwood AI Set command (AI%c;)", p1_val);
+
+        switch (p1_val) {
+        case '0': // Auto Information OFF
+            radio_provides_auto_updates_ = false;
+            ESP_LOGI(TAG, "Kenwood AI Set: Radio Auto Information OFF. CAT polling will be required for updates.");
+            break;
+        case '1': // Auto Information ON (1 second interval)
+        case '2': // Auto Information ON (2 second interval)
+            radio_provides_auto_updates_ = true;
+            ESP_LOGI(TAG, "Kenwood AI Set: Radio Auto Information ON (P1=%c). CAT polling not required.", p1_val);
+            break;
+        default:
+            ESP_LOGE(TAG, "Kenwood AI Set: Invalid parameter P1='%c'. Expected '0' through '6'.", p1_val);
+            return ESP_ERR_INVALID_ARG;
+        }
+        // The command has been processed, and the state `radio_provides_auto_updates_` is updated.
+        // Other parts of the system can use this state to decide on polling.
+        // No direct call to AntennaSwitch auto_mode, as Kenwood AI is about radio data reporting.
+        return ESP_OK;
+    }
+    
+    // Invalid payload length for AI command (e.g., AI12;)
+    ESP_LOGE(TAG, "Kenwood AI command '%.*s' has invalid payload length. Expected empty or 1 char.",
+             static_cast<int>(command_payload.length()), command_payload.data());
     return ESP_ERR_INVALID_ARG;
+}
+
+std::from_chars_result CatParser::get_from_chars_result(const std::string_view command, unsigned long& ports_val){
+    const char* const start_ptr = command.data();
+    const auto end_ptr = command.data() + command.length();
+    return std::from_chars(start_ptr, end_ptr, ports_val);
 }
 
 // ReSharper disable once CppMemberFunctionMayBeStatic
 esp_err_t CatParser::process_ap_command(const std::string_view command) {
     unsigned long ports_val;
-    const char* const start_ptr = command.data();
-    const char* const end_ptr = command.data() + command.length();
-    auto result = std::from_chars(start_ptr, end_ptr, ports_val);
+    const auto end_ptr = command.data() + command.length();
+    const auto result = get_from_chars_result(command, ports_val);
 
     if (result.ec == std::errc() && result.ptr == end_ptr) {
         ESP_LOGD(TAG, "Setting antenna ports (AP): %lu", ports_val);
@@ -374,25 +385,25 @@ esp_err_t CatParser::process_ap_command(const std::string_view command) {
             return ESP_ERR_INVALID_ARG;
         }
 
-        antenna_switch_config_t config; // Stack allocation of large struct
-        esp_err_t ret = AntennaSwitch::instance().get_config(&config);
+        auto config = std::make_unique<antenna_switch_config_t>();
+        esp_err_t ret = AntennaSwitch::instance().get_config(config.get());
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to get config for AP command: %s", esp_err_to_name(ret));
             return ret;
         }
 
-        config.num_antenna_ports = static_cast<uint8_t>(ports_val);
-        ret = AntennaSwitch::instance().set_config(&config);
+        config->num_antenna_ports = static_cast<uint8_t>(ports_val);
+        ret = AntennaSwitch::instance().set_config(config.get());
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to set config for AP command: %s", esp_err_to_name(ret));
             return ret;
         }
         return ESP_OK;
-    } else {
-        ESP_LOGE(TAG, "Invalid ports format in AP command: %.*s",
-                 static_cast<int>(command.length()), command.data());
-        return ESP_ERR_INVALID_ARG;
     }
+
+    ESP_LOGE(TAG, "Invalid ports format in AP command: %.*s",
+             static_cast<int>(command.length()), command.data());
+    return ESP_ERR_INVALID_ARG;
 }
 
 void CatParser::handle_frequency_update(const uint32_t frequency) {
@@ -400,45 +411,40 @@ void CatParser::handle_frequency_update(const uint32_t frequency) {
     handle_frequency_change(frequency);
 }
 
-esp_err_t CatParser::process_command(const char *command) {
-    if (!command) {
+// Public C-string version calls the string_view version
+esp_err_t CatParser::process_command(const char *command_cstr) {
+    if (!command_cstr) {
         return ESP_ERR_INVALID_ARG;
     }
+    return process_command(std::string_view(command_cstr)); // Call the string_view version
+}
 
+// New core process_command implementation
+esp_err_t CatParser::process_command(std::string_view commands_str_with_semicolons) {
+    size_t start_pos = 0;
+    while (start_pos < commands_str_with_semicolons.length()) {
+        size_t end_pos = commands_str_with_semicolons.find(';', start_pos);
+        std::string_view command_content;
 
-    std::string_view cmd_str(command);
-    size_t start = 0;
-    size_t commands_processed = 0;
-
-    while (start < cmd_str.length()) {
-        if (constexpr size_t MAX_COMMANDS_PER_BATCH = 2; commands_processed >= MAX_COMMANDS_PER_BATCH) {
-            taskYIELD(); // Allow other tasks to run
-            commands_processed = 0;
+        if (end_pos == std::string_view::npos) { // No more semicolons, process the rest
+            command_content = commands_str_with_semicolons.substr(start_pos);
+            start_pos = commands_str_with_semicolons.length(); // Mark as consumed
+        } else { // Semicolon found
+            command_content = commands_str_with_semicolons.substr(start_pos, end_pos - start_pos);
+            start_pos = end_pos + 1; // Move past the semicolon for next iteration
         }
-        size_t end = cmd_str.find(';', start);
-        if (end == std::string::npos) {
-            end = cmd_str.length();
-        }
 
-        if (end - start >= 2) {
-            std::string_view cmd_view = cmd_str.substr(start, end - start);
-            uint16_t cmd_code = static_cast<uint16_t>(cmd_view[0]) << 8 | cmd_view[1];
-
-            if (auto handler_it = command_handlers.find(cmd_code); handler_it != command_handlers.end()) {
-                const std::string_view param = cmd_view.length() > 2 ? cmd_view.substr(2) : std::string_view();
-                if (handler_it->second) {
-                    const CommandHandler handler = handler_it->second;
-                    // Pass param directly as std::string_view, avoiding temporary std::string
-                    if (const esp_err_t ret = (this->*handler)(param); ret != ESP_OK) {
-                        return ret;
-                    }
-                }
+        if (!command_content.empty()) { // Only dispatch if there's actual content
+            ESP_LOGV(TAG, "Dispatching from process_command: %.*s", static_cast<int>(command_content.length()), command_content.data());
+            // dispatch_one_command expects the command *without* the semicolon.
+            esp_err_t ret = dispatch_one_command(command_content);
+            if (ret != ESP_OK) {
+                // Propagate the first error encountered.
+                return ret; 
             }
-            commands_processed++;
         }
-        start = end + 1;
+        // If command_content is empty (e.g., from ";;" or leading/trailing ";"), skip to next segment.
     }
-
     return ESP_OK;
 }
 
@@ -539,8 +545,12 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
 
 esp_err_t CatParser::process_fa_command(const std::string_view command) {
     uint32_t frequency;
+
     const char* const start_ptr = command.data();
     const char* const end_ptr = command.data() + command.length();
+
+    // ReSharper disable once CppLocalVariableMayBeConst
+    // ReSharper disable once CppTooWideScopeInitStatement
     auto result = std::from_chars(start_ptr, end_ptr, frequency);
 
     if (result.ec == std::errc() && result.ptr == end_ptr) {
@@ -584,19 +594,18 @@ void CatParser::uart_task_trampoline(void *arg) {
 void CatParser::process_serial_data(const uint8_t* data, size_t len) {
     if (!data || len == 0) return;
     
-    // Create a temporary buffer for the command
-    char temp_buffer[128];
-    const size_t copy_len = std::min(len, sizeof(temp_buffer) - 1);
-
-    memcpy(temp_buffer, data, copy_len);
-    temp_buffer[copy_len] = '\0';
-
-    // Process the command
-    process_command(temp_buffer);
-    
-    // Update serial data timestamp
+    // Update serial data timestamp (as in original)
     last_serial_data_time = std::chrono::steady_clock::now();
     MQTTClient::instance().set_has_serial_data(true);
+
+    const std::string_view commands_view(reinterpret_cast<const char*>(data), len);
+    ESP_LOGV(TAG, "Processing from API (process_serial_data): %.*s", static_cast<int>(commands_view.length()), commands_view.data());
+    
+    // Call the centralized process_command
+    if (esp_err_t ret = process_command(commands_view); ret != ESP_OK) {
+        ESP_LOGW(TAG, "Error processing command block from process_serial_data: %s", esp_err_to_name(ret));
+        // Depending on requirements, you might want to propagate this error.
+    }
 }
 
 void CatParser::clear_serial_data() {
