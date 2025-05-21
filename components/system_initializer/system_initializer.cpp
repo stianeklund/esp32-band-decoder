@@ -1,4 +1,5 @@
 #include "system_initializer.h"
+#include "input_manager.h"
 
 #include "antenna_switch.h"
 #include "cat_parser.h"
@@ -100,6 +101,7 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
                         "Failed to get antenna switch configuration");
 
     // Initialize CAT parser
+    ESP_RETURN_ON_ERROR(InputManager::instance().init(), TAG, "Failed to initialize input manager");
     ESP_RETURN_ON_ERROR(cat_parser_init(), TAG, "Failed to initialize CAT parser");
 
     // Initialize MQTT if enabled
@@ -173,8 +175,5 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
         }
     }
 
-    // Set the relay controller in antenna switch
-    *relay_controller_out = &relay_controller;
-    AntennaSwitch::instance().set_relay_controller(*relay_controller_out);
     return ESP_OK;
 }
