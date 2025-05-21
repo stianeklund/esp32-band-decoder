@@ -206,6 +206,7 @@ esp_err_t ConfigManager::init() { // Made non-const
         // Default for radio operation mode and interlock
         current_config_->radio_operation_mode = RADIO_OP_MODE_SINGLE_A; // Default to Radio A only
         current_config_->interlock_auto_resolves_conflict = true; // Default to true for safety if concurrent mode is chosen
+        current_config_->auto_restore_on_conflict_resolution = true; // Default to true
 
         // Initialize PTT input configuration defaults
         current_config_->ptt_input_radio_a = -1; // Disabled by default
@@ -377,6 +378,12 @@ esp_err_t ConfigManager::save_to_nvs() const {
         ESP_LOGE(TAG, "Error saving interlock_auto_resolves_conflict: %s", esp_err_to_name(interlock_err));
         if (ret == ESP_OK) ret = interlock_err; // Preserve first error
     }
+
+    esp_err_t auto_restore_err = nvs_set_u8(nvs_handle, "ar_conflict_res", static_cast<uint8_t>(current_config_->auto_restore_on_conflict_resolution));
+    if (auto_restore_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error saving auto_restore_on_conflict_resolution: %s", esp_err_to_name(auto_restore_err));
+        if (ret == ESP_OK) ret = auto_restore_err; // Preserve first error
+    }
     
     // Final commit for the newly added fields
     esp_err_t final_commit_err = nvs_commit(nvs_handle);
@@ -424,14 +431,14 @@ esp_err_t ConfigManager::save_to_nvs() const {
     if (ptt_err != ESP_OK) ESP_LOGE(TAG, "Error saving ptt_input_radio_a_active_high: %s", esp_err_to_name(ptt_err));
     if (ret == ESP_OK && ptt_err != ESP_OK) ret = ptt_err;
 
-    // Placeholders for Radio B PTT save
-    // ptt_err = nvs_set_i32(nvs_handle, "ptt_in_b", current_config_->ptt_input_radio_b);
-    // if (ptt_err != ESP_OK) ESP_LOGE(TAG, "Error saving ptt_input_radio_b: %s", esp_err_to_name(ptt_err));
-    // if (ret == ESP_OK && ptt_err != ESP_OK) ret = ptt_err;
-    //
-    // ptt_err = nvs_set_u8(nvs_handle, "ptt_act_h_b", static_cast<uint8_t>(current_config_->ptt_input_radio_b_active_high));
-    // if (ptt_err != ESP_OK) ESP_LOGE(TAG, "Error saving ptt_input_radio_b_active_high: %s", esp_err_to_name(ptt_err));
-    // if (ret == ESP_OK && ptt_err != ESP_OK) ret = ptt_err;
+    // Save Radio B PTT configuration
+    ptt_err = nvs_set_i32(nvs_handle, "ptt_in_b", current_config_->ptt_input_radio_b);
+    if (ptt_err != ESP_OK) ESP_LOGE(TAG, "Error saving ptt_input_radio_b: %s", esp_err_to_name(ptt_err));
+    if (ret == ESP_OK && ptt_err != ESP_OK) ret = ptt_err;
+    
+    ptt_err = nvs_set_u8(nvs_handle, "ptt_act_h_b", static_cast<uint8_t>(current_config_->ptt_input_radio_b_active_high));
+    if (ptt_err != ESP_OK) ESP_LOGE(TAG, "Error saving ptt_input_radio_b_active_high: %s", esp_err_to_name(ptt_err));
+    if (ret == ESP_OK && ptt_err != ESP_OK) ret = ptt_err;
 
     // Save MQTT configuration
     esp_err_t mqtt_err = nvs_set_u8(nvs_handle, "mqtt_enabled", static_cast<uint8_t>(current_config_->mqtt_enabled));
@@ -591,6 +598,19 @@ esp_err_t ConfigManager::load_from_nvs() const {
         // Keep existing value or default if error
     }
 
+    // Load auto_restore_on_conflict_resolution
+    uint8_t auto_restore_val;
+    esp_err_t err_arocr = nvs_get_u8(nvs_handle, "ar_conflict_res", &auto_restore_val);
+    if (err_arocr == ESP_OK) {
+        current_config_->auto_restore_on_conflict_resolution = static_cast<bool>(auto_restore_val);
+    } else if (err_arocr == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "auto_restore_on_conflict_resolution (key ar_conflict_res) not found in NVS, using default (true).");
+        current_config_->auto_restore_on_conflict_resolution = true;
+    } else {
+        ESP_LOGE(TAG, "Error loading auto_restore_on_conflict_resolution (key ar_conflict_res): %s", esp_err_to_name(err_arocr));
+        // Keep existing value or default if error
+    }
+
     // Load UART configuration
     int32_t temp_i32_val; // Temporary variable for nvs_get_i32
     esp_err_t uart_err = nvs_get_i32(nvs_handle, "uart_baud", &temp_i32_val);
@@ -652,18 +672,18 @@ esp_err_t ConfigManager::load_from_nvs() const {
     else if (ptt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "ptt_input_radio_a_active_high not found, using default (true)."); current_config_->ptt_input_radio_a_active_high = true; }
     else ESP_LOGE(TAG, "Error loading ptt_input_radio_a_active_high: %s", esp_err_to_name(ptt_err));
     
-    // Placeholders for Radio B PTT load
-    // int32_t ptt_in_b_val;
-    // ptt_err = nvs_get_i32(nvs_handle, "ptt_in_b", &ptt_in_b_val);
-    // if (ptt_err == ESP_OK) current_config_->ptt_input_radio_b = ptt_in_b_val;
-    // else if (ptt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "ptt_input_radio_b not found, using default (-1)."); current_config_->ptt_input_radio_b = -1; }
-    // else ESP_LOGE(TAG, "Error loading ptt_input_radio_b: %s", esp_err_to_name(ptt_err));
-    //
-    // uint8_t ptt_act_h_b_val;
-    // ptt_err = nvs_get_u8(nvs_handle, "ptt_act_h_b", &ptt_act_h_b_val);
-    // if (ptt_err == ESP_OK) current_config_->ptt_input_radio_b_active_high = static_cast<bool>(ptt_act_h_b_val);
-    // else if (ptt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "ptt_input_radio_b_active_high not found, using default (true)."); current_config_->ptt_input_radio_b_active_high = true; }
-    // else ESP_LOGE(TAG, "Error loading ptt_input_radio_b_active_high: %s", esp_err_to_name(ptt_err));
+    // Load Radio B PTT configuration
+    int32_t ptt_in_b_val;
+    ptt_err = nvs_get_i32(nvs_handle, "ptt_in_b", &ptt_in_b_val);
+    if (ptt_err == ESP_OK) current_config_->ptt_input_radio_b = ptt_in_b_val;
+    else if (ptt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "ptt_input_radio_b not found, using default (-1)."); current_config_->ptt_input_radio_b = -1; }
+    else ESP_LOGE(TAG, "Error loading ptt_input_radio_b: %s", esp_err_to_name(ptt_err));
+    
+    uint8_t ptt_act_h_b_val;
+    ptt_err = nvs_get_u8(nvs_handle, "ptt_act_h_b", &ptt_act_h_b_val);
+    if (ptt_err == ESP_OK) current_config_->ptt_input_radio_b_active_high = static_cast<bool>(ptt_act_h_b_val);
+    else if (ptt_err == ESP_ERR_NVS_NOT_FOUND) { ESP_LOGW(TAG, "ptt_input_radio_b_active_high not found, using default (true)."); current_config_->ptt_input_radio_b_active_high = true; }
+    else ESP_LOGE(TAG, "Error loading ptt_input_radio_b_active_high: %s", esp_err_to_name(ptt_err));
 
     // Load MQTT configuration
     uint8_t mqtt_enabled_val;
