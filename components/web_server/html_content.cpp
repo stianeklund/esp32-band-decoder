@@ -963,10 +963,26 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     // Interlock Option (conditionally visible)
     ss_buffer << "<div class='form-group' id='interlock_options_div' style='display: "
        << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "block" : "none") << ";'>";
-    ss_buffer << "<label><input type='checkbox' name='interlock_auto_resolves_conflict' "
+    ss_buffer << "<label style='font-weight: normal;'><input type='checkbox' name='interlock_auto_resolves_conflict' "
        << (config.interlock_auto_resolves_conflict ? "checked" : "")
-       << "> Automatically resolve same-antenna conflict (for Concurrent mode)</label>";
+       << " onchange='toggleRadioBPortVisibility()'> Automatically resolve same-antenna conflict (for Concurrent mode)</label>"; // Added onchange
+    
+    // Auto Restore Option
+    ss_buffer << "<div id='auto_restore_option_div' style='margin-top: 10px; display: none;'>"; // Initially hidden, JS will manage
+    ss_buffer << "<label style='font-weight: normal;'><input type='checkbox' name='auto_restore_on_conflict_resolution' "
+       << (config.auto_restore_on_conflict_resolution ? "checked" : "")
+       << " onchange='toggleRadioBPortVisibility()'> Automatically restore other radio's antenna after conflict is clear</label>"; // Added onchange
     ss_buffer << "</div>";
+
+    // Interlock Restore Delay
+    ss_buffer << "<div class='form-group' id='interlock_restore_delay_div' style='margin-top: 10px; display: none;'>"; // Initially hidden, JS will manage
+    ss_buffer << "<label for='radio_restore_delay_ms'>Interlock Restore Delay (ms):</label>";
+    ss_buffer << "<input type='number' id='radio_restore_delay_ms' name='radio_restore_delay_ms' value='"
+              << (config.radio_restore_delay_ms > 0 ? config.radio_restore_delay_ms : 200) // Default to 200 if 0 or uninit
+              << "' min='50' max='5000' step='50'>";
+    ss_buffer << "</div>";
+
+    ss_buffer << "</div>"; // End of interlock_options_div
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
 
@@ -1012,7 +1028,10 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<div class='form-group'>";
     ss_buffer << "<label for='uart_tx_pin'>UART TX Pin:</label>";
     ss_buffer << "<select id='uart_tx_pin' name='uart_tx_pin'>";
-    for (int pin = 0; pin <= 39; pin++) {
+    ss_buffer << "<option value='-1' " << (config.uart_tx_pin == -1 ? "selected" : "") << ">Disabled</option>";
+    for (int pin = 0; pin <= 39; pin++) { // Assuming GPIO pins 0-39 are valid choices
+        // Skip pin if it's the "disabled" value, to avoid duplicate entries if -1 was a valid GPIO for some reason
+        if (pin == -1) continue; 
         ss_buffer << "<option value='" << pin << "' "
            << (config.uart_tx_pin == pin ? "selected" : "")
            << ">GPIO" << pin << "</option>";
@@ -1028,6 +1047,52 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
            << ">GPIO" << pin << "</option>";
     }
     ss_buffer << "</select></div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    ss_buffer << "<h2>PTT Configuration (Radio A)</h2>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='ptt_input_radio_a'>PTT Input Pin (Radio A):</label>";
+    ss_buffer << "<select id='ptt_input_radio_a' name='ptt_input_radio_a'>";
+    ss_buffer << "<option value='-1' " << (config.ptt_input_radio_a == -1 ? "selected" : "") << ">Disabled</option>";
+    for (int pin = 0; pin <= 15; pin++) { // KC868-A16 has 16 inputs (0-15), corresponding to X1-X16
+        ss_buffer << "<option value='" << pin << "' "
+                  << (config.ptt_input_radio_a == pin ? "selected" : "")
+                  << ">X" << (pin + 1 < 10 ? "0" : "") << (pin + 1) << "</option>";
+    }
+    ss_buffer << "</select></div>";
+
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='ptt_input_radio_a_active_high'>PTT Active Level (Radio A):</label>";
+    ss_buffer << "<select id='ptt_input_radio_a_active_high' name='ptt_input_radio_a_active_high'>";
+    ss_buffer << "<option value='true' " << (config.ptt_input_radio_a_active_high ? "selected" : "") << ">Active High</option>";
+    ss_buffer << "<option value='false' " << (!config.ptt_input_radio_a_active_high ? "selected" : "") << ">Active Low</option>";
+    ss_buffer << "</select></div>";
+    ret = send_ss_chunk(ss_buffer); // Send Radio A PTT config
+    if (ret != ESP_OK) return ret;
+
+    // Radio B PTT Configuration (conditionally visible)
+    ss_buffer << "<div id='ptt_config_radio_b_div' style='display: "
+              << (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A ? "block" : "none") << ";'>";
+    ss_buffer << "<h2>PTT Configuration (Radio B)</h2>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='ptt_input_radio_b'>PTT Input Pin (Radio B):</label>";
+    ss_buffer << "<select id='ptt_input_radio_b' name='ptt_input_radio_b'>";
+    ss_buffer << "<option value='-1' " << (config.ptt_input_radio_b == -1 ? "selected" : "") << ">Disabled</option>";
+    for (int pin = 0; pin <= 15; pin++) { // KC868-A16 has 16 inputs (0-15), corresponding to X1-X16
+        ss_buffer << "<option value='" << pin << "' "
+                  << (config.ptt_input_radio_b == pin ? "selected" : "")
+                  << ">X" << (pin + 1 < 10 ? "0" : "") << (pin + 1) << "</option>";
+    }
+    ss_buffer << "</select></div>";
+
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='ptt_input_radio_b_active_high'>PTT Active Level (Radio B):</label>";
+    ss_buffer << "<select id='ptt_input_radio_b_active_high' name='ptt_input_radio_b_active_high'>";
+    ss_buffer << "<option value='true' " << (config.ptt_input_radio_b_active_high ? "selected" : "") << ">Active High</option>";
+    ss_buffer << "<option value='false' " << (!config.ptt_input_radio_b_active_high ? "selected" : "") << ">Active Low</option>";
+    ss_buffer << "</select></div>";
+    ss_buffer << "</div>"; // End of ptt_config_radio_b_div
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
 
@@ -1222,6 +1287,8 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
             allow_concurrent_data_sources: formData.get('allow_concurrent_data_sources') === 'on',
             radio_operation_mode: formData.get('radio_operation_mode'),
             interlock_auto_resolves_conflict: formData.get('interlock_auto_resolves_conflict') === 'on',
+            auto_restore_on_conflict_resolution: formData.get('auto_restore_on_conflict_resolution') === 'on',
+            radio_restore_delay_ms: parseInt(formData.get('radio_restore_delay_ms')) || 200, // Added this line
             num_bands: parseInt(formData.get('num_bands')),
             num_antenna_ports: parseInt(formData.get('num_antenna_ports')),
             uart_baud_rate: parseInt(formData.get('uart_baud_rate')) || 9600,
@@ -1230,6 +1297,12 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
             uart_flow_ctrl: parseInt(formData.get('uart_flow_ctrl')) || 0,
             uart_tx_pin: parseInt(formData.get('uart_tx_pin')) || 17,
             uart_rx_pin: parseInt(formData.get('uart_rx_pin')) || 16,
+            
+            ptt_input_radio_a: parseInt(formData.get('ptt_input_radio_a')),
+            ptt_input_radio_a_active_high: formData.get('ptt_input_radio_a_active_high') === 'true',
+            ptt_input_radio_b: parseInt(formData.get('ptt_input_radio_b')), 
+            ptt_input_radio_b_active_high: formData.get('ptt_input_radio_b_active_high') === 'true',
+
             mqtt_enabled: formData.get('mqtt_enabled') === 'on',
             mqtt_broker: formData.get('mqtt_broker'),
             mqtt_port: parseInt(formData.get('mqtt_port')),
@@ -1472,12 +1545,14 @@ for (const auto &[fst, snd] : HtmlContent::band_info) {
         const radioBPortHeader = document.getElementById('antenna_ports_b_header');
         const radioBPortCells = document.querySelectorAll('.radio_b_ports_cell');
         const radioBRelayRows = document.querySelectorAll('.radio_b_relay_row');
+        const pttConfigRadioBDiv = document.getElementById('ptt_config_radio_b_div');
 
         const showRadioB = mode !== 'SINGLE_A';
         
         if (radioBPortHeader) {
             radioBPortHeader.style.display = showRadioB ? '' : 'none';
         }
+        
         radioBPortCells.forEach(cell => {
             cell.style.display = showRadioB ? '' : 'none';
         });
@@ -1485,16 +1560,34 @@ for (const auto &[fst, snd] : HtmlContent::band_info) {
             row.style.display = showRadioB ? '' : 'none';
         });
 
+        if (pttConfigRadioBDiv) {
+            pttConfigRadioBDiv.style.display = showRadioB ? '' : 'none';
+        }
+ 
         const interlockDiv = document.getElementById('interlock_options_div');
-        if (interlockDiv) { // Check if element exists
+        const autoRestoreDiv = document.getElementById('auto_restore_option_div');
+        const interlockRestoreDelayDiv = document.getElementById('interlock_restore_delay_div'); // Get the new div
+        const interlockCheckbox = document.querySelector('input[name="interlock_auto_resolves_conflict"]');
+        const autoRestoreCheckbox = document.querySelector('input[name="auto_restore_on_conflict_resolution"]');
+
+
+        if (interlockDiv && autoRestoreDiv && interlockRestoreDelayDiv && interlockCheckbox && autoRestoreCheckbox) { // Check all elements
             if (mode === 'CONCURRENT_AB') {
                 interlockDiv.style.display = 'block';
+                const showAutoRestore = interlockCheckbox.checked;
+                autoRestoreDiv.style.display = showAutoRestore ? 'block' : 'none';
+                // Show delay input if auto-restore is shown AND checked
+                interlockRestoreDelayDiv.style.display = (showAutoRestore && autoRestoreCheckbox.checked) ? 'block' : 'none';
             } else {
                 interlockDiv.style.display = 'none';
+                autoRestoreDiv.style.display = 'none';
+                interlockRestoreDelayDiv.style.display = 'none'; // Hide delay if interlock section is hidden
             }
         }
     }
     document.getElementById('radio_operation_mode').addEventListener('change', toggleRadioBPortVisibility);
+    document.querySelector('input[name="interlock_auto_resolves_conflict"]').addEventListener('change', toggleRadioBPortVisibility);
+    document.querySelector('input[name="auto_restore_on_conflict_resolution"]').addEventListener('change', toggleRadioBPortVisibility); // Add listener
     
     toggleRadioBPortVisibility(); // Initial call
     </script>)";

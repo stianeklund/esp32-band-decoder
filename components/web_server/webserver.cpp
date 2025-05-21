@@ -308,6 +308,21 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     const cJSON* interlock_json = cJSON_GetObjectItem(root, "interlock_auto_resolves_conflict");
     new_config.interlock_auto_resolves_conflict = cJSON_IsTrue(interlock_json);
 
+    // Parse auto_restore_on_conflict_resolution
+    const cJSON* auto_restore_json = cJSON_GetObjectItem(root, "auto_restore_on_conflict_resolution");
+    new_config.auto_restore_on_conflict_resolution = cJSON_IsTrue(auto_restore_json);
+
+    // Parse radio_restore_delay_ms
+    const cJSON* restore_delay_json = cJSON_GetObjectItem(root, "radio_restore_delay_ms");
+    if (cJSON_IsNumber(restore_delay_json)) {
+        new_config.radio_restore_delay_ms = restore_delay_json->valueint;
+        if (new_config.radio_restore_delay_ms < 50) new_config.radio_restore_delay_ms = 50; // Min value
+        if (new_config.radio_restore_delay_ms > 5000) new_config.radio_restore_delay_ms = 5000; // Max value
+    } else {
+        new_config.radio_restore_delay_ms = 200; // Default if not provided or invalid
+        ESP_LOGW(TAG, "radio_restore_delay_ms not found or invalid in JSON, defaulting to 200ms.");
+    }
+
     // Parse UART configuration
     if (const cJSON *uart_baud = cJSON_GetObjectItem(root, "uart_baud_rate"); cJSON_IsNumber(uart_baud)) {
         if (uart_baud->valueint > 0) {
@@ -377,6 +392,40 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
         cJSON_Delete(root);
         free(content);
         return ESP_FAIL;
+    }
+
+    // Parse PTT Configuration for Radio A
+    if (const cJSON *ptt_pin_a_json = cJSON_GetObjectItem(root, "ptt_input_radio_a"); cJSON_IsNumber(ptt_pin_a_json)) {
+        new_config.ptt_input_radio_a = ptt_pin_a_json->valueint;
+        ESP_LOGD(TAG, "Setting PTT Input Pin (Radio A) to: %d", new_config.ptt_input_radio_a);
+    } else {
+        ESP_LOGW(TAG, "PTT Input Pin (Radio A) not specified or invalid, defaulting to -1 (disabled)");
+        new_config.ptt_input_radio_a = -1;
+    }
+
+    if (const cJSON *ptt_active_high_a_json = cJSON_GetObjectItem(root, "ptt_input_radio_a_active_high"); cJSON_IsBool(ptt_active_high_a_json)) {
+        new_config.ptt_input_radio_a_active_high = cJSON_IsTrue(ptt_active_high_a_json);
+        ESP_LOGD(TAG, "Setting PTT Active High (Radio A) to: %s", new_config.ptt_input_radio_a_active_high ? "true" : "false");
+    } else {
+        ESP_LOGW(TAG, "PTT Active High (Radio A) not specified or invalid, defaulting to true");
+        new_config.ptt_input_radio_a_active_high = true;
+    }
+
+    // Parse PTT Configuration for Radio B
+    if (const cJSON *ptt_pin_b_json = cJSON_GetObjectItem(root, "ptt_input_radio_b"); cJSON_IsNumber(ptt_pin_b_json)) {
+        new_config.ptt_input_radio_b = ptt_pin_b_json->valueint;
+        ESP_LOGD(TAG, "Setting PTT Input Pin (Radio B) to: %d", new_config.ptt_input_radio_b);
+    } else {
+        ESP_LOGW(TAG, "PTT Input Pin (Radio B) not specified or invalid, defaulting to -1 (disabled)");
+        new_config.ptt_input_radio_b = -1;
+    }
+
+    if (const cJSON *ptt_active_high_b_json = cJSON_GetObjectItem(root, "ptt_input_radio_b_active_high"); cJSON_IsBool(ptt_active_high_b_json)) {
+        new_config.ptt_input_radio_b_active_high = cJSON_IsTrue(ptt_active_high_b_json);
+        ESP_LOGD(TAG, "Setting PTT Active High (Radio B) to: %s", new_config.ptt_input_radio_b_active_high ? "true" : "false");
+    } else {
+        ESP_LOGW(TAG, "PTT Active High (Radio B) not specified or invalid, defaulting to true");
+        new_config.ptt_input_radio_b_active_high = true;
     }
 
     // Parse MQTT settings
@@ -460,9 +509,9 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     const cJSON *num_bands_json = cJSON_GetObjectItem(root, "num_bands");
     if (!cJSON_IsNumber(num_bands_json)) {
         ESP_LOGE(TAG, "Number of bands not specified or invalid");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or missing UART RX pin");
         cJSON_Delete(root);
         free(content);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or missing num_bands");
         return ESP_FAIL;
     }
 
@@ -639,8 +688,14 @@ esp_err_t WebServer::reset_config_handler(httpd_req_t *req) {
         UART_HW_FLOWCTRL_DISABLE, // uart_flow_ctrl
         17, // uart_tx_pin (example, ensure this is a valid default for your hardware)
         16, // uart_rx_pin (example, ensure this is a valid default for your hardware)
+        // PTT defaults
+        -1,    // ptt_input_radio_a (disabled)
+        true,  // ptt_input_radio_a_active_high
+        -1,    // ptt_input_radio_b (disabled)
+        true,  // ptt_input_radio_b_active_high
         false, // mqtt_enabled
         true, // interlock_auto_resolves_conflict (default to true for safety if concurrent mode is chosen later)
+        true, // auto_restore_on_conflict_resolution (default to true)
         false, // allow_concurrent_data_sources
         "broker.example.com", // mqtt_broker
         1883, // mqtt_port
