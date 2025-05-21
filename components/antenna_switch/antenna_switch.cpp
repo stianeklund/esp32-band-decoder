@@ -65,6 +65,52 @@ const antenna_switch_config_t& AntennaSwitch::get_config_ref() const {
     return ConfigManager::instance().get_config();
 }
 
+// Callback from InputManager when hardware PTT A state changes
+void AntennaSwitch::on_hw_ptt_a_state_change(bool active) {
+    if (hw_ptt_a_active_.load(std::memory_order_relaxed) == active) return;
+
+    ESP_LOGI(TAG, "Hardware PTT A effective state changed to: %s", active ? "ACTIVE" : "INACTIVE");
+    hw_ptt_a_active_.store(active, std::memory_order_relaxed);
+
+    if (active) {
+        on_radio_a_tx_start();
+    } else {
+        if (!CatParser::instance().is_transmitting()) { // Check CAT state for Radio A
+            on_radio_a_tx_stop();
+        } else {
+            ESP_LOGI(TAG, "HW PTT A INACTIVE, but CAT parser (Radio A) still reports TX. Effective TX state for A remains ON via CAT.");
+        }
+    }
+}
+
+// Callback from InputManager when hardware PTT B state changes
+void AntennaSwitch::on_hw_ptt_b_state_change(bool active) {
+    if (hw_ptt_b_active_.load(std::memory_order_relaxed) == active) return;
+
+    ESP_LOGI(TAG, "Hardware PTT B effective state changed to: %s", active ? "ACTIVE" : "INACTIVE");
+    hw_ptt_b_active_.store(active, std::memory_order_relaxed);
+
+    // For Radio B, currently, we assume its TX state is primarily driven by HW PTT.
+    // If CatParser were to support independent TX state for Radio B, that check would go here.
+    if (active) {
+        on_radio_b_tx_start();
+    } else {
+        // If there was a CatParser::instance().is_radio_b_transmitting(), it would be checked here.
+        on_radio_b_tx_stop();
+    }
+}
+
+bool AntennaSwitch::is_radio_a_transmitting_effective() const {
+    return hw_ptt_a_active_.load(std::memory_order_relaxed) || CatParser::instance().is_transmitting();
+}
+
+bool AntennaSwitch::is_radio_b_transmitting_effective() const {
+    // For now, Radio B's TX state is determined by its hardware PTT.
+    // If CatParser supported Radio B TX state:
+    // return hw_ptt_b_active_.load(std::memory_order_relaxed) || CatParser::instance().is_radio_b_transmitting();
+    return hw_ptt_b_active_.load(std::memory_order_relaxed);
+}
+
 esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
     ESP_LOGV(TAG, "Setting antenna for frequency: %lu Hz", frequency);
 
@@ -173,11 +219,13 @@ int AntennaSwitch::get_active_relay_for_radio(RadioID radio) const {
 }
 
 void AntennaSwitch::on_radio_a_tx_start() {
-    ESP_LOGD(TAG, "Radio A started transmitting. Applying interlock for Radio B.");
+    ESP_LOGI(TAG, "Radio A effective TX START. HW PTT A: %s, CAT TX A: %s. Applying interlock for Radio B.",
+             hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
+             CatParser::instance().is_transmitting() ? "ON" : "OFF");
     const auto& config = ConfigManager::instance().get_config();
 
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
-        ESP_LOGD(TAG, "Single Radio A mode, no interlock action needed for Radio B.");
+        ESP_LOGD(TAG, "Single Radio A mode, no interlock action needed for Radio B (due to Radio A TX).");
         return;
     }
 
@@ -186,28 +234,44 @@ void AntennaSwitch::on_radio_a_tx_start() {
         return;
     }
 
-    pre_tx_active_relay_radio_b_ = get_active_relay_for_radio(RadioID::B);
-
+    // Check if Radio B is ALREADY considered interlocked by THIS mechanism
     if (pre_tx_active_relay_radio_b_ != 0) {
-        ESP_LOGI(TAG, "Radio B was using relay %d. Turning it OFF due to Radio A TX.", pre_tx_active_relay_radio_b_);
-        // Directly use relay_controller_ to set state.
-        // The relay_controller_->set_relay method should have its broad TX check removed.
-        esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_b_, false);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to turn OFF Radio B relay %d: %s", pre_tx_active_relay_radio_b_, esp_err_to_name(err));
-            // If deactivation failed, don't try to restore it later.
-            pre_tx_active_relay_radio_b_ = 0;
+        ESP_LOGD(TAG, "Radio A TX start: Radio B interlock already in effect (relay %d previously stored). No new action.", pre_tx_active_relay_radio_b_);
+        return;
+    }
+
+    // If not already interlocked by us, find out what Radio B is currently doing
+    int active_b_relay = get_active_relay_for_radio(RadioID::B);
+
+    if (active_b_relay != 0) { // Radio B is using a relay
+        // Before turning off B's relay, check for conflicts
+        if (is_radio_b_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
+            ESP_LOGW(TAG, "Radio A TX start: Conflict! Radio B (relay %d) is also transmitting. Interlock resolution is manual. Radio B relay NOT changed.", active_b_relay);
+            // Do NOT set pre_tx_active_relay_radio_b_ here, because we didn't turn off its relay.
+        } else {
+            // Ok, we need to turn off Radio B's relay. Store it first.
+            pre_tx_active_relay_radio_b_ = active_b_relay;
+            ESP_LOGI(TAG, "Radio B was using relay %d. Turning it OFF due to Radio A TX.", pre_tx_active_relay_radio_b_);
+            esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_b_, false);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to turn OFF Radio B relay %d: %s", pre_tx_active_relay_radio_b_, esp_err_to_name(err));
+                pre_tx_active_relay_radio_b_ = 0; // Failed, so don't try to restore
+            }
         }
     } else {
         ESP_LOGD(TAG, "Radio B was not using any relay. No interlock action needed for Radio A TX.");
+        // pre_tx_active_relay_radio_b_ remains 0, so no restoration will be attempted.
     }
 }
 
 void AntennaSwitch::on_radio_a_tx_stop() {
-    ESP_LOGI(TAG, "Radio A stopped transmitting. Restoring Radio B state if applicable.");
+    ESP_LOGI(TAG, "Radio A effective TX STOP. HW PTT A: %s, CAT TX A: %s. Restoring Radio B state if applicable.",
+             hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
+             CatParser::instance().is_transmitting() ? "ON" : "OFF");
     const auto& config = ConfigManager::instance().get_config();
 
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
+        ESP_LOGD(TAG, "Single Radio A mode, no interlock restoration needed for Radio B.");
         return;
     }
 
@@ -217,13 +281,13 @@ void AntennaSwitch::on_radio_a_tx_stop() {
     }
 
     if (pre_tx_active_relay_radio_b_ != 0) {
-        // Placeholder: Before restoring, ensure Radio B is not now transmitting itself (if that state were available)
-        // bool radio_b_is_tx = get_radio_b_tx_state(); // Needs a real source
-        // if (radio_b_is_tx) {
-        //     ESP_LOGW(TAG, "Radio B is currently transmitting, not restoring its relay %d.", pre_tx_active_relay_radio_b_);
-        //     pre_tx_active_relay_radio_b_ = 0; // Clear as we won't restore now
-        //     return;
-        // }
+        // Before restoring, ensure Radio B is not now transmitting itself
+        if (is_radio_b_transmitting_effective()) {
+            ESP_LOGW(TAG, "Radio B is currently transmitting (effective), not restoring its relay %d.", pre_tx_active_relay_radio_b_);
+            // Decide if we clear pre_tx_active_relay_radio_b_ or retry later. For now, clear.
+            pre_tx_active_relay_radio_b_ = 0; 
+            return;
+        }
 
         ESP_LOGI(TAG, "Restoring Radio B relay %d to ON.", pre_tx_active_relay_radio_b_);
         esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_b_, true);
@@ -231,11 +295,14 @@ void AntennaSwitch::on_radio_a_tx_stop() {
             ESP_LOGE(TAG, "Failed to restore Radio B relay %d: %s", pre_tx_active_relay_radio_b_, esp_err_to_name(err));
         }
         pre_tx_active_relay_radio_b_ = 0; // Clear after attempting restoration
+    } else {
+        ESP_LOGD(TAG, "No Radio B relay was stored (pre_tx_active_relay_radio_b_ is 0). No restoration action for Radio B.");
     }
 }
 
 void AntennaSwitch::on_radio_b_tx_start() {
-    ESP_LOGI(TAG, "Radio B started transmitting (interlock for Radio A).");
+    ESP_LOGI(TAG, "Radio B effective TX START. HW PTT B: %s. Applying interlock for Radio A.",
+             hw_ptt_b_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE");
     const auto& config = ConfigManager::instance().get_config();
 
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
@@ -247,23 +314,39 @@ void AntennaSwitch::on_radio_b_tx_start() {
         return;
     }
 
-    pre_tx_active_relay_radio_a_ = get_active_relay_for_radio(RadioID::A);
-
+    // Check if Radio A is ALREADY considered interlocked by THIS mechanism
     if (pre_tx_active_relay_radio_a_ != 0) {
-        ESP_LOGI(TAG, "Radio A was using relay %d. Turning it OFF due to Radio B TX.", pre_tx_active_relay_radio_a_);
-        esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_a_, false);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to turn OFF Radio A relay %d: %s", pre_tx_active_relay_radio_a_, esp_err_to_name(err));
-            pre_tx_active_relay_radio_a_ = 0;
+        ESP_LOGD(TAG, "Radio B TX start: Radio A interlock already in effect (relay %d previously stored). No new action.", pre_tx_active_relay_radio_a_);
+        return;
+    }
+
+    // If not already interlocked by us, find out what Radio A is currently doing
+    int active_a_relay = get_active_relay_for_radio(RadioID::A);
+
+    if (active_a_relay != 0) { // Radio A is using a relay
+        // Before turning off A's relay, check for conflicts
+        if (is_radio_a_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
+            ESP_LOGW(TAG, "Radio B TX start: Conflict! Radio A (relay %d) is also transmitting. Interlock resolution is manual. Radio A relay NOT changed.", active_a_relay);
+            // Do NOT set pre_tx_active_relay_radio_a_ here, because we didn't turn off its relay.
+        } else {
+            // Ok, we need to turn off Radio A's relay. Store it first.
+            pre_tx_active_relay_radio_a_ = active_a_relay;
+            ESP_LOGI(TAG, "Radio A was using relay %d. Turning it OFF due to Radio B TX.", pre_tx_active_relay_radio_a_);
+            esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_a_, false);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to turn OFF Radio A relay %d: %s", pre_tx_active_relay_radio_a_, esp_err_to_name(err));
+                pre_tx_active_relay_radio_a_ = 0; // Failed, so don't try to restore
+            }
         }
     } else {
         ESP_LOGD(TAG, "Radio A was not using any relay. No interlock action needed for Radio B TX.");
+        // pre_tx_active_relay_radio_a_ remains 0, so no restoration will be attempted.
     }
-    ESP_LOGW(TAG, "Note: Radio B TX detection and interlock is partially stubbed until Radio B TX state is available.");
 }
 
 void AntennaSwitch::on_radio_b_tx_stop() {
-    ESP_LOGI(TAG, "Radio B stopped transmitting (restoring Radio A).");
+    ESP_LOGI(TAG, "Radio B effective TX STOP. HW PTT B: %s. Restoring Radio A state if applicable.",
+             hw_ptt_b_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE");
     const auto& config = ConfigManager::instance().get_config();
 
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
@@ -276,8 +359,11 @@ void AntennaSwitch::on_radio_b_tx_stop() {
 
     if (pre_tx_active_relay_radio_a_ != 0) {
         // Before restoring, ensure Radio A is not now transmitting itself
-        if (CatParser::instance().is_transmitting()) { // Check Radio A's TX state
-             ESP_LOGW(TAG, "Radio A is now transmitting, cannot restore its previous relay %d after Radio B TX stop.", pre_tx_active_relay_radio_a_);
+        if (is_radio_a_transmitting_effective()) {
+             ESP_LOGW(TAG, "Radio A is currently transmitting (effective), cannot restore its previous relay %d after Radio B TX stop.", pre_tx_active_relay_radio_a_);
+             // Decide if we clear pre_tx_active_relay_radio_a_ or retry later. For now, clear.
+             pre_tx_active_relay_radio_a_ = 0;
+             return;
         } else {
             ESP_LOGI(TAG, "Restoring Radio A relay %d to ON.", pre_tx_active_relay_radio_a_);
             esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_a_, true);
@@ -330,8 +416,9 @@ esp_err_t AntennaSwitch::update_last_used_antenna_preference(int activated_relay
         ESP_LOGD(TAG, "Cannot determine band for Radio B preference update without frequency for relay %d.", activated_relay_id);
     }
 
-
-    if (band_idx == -1) {
+    // The check for band_idx == -1 should correctly determine if a band was found.
+    // If band_idx is still -1 here, it means no band matched the frequency.
+    if (band_idx == -1) { 
         ESP_LOGD(TAG, "No current band found for Radio %c (Freq: %lu Hz). Not updating preference for relay %d.",
                  (radio_of_activated_relay == RadioID::A ? 'A' : 'B'), current_freq_for_preference, activated_relay_id);
         return ESP_OK; // Not an error, just no band to update preference for
@@ -369,6 +456,110 @@ esp_err_t AntennaSwitch::update_last_used_antenna_preference(int activated_relay
     return ESP_OK;
 }
 
+// Helper to attempt restoration of relays deselected by auto-resolved port conflicts
+void AntennaSwitch::attempt_restore_auto_resolved_radio_a_relay() {
+    const auto& config = ConfigManager::instance().get_config();
+    // Check if conditions for auto-restoration are met
+    if (config.radio_operation_mode != RADIO_OP_MODE_CONCURRENT_AB ||
+        !config.interlock_auto_resolves_conflict ||
+        !config.auto_restore_on_conflict_resolution) {
+        // If conditions are not met, and a relay was stored, log and clear it.
+        if (auto_resolved_conflict_prev_a_relay_ != 0) {
+            ESP_LOGD(TAG, "Auto-restore conditions not met (mode/interlock/auto_restore_setting). Clearing stored Radio A relay %d.", auto_resolved_conflict_prev_a_relay_);
+            auto_resolved_conflict_prev_a_relay_ = 0;
+        }
+        return;
+    }
+
+    if (auto_resolved_conflict_prev_a_relay_ == 0) {
+        // ESP_LOGD(TAG, "No Radio A relay stored from auto-resolved conflict to restore.");
+        return;
+    }
+
+    // Check if Radio A is currently transmitting (should not restore if it is)
+    if (is_radio_a_transmitting_effective()) {
+        ESP_LOGW(TAG, "Radio A is currently transmitting. Cannot restore auto-resolved relay %d.", auto_resolved_conflict_prev_a_relay_);
+        // Do not clear auto_resolved_conflict_prev_a_relay_ here, as TX state might change.
+        return;
+    }
+
+    // Check if the port is now free (i.e., Radio B is not using it or is not transmitting on it)
+    int active_b_relay = get_active_relay_for_radio(RadioID::B);
+    int port_idx_of_stored_a_relay = (auto_resolved_conflict_prev_a_relay_ - 1) % RelayController::RELAYS_PER_RADIO;
+    
+    if (active_b_relay != 0) {
+        int port_idx_of_active_b_relay = (active_b_relay - 1) % RelayController::RELAYS_PER_RADIO;
+        if (port_idx_of_active_b_relay == port_idx_of_stored_a_relay) {
+            // Port is still in use by Radio B. Check if Radio B is transmitting.
+            if (is_radio_b_transmitting_effective()) {
+                 ESP_LOGW(TAG, "Cannot restore Radio A relay %d. Port %d is in use by Radio B (relay %d) AND Radio B is transmitting.",
+                         auto_resolved_conflict_prev_a_relay_, port_idx_of_stored_a_relay + 1, active_b_relay);
+                return;
+            }
+            ESP_LOGD(TAG, "Port %d for Radio A relay %d is currently used by Radio B (relay %d), but B is not TXing. Attempting restore for A.",
+                     port_idx_of_stored_a_relay + 1, auto_resolved_conflict_prev_a_relay_, active_b_relay);
+        }
+    }
+
+    ESP_LOGI(TAG, "Attempting to restore Radio A relay %d (deselected by auto-resolved conflict).", auto_resolved_conflict_prev_a_relay_);
+    // Use set_relay_for_antenna to ensure proper mode handling. Band_number can be -1 if not relevant for direct restore.
+    esp_err_t err = set_relay_for_antenna(auto_resolved_conflict_prev_a_relay_, -1, RadioID::A, true);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Successfully restored Radio A relay %d.", auto_resolved_conflict_prev_a_relay_);
+        auto_resolved_conflict_prev_a_relay_ = 0; // Clear after successful restoration
+    } else {
+        ESP_LOGE(TAG, "Failed to restore Radio A relay %d: %s. It might be restored later if conditions change.", auto_resolved_conflict_prev_a_relay_, esp_err_to_name(err));
+    }
+}
+
+void AntennaSwitch::attempt_restore_auto_resolved_radio_b_relay() {
+    const auto& config = ConfigManager::instance().get_config();
+    if (config.radio_operation_mode != RADIO_OP_MODE_CONCURRENT_AB ||
+        !config.interlock_auto_resolves_conflict ||
+        !config.auto_restore_on_conflict_resolution) {
+        if (auto_resolved_conflict_prev_b_relay_ != 0) {
+            ESP_LOGD(TAG, "Auto-restore conditions not met (mode/interlock/auto_restore_setting). Clearing stored Radio B relay %d.", auto_resolved_conflict_prev_b_relay_);
+            auto_resolved_conflict_prev_b_relay_ = 0;
+        }
+        return;
+    }
+
+    if (auto_resolved_conflict_prev_b_relay_ == 0) {
+        // ESP_LOGD(TAG, "No Radio B relay stored from auto-resolved conflict to restore.");
+        return;
+    }
+
+    if (is_radio_b_transmitting_effective()) {
+        ESP_LOGW(TAG, "Radio B is currently transmitting. Cannot restore auto-resolved relay %d.", auto_resolved_conflict_prev_b_relay_);
+        return;
+    }
+
+    int active_a_relay = get_active_relay_for_radio(RadioID::A);
+    int port_idx_of_stored_b_relay = (auto_resolved_conflict_prev_b_relay_ - 1) % RelayController::RELAYS_PER_RADIO;
+
+    if (active_a_relay != 0) {
+        int port_idx_of_active_a_relay = (active_a_relay - 1) % RelayController::RELAYS_PER_RADIO;
+        if (port_idx_of_active_a_relay == port_idx_of_stored_b_relay) {
+            if (is_radio_a_transmitting_effective()) {
+                ESP_LOGW(TAG, "Cannot restore Radio B relay %d. Port %d is in use by Radio A (relay %d) AND Radio A is transmitting.",
+                         auto_resolved_conflict_prev_b_relay_, port_idx_of_stored_b_relay + 1, active_a_relay);
+                return;
+            }
+            ESP_LOGD(TAG, "Port %d for Radio B relay %d is currently used by Radio A (relay %d), but A is not TXing. Attempting restore for B.",
+                     port_idx_of_stored_b_relay + 1, auto_resolved_conflict_prev_b_relay_, active_a_relay);
+        }
+    }
+
+    ESP_LOGI(TAG, "Attempting to restore Radio B relay %d (deselected by auto-resolved conflict).", auto_resolved_conflict_prev_b_relay_);
+    esp_err_t err = set_relay_for_antenna(auto_resolved_conflict_prev_b_relay_, -1, RadioID::B, true);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Successfully restored Radio B relay %d.", auto_resolved_conflict_prev_b_relay_);
+        auto_resolved_conflict_prev_b_relay_ = 0; 
+    } else {
+        ESP_LOGE(TAG, "Failed to restore Radio B relay %d: %s. It might be restored later if conditions change.", auto_resolved_conflict_prev_b_relay_, esp_err_to_name(err));
+    }
+}
+
 
 esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
     ESP_LOGI(TAG, "AntennaSwitch: Setting relay %d to %s", relay_id, state ? "ON" : "OFF");
@@ -389,33 +580,31 @@ esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
 
     if (state) { // If trying to turn a relay ON
         if (is_this_radio_a_relay) {
-            // Check if Radio B is transmitting (Placeholder for actual Radio B TX state)
-            // bool radio_b_is_tx = get_actual_radio_b_tx_state(); // Needs a real source
-            // if (radio_b_is_tx && config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A) {
-            //     ESP_LOGW(TAG, "Cannot turn ON Radio A relay %d: Radio B is transmitting.", relay_id);
-            //     return ESP_ERR_INVALID_STATE;
-            // }
             // Hot-switching protection for Radio A itself:
-            if (CatParser::instance().is_transmitting()) {
-                ESP_LOGW(TAG, "Cannot turn ON Radio A relay %d: Radio A is currently transmitting.", relay_id);
+            if (is_radio_a_transmitting_effective()) {
+                ESP_LOGW(TAG, "Cannot turn ON Radio A relay %d: Radio A is currently transmitting (effective).", relay_id);
                 return ESP_ERR_INVALID_STATE;
+            }
+            // Interlock: Check if Radio B is transmitting
+            if (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A && is_radio_b_transmitting_effective()) {
+                 ESP_LOGW(TAG, "Cannot turn ON Radio A relay %d: Radio B is transmitting (effective).", relay_id);
+                 return ESP_ERR_INVALID_STATE;
             }
         } else if (is_this_radio_b_relay) {
             if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
                 ESP_LOGW(TAG, "Radio B operations disabled (Single A mode), cannot turn ON relay %d for Radio B.", relay_id);
-                return ESP_OK; // Or ESP_ERR_INVALID_STATE if preferred
+                return ESP_OK; 
             }
-            if (CatParser::instance().is_transmitting()) { // Check if Radio A is transmitting
-                ESP_LOGW(TAG, "Cannot turn ON Radio B relay %d: Radio A is transmitting.", relay_id);
+            // Hot-switching protection for Radio B itself:
+            if (is_radio_b_transmitting_effective()) {
+                ESP_LOGW(TAG, "Cannot turn ON Radio B relay %d: Radio B is currently transmitting (effective).", relay_id);
                 return ESP_ERR_INVALID_STATE;
             }
-            // TODO
-            // Hot-switching protection for Radio B itself (Placeholder for actual Radio B TX state)
-            // bool radio_b_is_tx = get_actual_radio_b_tx_state();
-            // if (radio_b_is_tx) {
-            //     ESP_LOGW(TAG, "Cannot turn ON Radio B relay %d: Radio B is currently transmitting.", relay_id);
-            //     return ESP_ERR_INVALID_STATE;
-            // }
+            // Interlock: Check if Radio A is transmitting
+            if (is_radio_a_transmitting_effective()) {
+                ESP_LOGW(TAG, "Cannot turn ON Radio B relay %d: Radio A is transmitting (effective).", relay_id);
+                return ESP_ERR_INVALID_STATE;
+            }
         }
     }
 
@@ -455,16 +644,16 @@ esp_err_t AntennaSwitch::set_relay_radio_b(int relay_id, bool state) {
     }
 
     if (state) { // If trying to turn ON Radio B relay
-        if (CatParser::instance().is_transmitting()) { // Check if Radio A is transmitting
-            ESP_LOGW(TAG, "Radio A is transmitting, cannot turn ON relay %d for Radio B.", relay_id);
+        // Hot-switching protection for Radio B itself
+        if (is_radio_b_transmitting_effective()) {
+            ESP_LOGW(TAG, "Cannot turn ON Radio B relay %d: Radio B is currently transmitting (effective).", relay_id);
             return ESP_ERR_INVALID_STATE;
         }
-        // Placeholder: Hot-switching protection for Radio B itself
-        // bool radio_b_is_tx = get_actual_radio_b_tx_state(); // Needs a real source
-        // if (radio_b_is_tx) {
-        //     ESP_LOGW(TAG, "Cannot turn ON Radio B relay %d: Radio B is currently transmitting.", relay_id);
-        //     return ESP_ERR_INVALID_STATE;
-        // }
+        // Interlock: Check if Radio A is transmitting
+        if (is_radio_a_transmitting_effective()) {
+            ESP_LOGW(TAG, "Radio A is transmitting (effective), cannot turn ON relay %d for Radio B.", relay_id);
+            return ESP_ERR_INVALID_STATE;
+        }
     }
     // The band_number is -1 as this is a direct relay set.
     return relay_controller_->set_relay_for_antenna(relay_id, /*band_number=*/-1, RadioID::B, state);
@@ -508,40 +697,67 @@ esp_err_t AntennaSwitch::set_relay_for_antenna(int relay_id, int band_number, Ra
         ESP_LOGE(TAG, "Relay controller not initialized for set_relay_for_antenna");
         return ESP_ERR_INVALID_STATE;
     }
+    const auto& config = ConfigManager::instance().get_config(); // Get config early
+
+    // Anticipate and store other radio's state if a port conflict will be auto-resolved
+    if (state && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && config.interlock_auto_resolves_conflict) {
+        RadioID other_radio_id = (radio == RadioID::A) ? RadioID::B : RadioID::A;
+        int active_other_relay = get_active_relay_for_radio(other_radio_id);
+
+        if (active_other_relay != 0) {
+            // Port indices are 0-based from the perspective of a single radio's available ports
+            int activating_radio_port_idx = (relay_id - 1) % RelayController::RELAYS_PER_RADIO;
+            int other_radio_active_port_idx = (active_other_relay - 1) % RelayController::RELAYS_PER_RADIO;
+
+            if (activating_radio_port_idx == other_radio_active_port_idx) {
+                // Conflict will be auto-resolved by RelayController, deactivating other_radio's relay.
+                // Store this relay to allow TX interlock to restore it later when 'radio' stops transmitting.
+                if (other_radio_id == RadioID::B) {
+                    if (pre_tx_active_relay_radio_b_ == 0) { // Only if not already set (e.g. by an ongoing TX by 'radio')
+                        ESP_LOGI(TAG, "Anticipating Radio B relay %d (port %d) deactivation by Radio A (activating relay %d, port %d). Storing for TX interlock restoration.",
+                                 active_other_relay, other_radio_active_port_idx + 1, relay_id, activating_radio_port_idx + 1);
+                        pre_tx_active_relay_radio_b_ = active_other_relay;
+                    }
+                } else { // other_radio_id == RadioID::A
+                    if (pre_tx_active_relay_radio_a_ == 0) {
+                        ESP_LOGI(TAG, "Anticipating Radio A relay %d (port %d) deactivation by Radio B (activating relay %d, port %d). Storing for TX interlock restoration.",
+                                 active_other_relay, other_radio_active_port_idx + 1, relay_id, activating_radio_port_idx + 1);
+                        pre_tx_active_relay_radio_a_ = active_other_relay;
+                    }
+                }
+            }
+        }
+    }
 
     // Add TX interlock checks here too, if setting a relay ON.
     if (state == true) { // Trying to activate an antenna
-        const auto& config = ConfigManager::instance().get_config();
+        // const auto& config = ConfigManager::instance().get_config(); // Already fetched
         if (radio == RadioID::A) {
-            // If Radio B is TX, don't activate Radio A antenna. (Stubbed for actual Radio B TX state)
-            // bool radio_b_is_tx = get_actual_radio_b_tx_state(); // Needs a real source
-            // if (radio_b_is_tx && config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A) {
-            //    ESP_LOGW(TAG, "Cannot set antenna for Radio A; Radio B is transmitting.");
-            //    return ESP_ERR_INVALID_STATE; // Or ESP_FAIL
-            // }
             // Hot-switching protection for Radio A itself:
-            if (CatParser::instance().is_transmitting()) {
-                ESP_LOGW(TAG, "Cannot set antenna for Radio A; Radio A is currently transmitting.");
-                return ESP_ERR_INVALID_STATE; // Or ESP_FAIL
+            if (is_radio_a_transmitting_effective()) {
+                ESP_LOGW(TAG, "Cannot set antenna for Radio A; Radio A is currently transmitting (effective).");
+                return ESP_ERR_INVALID_STATE;
+            }
+            // Interlock: Check if Radio B is transmitting
+            if (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A && is_radio_b_transmitting_effective()) {
+               ESP_LOGW(TAG, "Cannot set antenna for Radio A; Radio B is transmitting (effective).");
+               return ESP_ERR_INVALID_STATE;
             }
         } else { // RadioID::B
             if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
                  ESP_LOGW(TAG, "Cannot set antenna for Radio B; Single A mode active.");
-                 // In single A mode, requests for B might be ignored or treated as an error.
-                 // Returning ESP_OK here means the request is acknowledged but not acted upon if it's to turn ON.
-                 // If state is false (turn OFF), it should proceed.
-                 if (state) return ESP_OK;
+                 if (state) return ESP_OK; // Acknowledge but don't act on ON request in single A mode
             }
-            if (CatParser::instance().is_transmitting()) { // Radio A is TX
-                ESP_LOGW(TAG, "Cannot set antenna for Radio B; Radio A is transmitting.");
-                return ESP_ERR_INVALID_STATE; // Or ESP_FAIL
+            // Hot-switching protection for Radio B itself:
+            if (is_radio_b_transmitting_effective()) {
+               ESP_LOGW(TAG, "Cannot set antenna for Radio B; Radio B is currently transmitting (effective).");
+               return ESP_ERR_INVALID_STATE;
             }
-            // Hot-switching protection for Radio B itself (Stubbed)
-            // bool radio_b_is_tx = get_actual_radio_b_tx_state();
-            // if (radio_b_is_tx) {
-            //    ESP_LOGW(TAG, "Cannot set antenna for Radio B; Radio B is currently transmitting.");
-            //    return ESP_ERR_INVALID_STATE; // Or ESP_FAIL
-            // }
+            // Interlock: Check if Radio A is transmitting
+            if (is_radio_a_transmitting_effective()) {
+                ESP_LOGW(TAG, "Cannot set antenna for Radio B; Radio A is transmitting (effective).");
+                return ESP_ERR_INVALID_STATE;
+            }
         }
     }
     return relay_controller_->set_relay_for_antenna(relay_id, band_number, radio, state);

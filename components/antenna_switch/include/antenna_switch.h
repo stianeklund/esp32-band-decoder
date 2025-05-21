@@ -3,6 +3,7 @@
 
 #include "esp_err.h"
 #include <cstdint>
+#include <atomic> // Required for std::atomic
 
 // don't #include relay_controller.h here to avoid circular dependency;
 // just forward-declare RelayController for the C++ API
@@ -46,9 +47,17 @@ typedef struct {
     uint8_t uart_flow_ctrl;
     int8_t uart_tx_pin;  // GPIO pin for UART TX
     int8_t uart_rx_pin;  // GPIO pin for UART RX
+
+    // PTT input configuration
+    int ptt_input_radio_a;      // KC868-A16 input number (0-15) for Radio A PTT, -1 if disabled
+    bool ptt_input_radio_a_active_high; // True if PTT active is high, false if active low
+    int ptt_input_radio_b;      // KC868-A16 input number (0-15) for Radio B PTT, -1 if disabled (for future use)
+    bool ptt_input_radio_b_active_high; // True if PTT active is high, false if active low (for future use)
+
     bool mqtt_enabled;
     bool allow_concurrent_data_sources;
     bool interlock_auto_resolves_conflict; // Renamed from interlock_enabled
+    bool auto_restore_on_conflict_resolution; // New setting
     char mqtt_broker[64];
     uint16_t mqtt_port;
     char mqtt_rig_id[16];
@@ -104,10 +113,17 @@ private:
     // Private constructor for singleton
     AntennaSwitch() = default;
     
+    // Internal state for hardware PTT
+    std::atomic<bool> hw_ptt_a_active_{false};
+    std::atomic<bool> hw_ptt_b_active_{false};
+
     // Pointer to relay controller
     RelayController* relay_controller_ = nullptr;
     int pre_tx_active_relay_radio_a_ = 0; // Stores active relay for A if B starts TX
     int pre_tx_active_relay_radio_b_ = 0; // Stores active relay for B if A starts TX
+    int auto_resolved_conflict_prev_a_relay_ = 0; // Stores Radio A's relay if turned off by B due to auto-resolved port conflict
+    int auto_resolved_conflict_prev_b_relay_ = 0; // Stores Radio B's relay if turned off by A due to auto-resolved port conflict
+
 
     // Helper to get active relay for a specific radio
     int get_active_relay_for_radio(RadioID radio) const;
@@ -115,7 +131,19 @@ private:
     // Helper to update last used antenna preference
     esp_err_t update_last_used_antenna_preference(int activated_relay_id, RadioID radio_of_activated_relay);
 
+    // Helper to attempt restoration of relays deselected by auto-resolved port conflicts
+    void attempt_restore_auto_resolved_radio_a_relay();
+    void attempt_restore_auto_resolved_radio_b_relay();
+
 public:
+    // Method to get combined TX state, considering HW PTT and CAT parser
+    bool is_radio_a_transmitting_effective() const;
+    bool is_radio_b_transmitting_effective() const;
+
+    // Callbacks for InputManager to report PTT state changes
+    void on_hw_ptt_a_state_change(bool active);
+    void on_hw_ptt_b_state_change(bool active);
+
     // ... existing public members ...
     void on_radio_a_tx_start();
     void on_radio_a_tx_stop();

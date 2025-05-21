@@ -2,11 +2,9 @@
 #define INPUT_MANAGER_H
 
 #include "esp_err.h"
-#include <stdint.h>
-#include <mutex> // For std::mutex
-
-// Forward declaration if needed, or include specific headers
-// For now, we just need basic types.
+#include <mutex>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 class InputManager {
 public:
@@ -44,14 +42,19 @@ public:
     esp_err_t get_all_inputs(uint16_t* state_mask);
 
 private:
-    // Private constructor for singleton
     InputManager();
-    ~InputManager() = default; // Default destructor
+    ~InputManager() = default;
+
+    static void ptt_poll_task_trampoline(void *arg);
+    void ptt_poll_task();
 
     static InputManager* instance_;
-    static std::mutex instance_mutex_; // Mutex for thread-safe singleton initialization
+    static std::mutex instance_mutex_;
 
     bool initialized_ = false;
+    TaskHandle_t ptt_poll_task_handle_ = nullptr;
+    bool ptt_a_last_hw_state_ = false; // Stores the last raw hardware state (true for high, false for low)
+    bool ptt_b_last_hw_state_ = false; // Stores the last PTT B state
 };
 
 #endif // INPUT_MANAGER_H

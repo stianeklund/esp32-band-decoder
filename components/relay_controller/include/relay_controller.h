@@ -63,9 +63,10 @@ private:
     std::mutex relay_mutex_;
 
     // Private methods
-    [[nodiscard]] bool is_transmitting() const;
+    // [[nodiscard]] bool is_transmitting() const; // This will be removed, AntennaSwitch is now the authority
     RelayController(); // Constructor
     [[nodiscard]] bool should_delay() const;
+    bool is_transmitting() const;
     esp_err_t execute_relay_change(int relay_id, int band_number, RadioID radio, bool state);
 };
 
