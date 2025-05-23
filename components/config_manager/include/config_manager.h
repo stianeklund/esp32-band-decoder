@@ -40,6 +40,8 @@ public:
 
     // Get current config (const to prevent unauthorized modifications)
     const antenna_switch_config_t &get_config() const { return *current_config_; }
+    // Get current config as a const reference (useful for direct member access without copying)
+    const antenna_switch_config_t &get_config_ref() const { return *current_config_; }
 
     // Update config and notify all observers
     esp_err_t update_config(const antenna_switch_config_t &new_config);
