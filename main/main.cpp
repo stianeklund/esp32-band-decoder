@@ -118,6 +118,15 @@ extern "C" [[noreturn]] void app_main(void) {
                     ESP_LOGI(TAG, "Waiting for WiFi configuration... (%d/%d)",
                              elapsed_ms/1000 + 1, MAX_WIFI_WAIT_SECONDS);
                 }
+                
+                // Feed the watchdog during this potentially long wait
+                const esp_err_t wdt_status_wifi_wait = esp_task_wdt_status(xTaskGetCurrentTaskHandle());
+                if (wdt_status_wifi_wait == ESP_OK) {
+                    esp_task_wdt_reset();
+                } else if (wdt_status_wifi_wait == ESP_ERR_NOT_FOUND) {
+                    // This should not happen if WDT was initialized and task added by SystemInitializer
+                    ESP_LOGW(TAG, "Main task not subscribed to WDT during WiFi wait loop!");
+                }
 
                 vTaskDelay(pdMS_TO_TICKS(WIFI_CONNECT_CHECK_INTERVAL_MS));
                 elapsed_ms += WIFI_CONNECT_CHECK_INTERVAL_MS;

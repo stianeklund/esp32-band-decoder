@@ -73,7 +73,13 @@ private:
     bool m_wifi_connected{false};
     bool m_ip_obtained{false};
     bool m_using_saved_credentials{false};
-    bool m_is_manual_reconfig{false};    // True if set_and_apply_credentials is in progress
+    // New state machine for handling reconfiguration
+    enum class ReconfigState {
+        NONE,                           // Normal operation
+        AWAITING_INITIAL_DISCONNECT,    // Called esp_wifi_disconnect(), waiting for the event
+        AWAITING_NEW_CONNECTION         // Set new config, called esp_wifi_connect(), waiting for GOT_IP or DISCONNECT
+    };
+    ReconfigState m_reconfig_state{ReconfigState::NONE};
     static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 10000;  // 10 seconds
     static constexpr uint32_t SMARTCONFIG_TIMEOUT_MS = 120000;  // 2 minutes
 };
