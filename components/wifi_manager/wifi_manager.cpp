@@ -66,6 +66,86 @@ esp_err_t WifiManager::save_credentials(const char *ssid, const char *password) 
     return err;
 }
 
+esp_err_t WifiManager::set_and_apply_credentials(const char* ssid, const char* password) {
+    if (!ssid || !password) {
+        ESP_LOGE(TAG, "SSID or password cannot be null for set_and_apply_credentials.");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(TAG, "Setting and applying new WiFi credentials. SSID: %s", ssid);
+    m_is_manual_reconfig = true; // Signal that a manual reconfiguration is in progress
+    if (m_wifi_event_group) { // Ensure event group is initialized
+        xEventGroupClearBits(m_wifi_event_group, MANUAL_DISCONNECT_ACK_BIT);
+    }
+
+    // 0. Stop SmartConfig if it's active
+    ESP_LOGI(TAG, "Stopping SmartConfig if active.");
+    esp_err_t sc_stop_err = esp_smartconfig_stop();
+    if (sc_stop_err != ESP_OK && sc_stop_err != ESP_ERR_INVALID_STATE) { // ESP_ERR_INVALID_STATE if not started
+        ESP_LOGW(TAG, "esp_smartconfig_stop() returned: %s", esp_err_to_name(sc_stop_err));
+    }
+    vTaskDelay(pdMS_TO_TICKS(100)); // Brief delay for SmartConfig to stop
+
+    // 1. Save credentials to NVS
+    esp_err_t err = save_credentials(ssid, password); // save_credentials is static
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save new credentials to NVS: %s", esp_err_to_name(err));
+        m_is_manual_reconfig = false; // Reset flag on error
+        return err;
+    }
+    ESP_LOGI(TAG, "New credentials saved to NVS.");
+
+    // 2. Disconnect if currently connected or attempting connection.
+    ESP_LOGI(TAG, "Issuing disconnect command.");
+    err = esp_wifi_disconnect();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_STARTED && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_STATE) {
+        ESP_LOGW(TAG, "WiFi disconnect command returned: %s. Proceeding...", esp_err_to_name(err));
+        // If disconnect itself fails critically, we might not get an event, so don't wait indefinitely.
+    } else if (m_wifi_event_group) {
+        ESP_LOGI(TAG, "Waiting for manual disconnect acknowledgment...");
+        EventBits_t bits = xEventGroupWaitBits(m_wifi_event_group, MANUAL_DISCONNECT_ACK_BIT,
+                                               pdTRUE,    // Clear bit on exit
+                                               pdFALSE,   // Wait for this one bit
+                                               pdMS_TO_TICKS(2000)); // Wait up to 2 seconds
+        if (!(bits & MANUAL_DISCONNECT_ACK_BIT)) {
+            ESP_LOGW(TAG, "Timeout waiting for manual disconnect ACK. Proceeding with caution.");
+        } else {
+            ESP_LOGI(TAG, "Manual disconnect acknowledged.");
+        }
+    }
+    
+    // vTaskDelay(pdMS_TO_TICKS(200)); // Original delay, now replaced by event group wait
+
+    // 3. Set the new configuration for the STA interface
+    wifi_config_t wifi_config = {};
+    strncpy(reinterpret_cast<char*>(wifi_config.sta.ssid), ssid, sizeof(wifi_config.sta.ssid) - 1);
+    wifi_config.sta.ssid[sizeof(wifi_config.sta.ssid) - 1] = '\0'; 
+    strncpy(reinterpret_cast<char*>(wifi_config.sta.password), password, sizeof(wifi_config.sta.password) - 1);
+    wifi_config.sta.password[sizeof(wifi_config.sta.password) - 1] = '\0'; 
+
+    ESP_LOGI(TAG, "Setting new WiFi STA configuration.");
+    err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set WiFi STA config: %s", esp_err_to_name(err));
+        m_is_manual_reconfig = false; // Reset flag on error
+        return err; 
+    }
+    ESP_LOGI(TAG, "New WiFi STA configuration set.");
+
+    // 4. Initiate connection
+    ESP_LOGI(TAG, "Issuing connect command with new credentials.");
+    m_using_saved_credentials = true; 
+    err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initiate WiFi connection with esp_wifi_connect(): %s. The system will still attempt to use the new config on subsequent tries/reboot.", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "Connection attempt initiated with new credentials. Monitor event logs.");
+    }
+    
+    m_is_manual_reconfig = false; // Reset flag at the end of the operation
+    return ESP_OK;
+}
+
 esp_err_t WifiManager::load_credentials(char *ssid, size_t ssid_size, char *password, size_t password_size) {
     nvs_handle_t my_handle;
 
@@ -112,20 +192,42 @@ void WifiManager::event_handler(void* arg, const esp_event_base_t event_base,
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
     {
-        // Only start SmartConfig if we're not using saved credentials
-        if (!instance.m_using_saved_credentials)
+        ESP_LOGI(TAG, "WIFI_EVENT_STA_START received. m_using_saved_credentials: %d, m_is_manual_reconfig: %d",
+                 instance.m_using_saved_credentials, instance.m_is_manual_reconfig);
+        // Only start SmartConfig if we're not using saved credentials AND not in manual reconfig
+        if (!instance.m_using_saved_credentials && !instance.m_is_manual_reconfig)
         {
-            xTaskCreate(&WifiManager::smartconfig_task, "smartconfig_task", 4096, nullptr, 3, nullptr);
+            ESP_LOGI(TAG, "STA_START: Conditions met for starting SmartConfig task.");
+            // Check if smartconfig task is already running to avoid creating multiple instances.
+            // The smartconfig_task itself calls esp_smartconfig_stop() at its beginning.
+            if (xTaskGetHandle("smartcfg_task") == NULL) { // Basic check to avoid multiple tasks
+                xTaskCreate(&WifiManager::smartconfig_task, "smartcfg_task", 4096, nullptr, 3, nullptr);
+            } else {
+                ESP_LOGI(TAG, "STA_START: SmartConfig task already exists or m_using_saved_credentials is true.");
+            }
+        } else {
+             ESP_LOGI(TAG, "STA_START: Not starting SmartConfig. Using saved credentials or in manual reconfig.");
         }
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
-        instance.m_using_saved_credentials = false;
         instance.m_wifi_connected = false;
         instance.m_ip_obtained = false;
-        esp_wifi_connect();
         xEventGroupClearBits(instance.m_wifi_event_group, WIFI_CONNECTED_BIT);
         xEventGroupSetBits(instance.m_wifi_event_group, WIFI_FAIL_BIT);
+
+        if (instance.m_is_manual_reconfig) {
+            ESP_LOGI(TAG, "STA_DISCONNECTED during manual reconfiguration. Connection will be driven by set_and_apply_credentials.");
+            if (instance.m_wifi_event_group) {
+                xEventGroupSetBits(instance.m_wifi_event_group, MANUAL_DISCONNECT_ACK_BIT);
+            }
+            // Do not set m_using_saved_credentials to false here.
+            // Do not call esp_wifi_connect() here; set_and_apply_credentials will handle it.
+        } else {
+            ESP_LOGI(TAG, "STA_DISCONNECTED. Will attempt to reconnect. May fall back to SmartConfig if connection fails again.");
+            instance.m_using_saved_credentials = false; // No longer relying on (potentially failed) saved/previous credentials
+            esp_wifi_connect(); // Attempt to reconnect (will trigger STA_START)
+        }
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED)
     {
@@ -290,10 +392,10 @@ esp_err_t WifiManager::init() {
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // Create the default event loop if it doesn't exist
-    ret = esp_event_loop_create_default();
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Failed to create event loop: %s", esp_err_to_name(ret));
-        return ret;
+    esp_err_t ret_event_loop = esp_event_loop_create_default();
+    if (ret_event_loop != ESP_OK && ret_event_loop != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Failed to create event loop: %s", esp_err_to_name(ret_event_loop));
+        return ret_event_loop;
     }
 
     // Add delay after event loop creation
@@ -375,17 +477,20 @@ esp_err_t WifiManager::init() {
 
     #ifdef FORCE_SMARTCONFIG
         ESP_LOGI(TAG, "Forcing SmartConfig mode...");
-        return start_smartconfig();
+        m_using_saved_credentials = false; // Ensure STA_START logic triggers SmartConfig
+        // The event handler for WIFI_EVENT_STA_START will create the smartconfig_task.
     #else
-        // Try connecting with saved credentials
         ret = try_connect_with_saved_credentials();
-        if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Could not connect with saved credentials: %s", esp_err_to_name(ret));
-            ESP_LOGI(TAG, "Starting SmartConfig...");
-            return start_smartconfig();
+        if (ret != ESP_OK) { 
+            // This includes ESP_ERR_NVS_NOT_FOUND, other load errors, or connect_sta() initiation failure.
+            // try_connect_with_saved_credentials already sets m_using_saved_credentials = false in these cases.
+            ESP_LOGW(TAG, "Could not connect with saved credentials (%s). SmartConfig will be initiated by event handler if needed.", esp_err_to_name(ret));
+            // No explicit call to start_smartconfig() here; WIFI_EVENT_STA_START handler will manage it
+            // based on m_using_saved_credentials being false.
         }
-        return ESP_OK;
+        // If ret == ESP_OK, connection with saved credentials was successfully initiated.
     #endif
+    return ESP_OK; // Init itself is OK, connection is asynchronous.
 }
 
 esp_err_t WifiManager::wait_for_connection(uint32_t timeout_ms) {
@@ -465,17 +570,29 @@ esp_err_t WifiManager::try_connect_with_saved_credentials() {
     const esp_err_t err = load_credentials(ssid, sizeof(ssid), password, sizeof(password));
 
     if (err == ESP_ERR_NVS_NOT_FOUND) {
-        ESP_LOGI(TAG, "No saved credentials found, will start SmartConfig");
+        ESP_LOGI(TAG, "No saved credentials found, will start SmartConfig if not forced otherwise.");
+        m_using_saved_credentials = false; // Ensure flag is false for SmartConfig fallback
         return err;
     }
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Error loading credentials: %s", esp_err_to_name(err));
+        m_using_saved_credentials = false; // Ensure flag is false for SmartConfig fallback
         return err;
     }
 
-    ESP_LOGI(TAG, "Found saved credentials, attempting to connect");
-    m_using_saved_credentials = true;
+    ESP_LOGI(TAG, "Found saved credentials, attempting to connect.");
+
+    // Stop SmartConfig if it was spuriously started due to STA_START race or previous state
+    ESP_LOGI(TAG, "Stopping SmartConfig if active (before connecting with saved creds).");
+    esp_err_t sc_stop_err = esp_smartconfig_stop();
+    if (sc_stop_err != ESP_OK && sc_stop_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "esp_smartconfig_stop() returned: %s", esp_err_to_name(sc_stop_err));
+    }
+    vTaskDelay(pdMS_TO_TICKS(100)); // Brief delay for SmartConfig to stop
+
+    m_using_saved_credentials = true; // We are now attempting with loaded credentials
+    // m_is_manual_reconfig should be false here (default state)
     return connect_sta(ssid, password);
 }
 

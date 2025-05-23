@@ -7,8 +7,9 @@
 
 
 #define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT     BIT1
-#define SMARTCONFIG_DONE_BIT BIT2
+#define WIFI_FAIL_BIT      BIT1
+#define ESPTOUCH_DONE_BIT  BIT2 // Also used as SMARTCONFIG_DONE_BIT in event_handler
+#define MANUAL_DISCONNECT_ACK_BIT BIT3
 
 class WifiManager {
 public:
@@ -16,8 +17,8 @@ public:
     
     // Core functionality
     esp_err_t init();
-    bool is_connected() const { return m_wifi_connected; }
-    bool is_in_smartconfig_mode() const { return !m_using_saved_credentials; }
+    [[nodiscard]] bool is_connected() const { return m_wifi_connected; }
+    [[nodiscard]] bool is_in_smartconfig_mode() const { return !m_using_saved_credentials; }
     esp_err_t get_ip_info(char* ip_addr, size_t ip_addr_size);
     esp_err_t get_mac_address(char* mac_addr, size_t mac_addr_size);
     esp_err_t wait_for_connection(uint32_t timeout_ms);
@@ -34,6 +35,16 @@ public:
                               char* password, size_t password_size) {
         return load_credentials(ssid, ssid_size, password, password_size);
     }
+
+    /**
+     * @brief Sets new Wi-Fi credentials, saves them to NVS, and attempts to reconnect.
+     *
+     * @param ssid The new SSID.
+     * @param password The new password.
+     * @return ESP_OK on success, or an error code if saving or setting config fails.
+     */
+    esp_err_t set_and_apply_credentials(const char* ssid, const char* password);
+
 
 private:
     WifiManager() = default;
@@ -62,7 +73,7 @@ private:
     bool m_wifi_connected{false};
     bool m_ip_obtained{false};
     bool m_using_saved_credentials{false};
+    bool m_is_manual_reconfig{false};    // True if set_and_apply_credentials is in progress
     static constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 10000;  // 10 seconds
     static constexpr uint32_t SMARTCONFIG_TIMEOUT_MS = 120000;  // 2 minutes
-    static constexpr uint32_t ESPTOUCH_DONE_BIT = BIT2;
 };
