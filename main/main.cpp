@@ -1,10 +1,11 @@
 #include <esp_event.h>
 #include <esp_task_wdt.h>
-#include <memory>
 #include <nvs_flash.h>
-#include <stdio.h>   // For printf
-#include <stdlib.h>  // For malloc/free
+#include <cstdio>
+
+#ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 #include "esp_heap_caps.h" // For heap stats
+#endif
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -15,134 +16,14 @@
 #include "system_initializer.h"
 #include "relay_controller.h"
 #include "webserver.h"
-#include "wifi_manager.hpp" // Included for CLI task
-
-#include <string.h> // For strncmp, strlen, etc. in CLI
+#include "wifi_manager.hpp"
+#include "serial_cli.h"
 
 static auto TAG = "MAIN";
 
 // Global pointer to RelayController
 static RelayController *g_relay_controller = nullptr;
-
-// --- START: Serial CLI Code ---
-#define CLI_TASK_STACK_SIZE 4096
-#define CLI_PROMPT "> "
-#define MAX_CLI_INPUT_SIZE 200
-
-static const char* CLI_TAG = "SerialCLI";
-
-// Temporary storage for SSID and password
-static char cli_ssid_buffer[33] = {0}; // Max SSID length 32 + null
-static char cli_password_buffer[65] = {0}; // Max password length 64 + null
-static bool cli_ssid_set = false;
-static bool cli_password_set = false;
-
-static void process_cli_command(char* line) {
-    // Trim newline characters
-    line[strcspn(line, "\r\n")] = 0;
-    ESP_LOGD(CLI_TAG, "Received command: '%s'", line);
-
-    if (strncmp(line, "set_ssid ", 9) == 0) {
-        char* value = line + 9;
-        if (strlen(value) > 0 && strlen(value) < sizeof(cli_ssid_buffer)) {
-            strncpy(cli_ssid_buffer, value, sizeof(cli_ssid_buffer) - 1);
-            cli_ssid_buffer[sizeof(cli_ssid_buffer) - 1] = '\0';
-            cli_ssid_set = true;
-            printf("OK. SSID set to: %s\n", cli_ssid_buffer);
-        } else {
-            printf("Error: Invalid SSID length. Max 32 characters.\n");
-        }
-    } else if (strncmp(line, "set_pass ", 9) == 0) {
-        char* value = line + 9;
-        if (strlen(value) > 0 && strlen(value) < sizeof(cli_password_buffer)) {
-            strncpy(cli_password_buffer, value, sizeof(cli_password_buffer) - 1);
-            cli_password_buffer[sizeof(cli_password_buffer) - 1] = '\0';
-            cli_password_set = true;
-            printf("OK. Password set.\n"); // Don't echo password
-        } else {
-            printf("Error: Invalid password length. Max 64 characters.\n");
-        }
-    } else if (strcmp(line, "apply_wifi") == 0) {
-        if (cli_ssid_set && cli_password_set) {
-            printf("Applying WiFi credentials: SSID='%s'\n", cli_ssid_buffer);
-            esp_err_t err = WifiManager::instance().set_and_apply_credentials(cli_ssid_buffer, cli_password_buffer);
-            if (err == ESP_OK) {
-                printf("OK. Credentials saved and connection attempt initiated. Monitor logs.\n");
-            } else {
-                printf("Error applying credentials: %s\n", esp_err_to_name(err));
-            }
-            // Reset for next time
-            cli_ssid_set = false;
-            cli_password_set = false;
-            memset(cli_ssid_buffer, 0, sizeof(cli_ssid_buffer));
-            memset(cli_password_buffer, 0, sizeof(cli_password_buffer));
-        } else {
-            printf("Error: SSID or password not set. Use 'set_ssid' and 'set_pass' first.\n");
-        }
-    } else if (strcmp(line, "clear_wifi") == 0) {
-        printf("Clearing stored WiFi credentials...\n");
-        esp_err_t err = WifiManager::instance().clear_credentials();
-        if (err == ESP_OK) {
-            printf("OK. Credentials cleared. Device may enter SmartConfig on next WiFi init/reboot.\n");
-        } else {
-            printf("Error clearing credentials: %s\n", esp_err_to_name(err));
-        }
-    } else if (strcmp(line, "wifi_status") == 0) {
-        printf("WiFi Status:\n");
-        printf("  Connected: %s\n", WifiManager::instance().is_connected() ? "Yes" : "No");
-        // is_in_smartconfig_mode() indicates if it's *currently* trying SmartConfig or would if no creds.
-        printf("  Attempting SmartConfig (if not connected): %s\n", WifiManager::instance().is_in_smartconfig_mode() ? "Yes" : "No");
-        char ip_addr[16];
-        if (WifiManager::instance().get_ip_info(ip_addr, sizeof(ip_addr)) == ESP_OK && strlen(ip_addr) > 0 && strcmp(ip_addr, "0.0.0.0") != 0) {
-            printf("  IP Address: %s\n", ip_addr);
-        } else {
-            printf("  IP Address: N/A\n");
-        }
-    } else if (strcmp(line, "reboot") == 0) {
-        printf("Rebooting...\n");
-        esp_restart();
-    }
-    else if (strcmp(line, "help") == 0) {
-        printf("Available commands:\n");
-        printf("  set_ssid <ssid>          - Set WiFi SSID (temporary)\n");
-        printf("  set_pass <password>      - Set WiFi password (temporary)\n");
-        printf("  apply_wifi             - Save temporary SSID/password to NVS and attempt to connect\n");
-        printf("  clear_wifi             - Clear saved WiFi credentials from NVS\n");
-        printf("  wifi_status            - Show current WiFi connection status\n");
-        printf("  reboot                 - Reboot the device\n");
-        printf("  help                   - Show this help message\n");
-    } else if (strlen(line) > 0) { // Non-empty line
-        printf("Unknown command: %s. Type 'help'.\n", line);
-    }
-}
-
-void serial_cli_task(void *pvParameters) {
-    char line_buffer[MAX_CLI_INPUT_SIZE];
-    // Small delay to ensure UART driver is fully initialized and ready,
-    // and to allow other boot messages to print first.
-    vTaskDelay(pdMS_TO_TICKS(100)); 
-    printf("\nSerial CLI started. Type 'help' for commands.\n");
-
-    while (1) {
-        printf(CLI_PROMPT);
-        fflush(stdout); // Ensure prompt is displayed
-
-        // Clear buffer before reading new input
-        memset(line_buffer, 0, sizeof(line_buffer));
-
-        if (fgets(line_buffer, sizeof(line_buffer), stdin) != NULL) {
-            process_cli_command(line_buffer);
-        } else {
-            // fgets returned NULL, possibly due to EOF or error on stdin
-            // This can happen if the serial terminal is disconnected.
-            // Add a small delay to prevent busy-looping if stdin is truly closed.
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-        // Add a small delay to allow other tasks to run, especially if fgets returns immediately (e.g. empty input)
-        vTaskDelay(pdMS_TO_TICKS(10)); 
-    }
-}
-// --- END: Serial CLI Code ---
+static SerialCli g_serial_cli; // Global or static instance of SerialCli
 
 
 // Function to display FreeRTOS runtime statistics
@@ -213,11 +94,9 @@ extern "C" [[noreturn]] void app_main(void) {
     }
 
     // Start the Serial CLI task early, so it's available even if WiFi setup has issues.
-    // Ensure it has a reasonable priority.
-    // Priority 5 is typical for application tasks.
-    if (xTaskCreate(serial_cli_task, "serial_cli_task", CLI_TASK_STACK_SIZE, NULL, 5, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create serial_cli_task");
-        // Decide if this is a fatal error. For now, we'll continue.
+    if (g_serial_cli.start_task() != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start Serial CLI task");
+        // Decide if this is a fatal error. For now, we'll continue without CLI.
     }
 
 
@@ -302,7 +181,6 @@ extern "C" [[noreturn]] void app_main(void) {
     }
     
     // Main loop
-
     while (true) {
         // Feed the watchdog
         const esp_err_t wdt_status = esp_task_wdt_status(xTaskGetCurrentTaskHandle());
@@ -333,35 +211,42 @@ extern "C" [[noreturn]] void app_main(void) {
     } // This brace now correctly closes the while(true) loop,
       // regardless of CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS.
 
-// The smartconfig_handler might not be reached if we prioritize CLI.
-// Consider removing or refactoring this if CLI is the primary recovery.
-// For now, it's kept as a fallback if the main loop exits or for explicit calls.
-smartconfig_handler: 
-    ESP_LOGI(TAG, "Entering SmartConfig handler. This might be due to explicit call or specific startup condition.");
-    // Start SmartConfig if not already started by WifiManager events
-    if (!WifiManager::instance().is_in_smartconfig_mode()){ // Check if it's already trying
-        // This call might be redundant if WifiManager's event handler already started it.
-        // WifiManager::instance().start_smartconfig(); 
-        ESP_LOGI(TAG, "SmartConfig task should be running via WifiManager event handler if needed.");
-    }
-    
-    // Enter SmartConfig wait loop with watchdog feed
-    while (true) {
-        // Feed the watchdog
+// The following block provides a dedicated mode for WiFi configuration
+// where SmartConfig is actively initiated, and the Serial CLI remains available.
+// If WiFi connection is established, the system restarts.
+// This section is currently not jumped to via a goto, but could be refactored into a function
+// or used with a goto if specific unrecoverable startup states need to force this mode.
+    ESP_LOGI(TAG, "Entering SmartConfig handler. Attempting to start SmartConfig.");
 
+    // Optional: Clear existing credentials to ensure a fresh SmartConfig attempt,
+    // especially if this handler is entered due to persistent connection failures.
+    // WifiManager::instance().clear_credentials();
+
+    // Ensure SmartConfig is started. WifiManager's internal logic might also start it,
+    // but calling it here makes it explicit for this handler.
+    if (WifiManager::instance().start_smartconfig() == ESP_OK) {
+        ESP_LOGI(TAG, "SmartConfig initiated by handler. CLI is available for alternative configuration.");
+    } else {
+        ESP_LOGW(TAG, "Failed to explicitly start SmartConfig via handler. WifiManager might still attempt it based on events.");
+    }
+
+    ESP_LOGI(TAG, "SmartConfig handler active. CLI is available. Waiting for WiFi connection to restart system...");
+    // Loop indefinitely, allowing CLI to operate (as it's a separate task)
+    // and waiting for WiFi connection to trigger a system restart.
+    while (true) {
         if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
-            // Add watchdog feed
             esp_task_wdt_reset();
         }
 
         if (WifiManager::instance().is_connected()) {
-            ESP_LOGI(TAG, "SmartConfig successful (or connection established through other means), restarting system...");
-            RestartManager::clear_restart_count();
+            ESP_LOGI(TAG, "Connection established (possibly via SmartConfig or CLI). Restarting system...");
+            RestartManager::clear_restart_count(); // Assuming connection means configuration is good
             vTaskDelay(pdMS_TO_TICKS(1000));
-            esp_restart();
+            esp_restart(); // Restart to apply new state cleanly
         }
-        vTaskDelay(pdMS_TO_TICKS(100)); // Check frequently
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Check connection status periodically
     }
+    // Note: The above loop is infinite. app_main will remain here until WiFi connects and system restarts.
 
 error_handler:
     ESP_LOGE(TAG, "Fatal error occurred in app_main: %s. Restarting.", esp_err_to_name(ret));
@@ -376,8 +261,15 @@ error_handler:
 
     if (RestartManager::check_restart_count() == ESP_FAIL) {
         ESP_LOGE(TAG, "Maximum restart attempts reached. Forcing SmartConfig mode and CLI availability.");
-        // WifiManager::instance().clear_credentials(); // Optionally clear credentials to force SmartConfig
-        // WifiManager::instance().start_smartconfig(); // Ensure SmartConfig is attempted
+        // Optionally clear credentials to ensure SmartConfig doesn't try to use faulty ones from previous attempts.
+        // WifiManager::instance().clear_credentials(); 
+        
+        ESP_LOGI(TAG, "Attempting to start SmartConfig due to max restarts.");
+        if (WifiManager::instance().start_smartconfig() == ESP_OK) {
+            ESP_LOGI(TAG, "SmartConfig initiated due to max restarts. CLI is also available.");
+        } else {
+            ESP_LOGW(TAG, "Failed to explicitly start SmartConfig after max restarts. WifiManager might still attempt it based on events.");
+        }
 
         // Loop indefinitely, allowing CLI to be used or SmartConfig to (eventually) succeed.
         // The serial_cli_task is already running.
