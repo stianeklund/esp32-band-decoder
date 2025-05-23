@@ -10,7 +10,7 @@
 #include "driver/gpio.h"
 #include <chrono>
 #include <charconv>
-#include <memory>
+#include <memory> // Keep for other uses if any, or remove if not needed elsewhere
 #include "config_manager.h"
 #include "antenna_switch.h"
 
@@ -56,22 +56,23 @@ CatParser &CatParser::instance() {
 esp_err_t CatParser::init() {
     ESP_LOGD(TAG, "Initializing CAT parser");
 
-    // Get current configuration from antenna switch
-    esp_err_t ret = AntennaSwitch::instance().get_config(&current_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get antenna switch configuration: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    // Get current configuration from antenna switch using get_config_ref()
+    // current_config is a member, so this assigns a copy of the referenced config.
+    current_config = AntennaSwitch::instance().get_config_ref();
 
     // Validate baud rate and set default if invalid
     if (current_config.uart_baud_rate <= 0) {
-        ESP_LOGW(TAG, "Invalid baud rate %d, using default 9600", current_config.uart_baud_rate);
+        ESP_LOGW(TAG, "Invalid baud rate %d, using defaults", current_config.uart_baud_rate);
         current_config.uart_baud_rate = 9600;
-        ret = AntennaSwitch::instance().set_config(&current_config);
+        // Pass the modified current_config (which is a copy) to set_config
+        esp_err_t ret = AntennaSwitch::instance().set_config(&current_config);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to save default baud rate: %s", esp_err_to_name(ret));
             return ret;
         }
+        // Re-fetch the config if it was updated by set_config to ensure consistency,
+        // especially if set_config does more than just pass to ConfigManager.
+        current_config = AntennaSwitch::instance().get_config_ref();
     }
 
     // Add delay to ensure peripheral initialization is complete
@@ -93,15 +94,27 @@ esp_err_t CatParser::init() {
     ESP_LOGV(TAG, "Starting basic UART2 configuration");
 
     // Validate UART pins and set defaults if needed
-    if (current_config.uart_tx_pin < 0 || current_config.uart_rx_pin < 0) {
-        ESP_LOGW(TAG, "Invalid UART pins, using defaults TX=17, RX=16");
-        current_config.uart_tx_pin = 33; // HT2
-        current_config.uart_rx_pin = 32; // HT1
-        ret = AntennaSwitch::instance().set_config(&current_config);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to save default UART pins: %s", esp_err_to_name(ret));
-            return ret;
+    bool pins_config_updated = false;
+    if (current_config.uart_tx_pin != -1 && (current_config.uart_tx_pin < 0 || current_config.uart_tx_pin >= GPIO_NUM_MAX)) {
+        ESP_LOGW(TAG, "Invalid UART TX pin %d configured, defaulting to GPIO 17.", current_config.uart_tx_pin);
+        current_config.uart_tx_pin = 17; 
+        pins_config_updated = true;
+    }
+
+    if (current_config.uart_rx_pin < 0 || current_config.uart_rx_pin >= GPIO_NUM_MAX) {
+        ESP_LOGW(TAG, "Invalid UART RX pin %d configured, defaulting to GPIO 16.", current_config.uart_rx_pin);
+        current_config.uart_rx_pin = 16; 
+        pins_config_updated = true;
+    }
+
+    if (pins_config_updated) {
+        esp_err_t save_ret = AntennaSwitch::instance().set_config(&current_config);
+        if (save_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save updated UART pin configuration: %s", esp_err_to_name(save_ret));
+            // Depending on severity, might return ret here. For now, proceed with corrected pins.
         }
+        // Re-fetch if updated
+        current_config = AntennaSwitch::instance().get_config_ref();
     }
 
     // Configure UART2 with minimal settings
@@ -109,13 +122,14 @@ esp_err_t CatParser::init() {
     vTaskDelay(pdMS_TO_TICKS(10));
 
     // Set configured pins before driver installation
-    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2, 
-                                current_config.uart_tx_pin,
-                                current_config.uart_rx_pin,
-                                UART_PIN_NO_CHANGE,
-                                UART_PIN_NO_CHANGE));
+    // current_config.uart_tx_pin can be -1 (UART_PIN_NO_CHANGE)
+    ESP_ERROR_CHECK(uart_set_pin(UART_NUM_2,
+                                (gpio_num_t)current_config.uart_tx_pin,
+                                (gpio_num_t)current_config.uart_rx_pin,
+                                UART_PIN_NO_CHANGE, 
+                                UART_PIN_NO_CHANGE)); // CTS not used
 
-    // Disable internal pullups since external ones are present on KC868
+    // Disable internal pullups since external ones are present on KC868 for RX
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_DISABLE;
     io_conf.mode = GPIO_MODE_INPUT,
@@ -156,7 +170,8 @@ esp_err_t CatParser::init() {
         "cat_parser_uart_task",
         UART_TASK_STACK_SIZE,
         this,
-        tskIDLE_PRIORITY + 1, nullptr
+        configMAX_PRIORITIES / 2, // Increased priority
+        nullptr
     );
 
     if (xReturned != pdPASS) {
@@ -176,6 +191,7 @@ void CatParser::uart_task() {
     constexpr TickType_t xTicksToWait = pdMS_TO_TICKS(10); // Timeout for xQueueReceive
     std::string command_accumulator;
     command_accumulator.reserve(256); // Pre-reserve to reduce reallocations
+    constexpr size_t MAX_COMMAND_ACCUMULATOR_SIZE = 1024; // Max size for the command accumulator buffer
 
     ESP_LOGI(TAG, "CAT parser UART task started.");
 
@@ -192,7 +208,20 @@ void CatParser::uart_task() {
                                                         0); 
 
                         if (len > 0) {
-                            command_accumulator.append(reinterpret_cast<char*>(read_buf), len);
+                            // Check if appending would exceed a max size
+                            if (command_accumulator.length() + static_cast<size_t>(len) > MAX_COMMAND_ACCUMULATOR_SIZE) {
+                                ESP_LOGW(TAG, "UART command accumulator (len %zu) + new data (len %d) would exceed max size (%zu). Clearing accumulator.",
+                                         command_accumulator.length(), len, MAX_COMMAND_ACCUMULATOR_SIZE);
+                                command_accumulator.clear();
+                                // If the new chunk itself is too large, discard it. Otherwise, start fresh with it.
+                                if (static_cast<size_t>(len) <= MAX_COMMAND_ACCUMULATOR_SIZE) {
+                                    command_accumulator.append(reinterpret_cast<char*>(read_buf), len);
+                                } else {
+                                    ESP_LOGW(TAG, "Incoming UART data chunk itself (%d bytes) exceeds max accumulator size (%zu). Discarding.", len, MAX_COMMAND_ACCUMULATOR_SIZE);
+                                }
+                            } else {
+                                command_accumulator.append(reinterpret_cast<char*>(read_buf), len);
+                            }
 
                             // Process complete commands from the accumulator
                             // A command sequence is considered complete if it ends with a ';'
@@ -284,10 +313,10 @@ esp_err_t CatParser::dispatch_one_command(std::string_view command_view) {
 esp_err_t CatParser::update_config() {
     ESP_LOGD(TAG, "Updating CAT parser configuration");
 
-    if (const esp_err_t ret = AntennaSwitch::instance().get_config(&current_config); ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get antenna switch configuration: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    // Update the member current_config by copying from the reference
+    current_config = AntennaSwitch::instance().get_config_ref();
+    // No esp_err_t to check from get_config_ref itself.
+    // If AntennaSwitch or ConfigManager had an issue providing the ref, it'd be a deeper problem.
 
     ESP_LOGD(TAG, "CAT parser configuration updated successfully");
     return ESP_OK;
@@ -385,19 +414,23 @@ esp_err_t CatParser::process_ap_command(const std::string_view command) {
             return ESP_ERR_INVALID_ARG;
         }
 
-        auto config = std::make_unique<antenna_switch_config_t>();
-        esp_err_t ret = AntennaSwitch::instance().get_config(config.get());
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to get config for AP command: %s", esp_err_to_name(ret));
-            return ret;
-        }
+        // Get a const reference to the current config
+        const auto& current_cfg_ref = AntennaSwitch::instance().get_config_ref();
+        // Create a mutable copy on the stack
+        antenna_switch_config_t temp_config = current_cfg_ref;
 
-        config->num_antenna_ports = static_cast<uint8_t>(ports_val);
-        ret = AntennaSwitch::instance().set_config(config.get());
+        // Modify the copy
+        temp_config.num_antenna_ports = static_cast<uint8_t>(ports_val);
+        
+        // Set the modified config
+        esp_err_t ret = AntennaSwitch::instance().set_config(&temp_config);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to set config for AP command: %s", esp_err_to_name(ret));
             return ret;
         }
+        // If set_config was successful, update CatParser's own current_config member
+        // to reflect this change immediately.
+        current_config = AntennaSwitch::instance().get_config_ref();
         return ESP_OK;
     }
 
@@ -422,6 +455,8 @@ esp_err_t CatParser::process_command(const char *command_cstr) {
 // New core process_command implementation
 esp_err_t CatParser::process_command(std::string_view commands_str_with_semicolons) {
     size_t start_pos = 0;
+    esp_err_t first_error = ESP_OK; // To track the first error encountered
+
     while (start_pos < commands_str_with_semicolons.length()) {
         size_t end_pos = commands_str_with_semicolons.find(';', start_pos);
         std::string_view command_content;
@@ -437,15 +472,20 @@ esp_err_t CatParser::process_command(std::string_view commands_str_with_semicolo
         if (!command_content.empty()) { // Only dispatch if there's actual content
             ESP_LOGV(TAG, "Dispatching from process_command: %.*s", static_cast<int>(command_content.length()), command_content.data());
             // dispatch_one_command expects the command *without* the semicolon.
-            esp_err_t ret = dispatch_one_command(command_content);
-            if (ret != ESP_OK) {
-                // Propagate the first error encountered.
-                return ret; 
+            esp_err_t dispatch_ret = dispatch_one_command(command_content);
+            if (dispatch_ret != ESP_OK) {
+                ESP_LOGW(TAG, "Error dispatching command '%.*s': %s",
+                         static_cast<int>(command_content.length()), command_content.data(),
+                         esp_err_to_name(dispatch_ret));
+                if (first_error == ESP_OK) { // Store the first error encountered
+                    first_error = dispatch_ret;
+                }
+                // Continue processing remaining commands in the string
             }
         }
         // If command_content is empty (e.g., from ";;" or leading/trailing ";"), skip to next segment.
     }
-    return ESP_OK;
+    return first_error; // Return ESP_OK if all succeeded, or the first error encountered
 }
 
 int CatParser::get_band_index(const uint32_t freq) const {
