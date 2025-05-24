@@ -1,3 +1,3 @@
-idf_component_register(SRCS "config_manager.cpp"
+idf_component_register(SRCS "config_manager.cpp" "config_cache.cpp"
         INCLUDE_DIRS "include"
-        REQUIRES antenna_switch config_manager relay_controller wifi_manager nvs_flash cat_parser)
+        REQUIRES antenna_switch nvs_flash)

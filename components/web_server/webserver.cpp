@@ -7,6 +7,7 @@
 
 // Project C++ headers
 #include "webserver.h"
+#include "config_manager.h" // Added for ConfigManager
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -652,66 +653,16 @@ esp_err_t WebServer::toggle_auto_mode_handler(httpd_req_t *req) {
 }
 
 esp_err_t WebServer::reset_config_handler(httpd_req_t *req) {
-    constexpr antenna_switch_config_t default_config = {
-        true,
-        10,
-        1,
-        {
-            { // Radio A defaults
-                {"160m", 1800000, 2000000, 1}, // Assuming antenna_ports_mask, 1 enables port 0
-                {"80m", 3500000, 4000000, 1},
-                {"40m", 7000000, 7300000, 1},
-                {"30m", 10100000, 10150000, 1},
-                {"20m", 14000000, 14350000, 1},
-                {"17m", 18068000, 18168000, 1},
-                {"15m", 21000000, 21450000, 1},
-                {"12m", 24890000, 24990000, 1},
-                {"10m", 28000000, 29700000, 1},
-                {"6m", 50000000, 54000000, 1}
-            },
-            { // Radio B defaults (mirroring Radio A for simplicity)
-                {"160m", 1800000, 2000000, 1}, // Assuming antenna_ports_mask, 1 enables port 0
-                {"80m", 3500000, 4000000, 1},
-                {"40m", 7000000, 7300000, 1},
-                {"30m", 10100000, 10150000, 1},
-                {"20m", 14000000, 14350000, 1},
-                {"17m", 18068000, 18168000, 1},
-                {"15m", 21000000, 21450000, 1},
-                {"12m", 24890000, 24990000, 1},
-                {"10m", 28000000, 29700000, 1},
-                {"6m", 50000000, 54000000, 1}
-            }
-        },
-        9600,
-        UART_PARITY_DISABLE, // uart_parity
-        1, // uart_stop_bits
-        UART_HW_FLOWCTRL_DISABLE, // uart_flow_ctrl
-        17, // uart_tx_pin (example, ensure this is a valid default for your hardware)
-        16, // uart_rx_pin (example, ensure this is a valid default for your hardware)
-        // PTT defaults
-        -1,    // ptt_input_radio_a (disabled)
-        true,  // ptt_input_radio_a_active_high
-        -1,    // ptt_input_radio_b (disabled)
-        true,  // ptt_input_radio_b_active_high
-        false, // mqtt_enabled
-        true, // interlock_auto_resolves_conflict (default to true for safety if concurrent mode is chosen later)
-        true, // auto_restore_on_conflict_resolution (default to true)
-        false, // allow_concurrent_data_sources
-        "broker.example.com", // mqtt_broker
-        1883, // mqtt_port
-        "RIG1", // mqtt_rig_id
-        "", // mqtt_username
-        "", // mqtt_password
-        "esp32-antenna-switch", // mqtt_client_id
-        "omnirig/radio_info", // mqtt_topic
-        RADIO_OP_MODE_SINGLE_A, // radio_operation_mode (default to Radio A only)
-        {0} // last_used_antenna[2][MAX_BANDS] initialized to all zeros (changed {{0}} to {0} to fix scalar init error)
-    };
+    ESP_LOGI(TAG, "Handling reset configuration request.");
 
-    if (const esp_err_t ret = AntennaSwitch::instance().set_config(&default_config); ret != ESP_OK) {
+    // Call ConfigManager to reset to its defined defaults
+    if (const esp_err_t ret = ConfigManager::instance().reset_to_defaults(); ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to reset configuration via ConfigManager: %s", esp_err_to_name(ret));
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to reset configuration");
         return ESP_FAIL;
     }
+
+    ESP_LOGI(TAG, "Configuration successfully reset to defaults.");
 
     // Redirect back to the config page
     httpd_resp_set_status(req, "303 See Other");

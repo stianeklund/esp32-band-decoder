@@ -17,6 +17,9 @@ class ConfigManager {
     static ConfigManager *instance_;
     antenna_switch_config_t *current_config_;
     std::vector<std::function<void(const antenna_switch_config_t &)> > observers_;
+    
+    // Configuration cache version counter for invalidation
+    mutable std::atomic<uint32_t> config_version_{0};
 
     // Asynchronous NVS saving members
     std::atomic<bool> config_dirty_{false};
@@ -42,6 +45,9 @@ public:
     const antenna_switch_config_t &get_config() const { return *current_config_; }
     // Get current config as a const reference (useful for direct member access without copying)
     const antenna_switch_config_t &get_config_ref() const { return *current_config_; }
+    
+    // Get current configuration version for cache invalidation
+    uint32_t get_config_version() const { return config_version_.load(); }
 
     // Update config and notify all observers
     esp_err_t update_config(const antenna_switch_config_t &new_config);
@@ -56,6 +62,9 @@ public:
 
     // Initialize with default config if needed
     esp_err_t init(); // Made non-const
+
+    // Reset current configuration to factory defaults
+    esp_err_t reset_to_defaults();
 
     /**
      * @brief Triggers a save of pending configuration changes to NVS and waits for completion or timeout.

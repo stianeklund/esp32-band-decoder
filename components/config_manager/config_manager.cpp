@@ -276,7 +276,98 @@ esp_err_t ConfigManager::init() { // Made non-const
         return ret;
     }
 
+    // Increment version to ensure caches are initialized properly
+    config_version_.fetch_add(1);
+
     return ESP_OK;
+}
+
+esp_err_t ConfigManager::reset_to_defaults() {
+    ESP_LOGI(TAG, "Resetting configuration to defaults");
+    antenna_switch_config_t defaultConfig;
+
+    // Populate defaultConfig with the same values used in init() when NVS is not found
+    // This logic is largely copied from the init() method's default section.
+    defaultConfig.num_bands = 8;
+    defaultConfig.auto_mode = true;
+    defaultConfig.num_antenna_ports = 6;
+    defaultConfig.uart_baud_rate = 57600;
+    defaultConfig.uart_parity = UART_PARITY_DISABLE;
+    defaultConfig.uart_stop_bits = UART_STOP_BITS_1;
+    defaultConfig.uart_flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    defaultConfig.uart_rx_pin = GPIO_NUM_32; // HT1
+    defaultConfig.uart_tx_pin = GPIO_NUM_33; // HT2
+    defaultConfig.allow_concurrent_data_sources = true;
+    defaultConfig.mqtt_enabled = false;
+    defaultConfig.mqtt_port = 1883;
+    strncpy(defaultConfig.mqtt_broker, "mqtt://localhost", sizeof(defaultConfig.mqtt_broker) - 1);
+    defaultConfig.mqtt_broker[sizeof(defaultConfig.mqtt_broker) - 1] = '\0';
+    strncpy(defaultConfig.mqtt_rig_id, "rig1", sizeof(defaultConfig.mqtt_rig_id) - 1);
+    defaultConfig.mqtt_rig_id[sizeof(defaultConfig.mqtt_rig_id) - 1] = '\0';
+    strncpy(defaultConfig.mqtt_username, "mqtt", sizeof(defaultConfig.mqtt_username) - 1);
+    defaultConfig.mqtt_username[sizeof(defaultConfig.mqtt_username) - 1] = '\0';
+    strncpy(defaultConfig.mqtt_password, "mqtt", sizeof(defaultConfig.mqtt_password) - 1);
+    defaultConfig.mqtt_password[sizeof(defaultConfig.mqtt_password) - 1] = '\0';
+    strncpy(defaultConfig.mqtt_client_id, "core-mosquitto", sizeof(defaultConfig.mqtt_client_id) - 1);
+    defaultConfig.mqtt_client_id[sizeof(defaultConfig.mqtt_client_id) - 1] = '\0';
+    strncpy(defaultConfig.mqtt_topic, "omnirig/frequent/radio_info", sizeof(defaultConfig.mqtt_topic) - 1);
+    defaultConfig.mqtt_topic[sizeof(defaultConfig.mqtt_topic) - 1] = '\0';
+    defaultConfig.radio_operation_mode = RADIO_OP_MODE_SINGLE_A;
+    defaultConfig.interlock_auto_resolves_conflict = true;
+    defaultConfig.auto_restore_on_conflict_resolution = true;
+    defaultConfig.radio_restore_delay_ms = 200;
+    defaultConfig.ptt_input_radio_a = -1;
+    defaultConfig.ptt_input_radio_a_active_high = true;
+    defaultConfig.ptt_input_radio_b = -1;
+    defaultConfig.ptt_input_radio_b_active_high = true;
+
+    for (auto & r : defaultConfig.last_used_antenna) {
+        for (unsigned char & i : r) {
+            i = 0;
+        }
+    }
+
+    for (int i = 0; i < 16; i++) {
+        snprintf(defaultConfig.relay_names[i], sizeof(defaultConfig.relay_names[i]), "Relay %d", i + 1);
+        defaultConfig.relay_names[i][sizeof(defaultConfig.relay_names[i])-1] = '\0';
+    }
+
+    static const uint32_t default_start_init[10] = {
+        1800000, 3500000, 7000000, 10100000, 14000000, 18068000, 21000000, 24890000, 28000000, 50000000
+    };
+    static const uint32_t default_end_init[10] = {
+        2000000, 4000000, 7300000, 10150000, 14350000, 18168000, 21450000, 24990000, 29700000, 54000000
+    };
+    static const char* default_band_names_init[10] = {
+        "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
+    };
+
+    for (auto & band_radio_set : defaultConfig.bands) { // Iterate over Radio A and Radio B bands
+        for (int i = 0; i < 10; ++i) { // Initialize the first 10 bands with specific defaults
+            if (i < MAX_BANDS) { // Ensure we don't write out of bounds for the actual bands array
+                strncpy(band_radio_set[i].description, default_band_names_init[i], sizeof(band_radio_set[i].description)-1);
+                band_radio_set[i].description[sizeof(band_radio_set[i].description)-1] = '\0';
+                band_radio_set[i].start_freq = default_start_init[i];
+                band_radio_set[i].end_freq = default_end_init[i];
+                for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
+                    band_radio_set[i].antenna_ports[j] = (j == 0); // Only first port enabled by default
+                }
+            }
+        }
+        // Initialize any remaining bands (if MAX_BANDS > 10) to a generic state
+        for (int i = 10; i < MAX_BANDS; ++i) {
+            snprintf(band_radio_set[i].description, sizeof(band_radio_set[i].description), "Band %d", i + 1);
+            band_radio_set[i].description[sizeof(band_radio_set[i].description)-1] = '\0';
+            band_radio_set[i].start_freq = 0;
+            band_radio_set[i].end_freq = 0;
+            for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
+                band_radio_set[i].antenna_ports[j] = false;
+            }
+        }
+    }
+
+    // Now update the current configuration with these defaults and save to NVS
+    return update_config(defaultConfig);
 }
 
 esp_err_t ConfigManager::update_config(const antenna_switch_config_t &new_config) {
@@ -316,6 +407,9 @@ esp_err_t ConfigManager::update_config(const antenna_switch_config_t &new_config
         ESP_LOGI(TAG, "Fallback synchronous save of updated config successful.");
         config_dirty_.store(false); // Synchronously saved
     }
+
+    // Increment version counter to invalidate caches
+    config_version_.fetch_add(1);
 
     // Notify observers
     for (const auto &observer: observers_) {
