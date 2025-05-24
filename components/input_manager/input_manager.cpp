@@ -130,7 +130,7 @@ void InputManager::ptt_poll_task() {
             continue;
         }
 
-        const auto& config = ConfigManager::instance().get_config();
+        const auto& config = get_cached_config();
 
         if (const esp_err_t ret = kc868_a16_get_all_inputs(&current_inputs_mask); ret == ESP_OK) {
             ESP_LOGV(TAG, "PTT Poll: current_inputs_mask from HW: 0x%04X", current_inputs_mask); // Log overall mask if needed

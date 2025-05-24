@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "freertos/task.h"
 #include <chrono>
+#include "config_cache.h"
 
 static const char* TAG = "RELAY_CONTROLLER";
 
@@ -40,22 +41,13 @@ esp_err_t RelayController::init() {
 esp_err_t RelayController::turn_off_all_relays() {
     ESP_LOGD(TAG, "Turning off all relays");
     
-    // Check if radio is transmitting
-    if (cat_parser_.is_transmitting()) {
-        ESP_LOGW(TAG, "Cannot change relays while transmitting");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    // Add a small delay to ensure transmit state is stable
-    vTaskDelay(pdMS_TO_TICKS(10));
-    
-    // Double check transmit state after delay
-    if (cat_parser_.is_transmitting()) {
-        ESP_LOGW(TAG, "Cannot change relays while transmitting");
-        return ESP_ERR_INVALID_STATE;
-    }
-    
     std::lock_guard lock(relay_mutex_);
+    
+    // Check if radio is transmitting - now protected by mutex
+    if (cat_parser_.is_transmitting()) {
+        ESP_LOGW(TAG, "Cannot change relays while transmitting");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     const esp_err_t ret = kc868_a16_set_all_outputs(0);
     if (ret == ESP_OK) {
@@ -73,6 +65,20 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
         return ESP_ERR_INVALID_ARG;
     }
     std::lock_guard lock(relay_mutex_);
+    
+    // More selective transmission check: only block changes to the transmitting radio's own relays
+    if (is_transmitting()) {
+        const bool is_radio_a_relay = (relay_id >= 1 && relay_id <= RELAYS_PER_RADIO);
+        const bool is_radio_b_relay = (relay_id > RELAYS_PER_RADIO && relay_id <= NUM_RELAYS);
+        
+        const bool is_cat_tx = cat_parser_.is_transmitting(); // Assume this is Radio A
+        const bool is_mqtt_tx = MQTTClient::instance().is_transmitting(); // Could be either radio
+        
+        if ((is_cat_tx && is_radio_a_relay) || (is_mqtt_tx && (is_radio_a_relay || is_radio_b_relay))) {
+            ESP_LOGW(TAG, "Cannot change relay %d while that radio is transmitting", relay_id);
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
     
     // Convert from 1-based to 0-based index for hardware
     const uint8_t hw_relay = relay_id - 1;
@@ -160,6 +166,18 @@ esp_err_t RelayController::turn_off_all_relays_except(const int relay_to_keep_on
 
     std::lock_guard lock(relay_mutex_);
 
+    // More selective transmission check: block if trying to change transmitting radio's relays
+    if (is_transmitting()) {
+        const bool is_cat_tx = cat_parser_.is_transmitting(); // Assume this is Radio A
+        const bool is_mqtt_tx = MQTTClient::instance().is_transmitting(); // Could be either radio
+        
+        // If either radio is transmitting, we need to be more careful about bulk operations
+        if (is_cat_tx || is_mqtt_tx) {
+            ESP_LOGW(TAG, "Cannot perform bulk relay changes while transmitting");
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
     if (should_delay()) {
         vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
     }
@@ -202,21 +220,25 @@ bool RelayController::should_delay() const {
 
 esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number, const RadioID radio, const bool state) {
     std::lock_guard lock(relay_mutex_);
-    const auto &cfg = ConfigManager::instance().get_config();
+    const auto &cfg = get_cached_config();
 
-    // Check if radio is transmitting
+    // More selective transmission check: only block changes to the transmitting radio's own relays
     if (is_transmitting()) {
-        ESP_LOGW(TAG, "Cannot change relays while transmitting");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    // Add a small delay to ensure transmit state is stable
-    vTaskDelay(pdMS_TO_TICKS(10));
-    
-    // Double check transmit state after delay
-    if (is_transmitting()) {
-        ESP_LOGW(TAG, "Cannot change relays while transmitting (checked after delay)");
-        return ESP_ERR_INVALID_STATE;
+        // Determine which radio this relay belongs to
+        const bool is_radio_a_relay = (relay_id >= 1 && relay_id <= RELAYS_PER_RADIO);
+        const bool is_radio_b_relay = (relay_id > RELAYS_PER_RADIO && relay_id <= NUM_RELAYS);
+        
+        // Check if we're trying to change a relay for the transmitting radio
+        const bool is_cat_tx = cat_parser_.is_transmitting(); // Assume this is Radio A
+        const bool is_mqtt_tx = MQTTClient::instance().is_transmitting(); // Could be either radio
+        
+        if ((is_cat_tx && is_radio_a_relay) || (is_mqtt_tx && (is_radio_a_relay || is_radio_b_relay))) {
+            ESP_LOGW(TAG, "Cannot change relay %d while that radio is transmitting", relay_id);
+            return ESP_ERR_INVALID_STATE;
+        }
+        
+        // Allow interlock operations on non-transmitting radio relays
+        ESP_LOGD(TAG, "Allowing relay %d change for interlock while other radio transmits", relay_id);
     }
 
     const int current_radio_idx = static_cast<int>(radio);

@@ -6,8 +6,9 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "mqtt_client.h"
+#include "config_cache.h"
 
-class MQTTClient {
+class MQTTClient : public ConfigCache {
 public:
     static MQTTClient& instance();
     esp_err_t init();

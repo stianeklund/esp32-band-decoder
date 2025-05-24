@@ -7,11 +7,12 @@
 #include <map>
 #include <mutex>
 #include <chrono>
+#include "config_cache.h"
 
 // Forward declaration
 class CatParser;
 
-class RelayController {
+class RelayController : public ConfigCache {
 public:
     static constexpr int NUM_RELAYS = 16; // Total number of relays
     static constexpr int COOLDOWN_PERIOD_MS = 50;

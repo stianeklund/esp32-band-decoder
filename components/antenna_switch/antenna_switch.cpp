@@ -10,6 +10,7 @@
 #include "cat_parser.h" // Already present
 #include "relay_controller.h" // For RelayController constants
 #include "freertos/timers.h" // For xTimerCreate, xTimerReset, etc.
+#include "config_cache.h"
 
 static auto TAG = "ANTENNA_SWITCH";
 
@@ -38,7 +39,7 @@ AntennaSwitch::AntennaSwitch()
     // so its instance() call should trigger its construction if not already done.
     // A safer approach might be to initialize/update timer periods in AntennaSwitch::init() after ConfigManager is confirmed ready.
     // For now, assuming ConfigManager is available or provides a usable default from its own constructor.
-    const auto& initial_config = ConfigManager::instance().get_config_ref(); // get_config_ref() is better than get_config() for direct access
+    const auto& initial_config = get_cached_config(); // Use cached config instead of direct ConfigManager access
     uint16_t initial_delay_ms = initial_config.radio_restore_delay_ms;
 
     // Validate and set a fallback if the configured value is unreasonable (e.g., 0 from a fresh NVS or before full init)

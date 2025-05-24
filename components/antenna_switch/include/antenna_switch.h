@@ -48,7 +48,7 @@ typedef struct {
     uint8_t last_used_antenna[2][MAX_BANDS]; // Stores 1-based relay_id
 } base_nvs_config_data_t;
 
-typedef struct {
+typedef struct antenna_switch_config {
     // Fields managed by base_nvs_config_data_t for NVS persistence
     bool auto_mode;
     bool allow_concurrent_data_sources; 
@@ -97,8 +97,11 @@ enum class RadioID : uint8_t {
     B = 1
 };
 
+// Now include config_cache.h after the struct is defined
+#include "config_cache.h"
+
 // AntennaSwitch singleton class
-class AntennaSwitch {
+class AntennaSwitch : public ConfigCache {
 public:
     // Singleton instance method
     static AntennaSwitch& instance();

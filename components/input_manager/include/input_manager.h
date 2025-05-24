@@ -5,8 +5,9 @@
 #include <mutex>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "config_cache.h"
 
-class InputManager {
+class InputManager : public ConfigCache {
 public:
     // Singleton instance method
     static InputManager& instance();

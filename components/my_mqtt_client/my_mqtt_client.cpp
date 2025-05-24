@@ -17,7 +17,7 @@ MQTTClient::MQTTClient()
 }
 
 esp_err_t MQTTClient::init() {
-    const auto &config = ConfigManager::instance().get_config();
+    const auto &config = get_cached_config();
 
     if (!config.mqtt_enabled) {
         ESP_LOGD(TAG, "MQTT is disabled in configuration");
@@ -68,7 +68,7 @@ esp_err_t MQTTClient::connect() const {
 }
 
 esp_err_t MQTTClient::subscribe_to_omnirig_topics() const { // Removed unused rig_id parameter
-    const auto &config = ConfigManager::instance().get_config();
+    const auto &config = get_cached_config();
 
     ESP_LOGI(TAG, "Attempting to subscribe to topic: %s", config.mqtt_topic);
     if (const int msg_id = esp_mqtt_client_subscribe(client_, config.mqtt_topic, 1); msg_id < 0) {
@@ -92,7 +92,7 @@ void MQTTClient::handle_radio_info(const char *data, int data_len) {
 }
 
 void MQTTClient::parse_radio_info(const cJSON *json) {
-    if (const auto &config = ConfigManager::instance().get_config();
+    if (const auto &config = get_cached_config();
         !config.allow_concurrent_data_sources && has_serial_data_) {
         return;
     }
