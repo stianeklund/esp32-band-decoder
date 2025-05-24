@@ -4,6 +4,9 @@
 #include "esp_err.h"
 #include <cstdint>
 #include <atomic> // Required for std::atomic
+#include "freertos/FreeRTOS.h"
+#include "freertos/timers.h" // For TimerHandle_t
+#include "freertos/semphr.h" // For SemaphoreHandle_t
 
 // don't #include relay_controller.h here to avoid circular dependency;
 // just forward-declare RelayController for the C++ API
@@ -35,12 +38,29 @@ typedef struct band_config {
     bool antenna_ports[MAX_ANTENNA_PORTS];
 } band_config_t;
 
+// Struct for the base configuration data stored in the "config_base" NVS blob
 typedef struct {
     bool auto_mode;
+    bool allow_concurrent_data_sources; // This field is part of the base config
+    uint8_t num_bands;                  // Actual number of bands used, up to MAX_BANDS
+    uint8_t num_antenna_ports;          // Actual number of antenna ports used, up to MAX_ANTENNA_PORTS
+    radio_operation_mode_t radio_operation_mode; 
+    uint8_t last_used_antenna[2][MAX_BANDS]; // Stores 1-based relay_id
+} base_nvs_config_data_t;
+
+typedef struct {
+    // Fields managed by base_nvs_config_data_t for NVS persistence
+    bool auto_mode;
+    bool allow_concurrent_data_sources; 
     uint8_t num_bands;
     uint8_t num_antenna_ports;
-    // now 2 radios: index 0 = A, 1 = B
+    radio_operation_mode_t radio_operation_mode;
+    uint8_t last_used_antenna[2][MAX_BANDS];
+
+    // Bands - stored separately in NVS as individual blobs per band/radio
     band_config_t bands[2][MAX_BANDS];
+
+    // Other fields, stored individually or in other specific blobs in NVS
     int uart_baud_rate;
     uint8_t uart_parity;
     uint8_t uart_stop_bits;
@@ -55,7 +75,7 @@ typedef struct {
     bool ptt_input_radio_b_active_high; // True if PTT active is high, false if active low (for future use)
 
     bool mqtt_enabled;
-    bool allow_concurrent_data_sources;
+    // bool allow_concurrent_data_sources; // This is now part of the block above, managed by base_nvs_config_data_t
     bool interlock_auto_resolves_conflict; // Renamed from interlock_enabled
     bool auto_restore_on_conflict_resolution; // New setting
     char mqtt_broker[64];
@@ -65,9 +85,10 @@ typedef struct {
     char mqtt_password[32];
     char mqtt_client_id[32];
     char mqtt_topic[64];
-    radio_operation_mode_t radio_operation_mode;
-    uint8_t last_used_antenna[2][MAX_BANDS]; // Stores 1-based relay_id for Radio A/B per band, 0 for none
+    // radio_operation_mode_t radio_operation_mode; // This is now part of the block above
+    // uint8_t last_used_antenna[2][MAX_BANDS]; // This is now part of the block above
     char relay_names[16][32]; // Custom names for each relay (16 relays, 32 chars each)
+    uint16_t radio_restore_delay_ms; // Delay in milliseconds for interlock relay restoration
 } antenna_switch_config_t;
 
 // Enum to identify Radio A or Radio B
@@ -111,7 +132,7 @@ public:
 
 private:
     // Private constructor for singleton
-    AntennaSwitch() = default;
+    AntennaSwitch(); // Will be defined in .cpp to initialize timers/mutex
     
     // Internal state for hardware PTT
     std::atomic<bool> hw_ptt_a_active_{false};
@@ -134,6 +155,17 @@ private:
     // Helper to attempt restoration of relays deselected by auto-resolved port conflicts
     void attempt_restore_auto_resolved_radio_a_relay();
     void attempt_restore_auto_resolved_radio_b_relay();
+
+    // Timers for delayed relay restoration
+    TimerHandle_t radio_b_restore_delay_timer_ = nullptr;
+    TimerHandle_t radio_a_restore_delay_timer_ = nullptr;
+
+    // Mutex for interlock logic
+    SemaphoreHandle_t interlock_mutex_ = nullptr;
+
+    // Helper methods for timer callbacks (static)
+    static void radio_b_restore_timer_callback(TimerHandle_t xTimer);
+    static void radio_a_restore_timer_callback(TimerHandle_t xTimer);
 
 public:
     // Method to get combined TX state, considering HW PTT and CAT parser

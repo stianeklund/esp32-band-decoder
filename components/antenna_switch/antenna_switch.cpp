@@ -9,8 +9,68 @@
 #include "esp_system.h"
 #include "cat_parser.h" // Already present
 #include "relay_controller.h" // For RelayController constants
+#include "freertos/timers.h" // For xTimerCreate, xTimerReset, etc.
 
 static auto TAG = "ANTENNA_SWITCH";
+
+// Constructor for AntennaSwitch
+AntennaSwitch::AntennaSwitch()
+    : hw_ptt_a_active_(false),
+      hw_ptt_b_active_(false),
+      relay_controller_(nullptr),
+      pre_tx_active_relay_radio_a_(0),
+      pre_tx_active_relay_radio_b_(0),
+      auto_resolved_conflict_prev_a_relay_(0),
+      auto_resolved_conflict_prev_b_relay_(0),
+      radio_b_restore_delay_timer_(nullptr),
+      radio_a_restore_delay_timer_(nullptr),
+      interlock_mutex_(nullptr)
+{
+    interlock_mutex_ = xSemaphoreCreateMutex();
+    if (interlock_mutex_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create interlock_mutex_");
+        // Consider a more critical failure path if mutex is essential for stability
+    }
+    
+    // Get initial delay from config. ConfigManager should provide defaults if NVS not loaded/valid.
+    // Note: ConfigManager::instance() might not be fully initialized here if AntennaSwitch is a static global
+    // and its constructor runs before ConfigManager's. However, ConfigManager uses a Meyers' singleton,
+    // so its instance() call should trigger its construction if not already done.
+    // A safer approach might be to initialize/update timer periods in AntennaSwitch::init() after ConfigManager is confirmed ready.
+    // For now, assuming ConfigManager is available or provides a usable default from its own constructor.
+    const auto& initial_config = ConfigManager::instance().get_config_ref(); // get_config_ref() is better than get_config() for direct access
+    uint16_t initial_delay_ms = initial_config.radio_restore_delay_ms;
+
+    // Validate and set a fallback if the configured value is unreasonable (e.g., 0 from a fresh NVS or before full init)
+    if (initial_delay_ms < 50 || initial_delay_ms > 5000) { // Min 50ms, Max 5s
+        ESP_LOGW(TAG, "Initial radio_restore_delay_ms from config (%u ms) is out of range [50, 5000]. Using 200 ms.", initial_delay_ms);
+        initial_delay_ms = 200; // Default fallback
+    }
+    ESP_LOGI(TAG, "Initializing interlock restore timers with delay: %u ms", initial_delay_ms);
+    TickType_t initial_period_ticks = pdMS_TO_TICKS(initial_delay_ms);
+
+
+    radio_b_restore_delay_timer_ = xTimerCreate(
+        "RadioBRestTimer",
+        initial_period_ticks,
+        pdFALSE, // One-shot timer
+        this,    // Pass AntennaSwitch instance as timer ID
+        radio_b_restore_timer_callback);
+    if (radio_b_restore_delay_timer_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create radio_b_restore_delay_timer_");
+    }
+
+    radio_a_restore_delay_timer_ = xTimerCreate(
+        "RadioARestTimer",
+        initial_period_ticks,
+        pdFALSE, // One-shot timer
+        this,    // Pass AntennaSwitch instance as timer ID
+        radio_a_restore_timer_callback);
+    if (radio_a_restore_delay_timer_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create radio_a_restore_delay_timer_");
+    }
+}
+
 
 [[maybe_unused]] static esp_err_t get_ip_address(char *ip_addr, const size_t max_len) {
     if (!ip_addr || max_len < 16) {
@@ -50,7 +110,50 @@ esp_err_t AntennaSwitch::set_config(const antenna_switch_config_t *config) {
     if (config == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    return ConfigManager::instance().update_config(*config);
+    
+    // Persist the new configuration using ConfigManager
+    esp_err_t err = ConfigManager::instance().update_config(*config);
+    if (err != ESP_OK) {
+        return err; // Failed to save config
+    }
+
+    // ConfigManager now holds the new config.
+    // Apply the new delay to the timers.
+    const auto& current_config_ref = ConfigManager::instance().get_config_ref();
+    uint16_t new_delay_ms = current_config_ref.radio_restore_delay_ms;
+
+    // Validate the delay (e.g., 50ms to 5000ms)
+    if (new_delay_ms < 50) new_delay_ms = 50;
+    if (new_delay_ms > 5000) new_delay_ms = 5000;
+
+    TickType_t new_period_ticks = pdMS_TO_TICKS(new_delay_ms);
+
+    if (interlock_mutex_ == nullptr) { // Should have been created in constructor
+        ESP_LOGE(TAG, "Interlock mutex not initialized in set_config. Timers not updated.");
+        return ESP_FAIL; 
+    }
+    
+    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (radio_a_restore_delay_timer_ != nullptr) {
+            if (xTimerChangePeriod(radio_a_restore_delay_timer_, new_period_ticks, pdMS_TO_TICKS(10)) != pdPASS) {
+                ESP_LOGE(TAG, "Failed to change period for radio_a_restore_delay_timer_ to %u ms", new_delay_ms);
+            } else {
+                ESP_LOGI(TAG, "Radio A restore timer period updated to %u ms", new_delay_ms);
+            }
+        }
+        if (radio_b_restore_delay_timer_ != nullptr) {
+            if (xTimerChangePeriod(radio_b_restore_delay_timer_, new_period_ticks, pdMS_TO_TICKS(10)) != pdPASS) {
+                ESP_LOGE(TAG, "Failed to change period for radio_b_restore_delay_timer_ to %u ms", new_delay_ms);
+            } else {
+                ESP_LOGI(TAG, "Radio B restore timer period updated to %u ms", new_delay_ms);
+            }
+        }
+        xSemaphoreGive(interlock_mutex_);
+    } else {
+        ESP_LOGE(TAG, "Could not take interlock mutex in set_config. Timer periods not updated.");
+    }
+
+    return ESP_OK; // Return original error from ConfigManager::update_config if it failed, otherwise ESP_OK
 }
 
 esp_err_t AntennaSwitch::get_config(antenna_switch_config_t *config) {
@@ -264,161 +367,328 @@ int AntennaSwitch::get_active_relay_for_radio(RadioID radio) const {
 }
 
 void AntennaSwitch::on_radio_a_tx_start() {
+    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE(TAG, "on_radio_a_tx_start: Could not take mutex");
+        return;
+    }
+
     ESP_LOGI(TAG, "Radio A TX: HW PTT A: %s, CAT TX A: %s. Applying interlock for Radio B.",
              hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
              CatParser::instance().is_transmitting() ? "ON" : "OFF");
-    const auto& config = ConfigManager::instance().get_config();
 
+    // Cancel any pending restoration for Radio B
+    if (radio_b_restore_delay_timer_ != nullptr && xTimerIsTimerActive(radio_b_restore_delay_timer_)) {
+        ESP_LOGI(TAG, "Radio A TX start: Cancelling pending Radio B relay restoration.");
+        xTimerStop(radio_b_restore_delay_timer_, 0);
+        // pre_tx_active_relay_radio_b_ is not cleared here; it might be needed if this TX cycle also stops.
+    }
+
+    const auto& config = ConfigManager::instance().get_config();
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
-        ESP_LOGD(TAG, "Single Radio A mode, no interlock action needed for Radio B (due to Radio A TX).");
+        ESP_LOGD(TAG, "Single Radio A mode, no interlock action needed for Radio B.");
+        xSemaphoreGive(interlock_mutex_);
         return;
     }
 
     if (!relay_controller_) {
         ESP_LOGE(TAG, "Relay controller not initialized, cannot apply TX interlock for Radio B.");
+        xSemaphoreGive(interlock_mutex_);
         return;
     }
 
-    // Check if Radio B is ALREADY considered interlocked by THIS mechanism
+    // Check if Radio B is ALREADY considered interlocked (pre_tx_active_relay_radio_b_ is set)
+    // AND if Radio B is currently not using any relay (meaning it was turned off and not restored yet).
+    bool b_was_already_interlocked_and_off = false;
     if (pre_tx_active_relay_radio_b_ != 0) {
-        ESP_LOGD(TAG, "Radio A TX start: Radio B interlock already in effect (relay %d previously stored). No new action.", pre_tx_active_relay_radio_b_);
-        return;
-    }
-
-    // If not already interlocked by us, find out what Radio B is currently doing
-
-    if (const int active_b_relay = get_active_relay_for_radio(RadioID::B); active_b_relay != 0) { // Radio B is using a relay
-        // Before turning off B's relay, check for conflicts
-        if (is_radio_b_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
-            ESP_LOGW(TAG, "Radio A TX start: Conflict! Radio B (relay %d) is also transmitting. Interlock resolution is manual. Radio B relay NOT changed.", active_b_relay);
-            // Do NOT set pre_tx_active_relay_radio_b_ here, because we didn't turn off its relay.
-        } else {
-            // Ok, we need to turn off Radio B's relay. Store it first.
-            pre_tx_active_relay_radio_b_ = active_b_relay;
-            ESP_LOGI(TAG, "Radio B was using relay %d. Turning it OFF due to Radio A TX.", pre_tx_active_relay_radio_b_);
-            esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_b_, false);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to turn OFF Radio B relay %d: %s", pre_tx_active_relay_radio_b_, esp_err_to_name(err));
-                pre_tx_active_relay_radio_b_ = 0; // Failed, so don't try to restore
-            }
+        if (get_active_relay_for_radio(RadioID::B) == 0) { // Check if B is actually off
+            b_was_already_interlocked_and_off = true;
+            ESP_LOGD(TAG, "Radio A TX start: Radio B interlock for relay %d already in effect and B is off. No new deactivation needed.", pre_tx_active_relay_radio_b_);
         }
-    } else {
-        ESP_LOGD(TAG, "Radio B was not using any relay. No interlock action needed for Radio A TX.");
-        // pre_tx_active_relay_radio_b_ remains 0, so no restoration will be attempted.
     }
+
+    if (!b_was_already_interlocked_and_off) {
+        if (const int active_b_relay = get_active_relay_for_radio(RadioID::B); active_b_relay != 0) {
+            if (is_radio_b_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
+                ESP_LOGW(TAG, "Radio A TX start: Conflict! Radio B (relay %d) is also transmitting. Interlock resolution is manual. Radio B relay NOT changed.", active_b_relay);
+            } else {
+                pre_tx_active_relay_radio_b_ = active_b_relay; // Store it before turning off
+                ESP_LOGI(TAG, "Radio B was using relay %d. Turning it OFF due to Radio A TX.", pre_tx_active_relay_radio_b_);
+                esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_b_, false);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to turn OFF Radio B relay %d: %s", pre_tx_active_relay_radio_b_, esp_err_to_name(err));
+                    pre_tx_active_relay_radio_b_ = 0; 
+                }
+            }
+        } else {
+            ESP_LOGD(TAG, "Radio B was not using any relay. No interlock action needed for Radio A TX.");
+            // If B was not using any relay, but pre_tx_active_relay_radio_b_ was set (e.g. from a previous cycle where timer was cancelled)
+            // it should remain set. So, don't clear pre_tx_active_relay_radio_b_ here.
+        }
+    }
+    xSemaphoreGive(interlock_mutex_);
 }
 
 void AntennaSwitch::on_radio_a_tx_stop() {
-    ESP_LOGI(TAG, "Radio A TX: HW PTT A: %s, CAT TX A: %s. Restoring Radio B state if applicable.",
+    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE(TAG, "on_radio_a_tx_stop: Could not take mutex");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Radio A TX: HW PTT A: %s, CAT TX A: %s. Scheduling Radio B state restoration if applicable.",
              hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
              CatParser::instance().is_transmitting() ? "ON" : "OFF");
+    
     const auto& config = ConfigManager::instance().get_config();
-
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
         ESP_LOGD(TAG, "Single Radio A mode, no interlock restoration needed for Radio B.");
+        xSemaphoreGive(interlock_mutex_);
         return;
     }
 
     if (!relay_controller_) {
-        ESP_LOGE(TAG, "Relay controller not initialized, cannot restore Radio B state.");
+        ESP_LOGE(TAG, "Relay controller not initialized, cannot schedule Radio B state restoration.");
+        xSemaphoreGive(interlock_mutex_);
         return;
     }
 
     if (pre_tx_active_relay_radio_b_ != 0) {
-        // Before restoring, ensure Radio B is not now transmitting itself
         if (is_radio_b_transmitting_effective()) {
-            ESP_LOGW(TAG, "Radio B is currently transmitting (effective), not restoring its relay %d.", pre_tx_active_relay_radio_b_);
-            // Decide if we clear pre_tx_active_relay_radio_b_ or retry later. For now, clear.
-            pre_tx_active_relay_radio_b_ = 0; 
-            return;
+            ESP_LOGW(TAG, "Radio B is currently transmitting (effective), not scheduling restoration of its relay %d.", pre_tx_active_relay_radio_b_);
+            pre_tx_active_relay_radio_b_ = 0; // Abort restoration for this stored relay
+        } else {
+            if (radio_b_restore_delay_timer_ != nullptr) {
+                uint16_t current_delay_ms = ConfigManager::instance().get_config_ref().radio_restore_delay_ms;
+                if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback for logging safety
+                ESP_LOGI(TAG, "Radio A TX stop: Scheduling Radio B relay %d restoration in %u ms.", pre_tx_active_relay_radio_b_, current_delay_ms);
+                if (xTimerReset(radio_b_restore_delay_timer_, pdMS_TO_TICKS(10)) != pdPASS) { // Use small block time for xTimerReset
+                    ESP_LOGE(TAG, "Failed to reset radio_b_restore_delay_timer_. Relay %d will not be restored by timer.", pre_tx_active_relay_radio_b_);
+                }
+                // Do NOT clear pre_tx_active_relay_radio_b_ here. The timer callback will handle it.
+            } else {
+                ESP_LOGE(TAG, "Radio B restore delay timer not initialized! Relay %d will not be restored.", pre_tx_active_relay_radio_b_);
+            }
         }
-
-        ESP_LOGI(TAG, "Restoring Radio B relay %d to ON.", pre_tx_active_relay_radio_b_);
-        esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_b_, true);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to restore Radio B relay %d: %s", pre_tx_active_relay_radio_b_, esp_err_to_name(err));
-        }
-        pre_tx_active_relay_radio_b_ = 0; // Clear after attempting restoration
     } else {
         ESP_LOGD(TAG, "No Radio B relay was stored (pre_tx_active_relay_radio_b_ is 0). No restoration action for Radio B.");
     }
+    xSemaphoreGive(interlock_mutex_);
 }
 
+// Timer callback for Radio B restoration
+void AntennaSwitch::radio_b_restore_timer_callback(TimerHandle_t xTimer) {
+    AntennaSwitch* self = static_cast<AntennaSwitch*>(pvTimerGetTimerID(xTimer));
+    if (!self) {
+        ESP_LOGE(TAG, "Radio B restore timer callback: self is null");
+        return;
+    }
+
+    if (xSemaphoreTake(self->interlock_mutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE(TAG, "Radio B restore timer: Could not take mutex. Rescheduling.");
+        if (self->radio_b_restore_delay_timer_ != nullptr && self->pre_tx_active_relay_radio_b_ != 0) {
+            uint16_t current_delay_ms = ConfigManager::instance().get_config_ref().radio_restore_delay_ms;
+            if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
+            TickType_t reschedule_delay_ticks = pdMS_TO_TICKS(current_delay_ms / 2);
+            if (reschedule_delay_ticks == 0) reschedule_delay_ticks = pdMS_TO_TICKS(50); // Ensure non-zero if delay is small
+             xTimerReset(self->radio_b_restore_delay_timer_, reschedule_delay_ticks); // Try again sooner
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "Radio B restore timer expired.");
+
+    if (self->pre_tx_active_relay_radio_b_ == 0) {
+        ESP_LOGD(TAG, "Radio B restore timer: No pre_tx_active_relay_radio_b_ to restore (cleared or restored).");
+        xSemaphoreGive(self->interlock_mutex_);
+        return;
+    }
+
+    // Safety check: Is Radio A transmitting again?
+    if (self->is_radio_a_transmitting_effective()) {
+        ESP_LOGW(TAG, "Radio B restore timer: Radio A started transmitting again. Aborting restoration of relay %d.", self->pre_tx_active_relay_radio_b_);
+        // pre_tx_active_relay_radio_b_ is NOT cleared here. on_radio_a_tx_start would have handled it.
+        xSemaphoreGive(self->interlock_mutex_);
+        return;
+    }
+
+    if (self->is_radio_b_transmitting_effective()) {
+        ESP_LOGW(TAG, "Radio B restore timer: Radio B is now transmitting on its own. Aborting restoration of its previous relay %d.", self->pre_tx_active_relay_radio_b_);
+        self->pre_tx_active_relay_radio_b_ = 0; // Abort and clear
+        xSemaphoreGive(self->interlock_mutex_);
+        return;
+    }
+
+    if (!self->relay_controller_) {
+        ESP_LOGE(TAG, "Radio B restore timer: Relay controller not initialized.");
+        self->pre_tx_active_relay_radio_b_ = 0; // Cannot restore, clear
+        xSemaphoreGive(self->interlock_mutex_);
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Radio B restore timer: Restoring Radio B relay %d to ON.", self->pre_tx_active_relay_radio_b_);
+    esp_err_t err = self->relay_controller_->set_relay(self->pre_tx_active_relay_radio_b_, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Radio B restore timer: Failed to restore Radio B relay %d: %s", self->pre_tx_active_relay_radio_b_, esp_err_to_name(err));
+    }
+    self->pre_tx_active_relay_radio_b_ = 0; // Clear after attempting restoration
+    xSemaphoreGive(self->interlock_mutex_);
+}
+
+
 void AntennaSwitch::on_radio_b_tx_start() {
+    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE(TAG, "on_radio_b_tx_start: Could not take mutex");
+        return;
+    }
+
     ESP_LOGI(TAG, "Radio B TX: HW PTT B: %s. Applying interlock for Radio A.",
              hw_ptt_b_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE");
-    const auto& config = ConfigManager::instance().get_config();
 
+    if (radio_a_restore_delay_timer_ != nullptr && xTimerIsTimerActive(radio_a_restore_delay_timer_)) {
+        ESP_LOGI(TAG, "Radio B TX start: Cancelling pending Radio A relay restoration.");
+        xTimerStop(radio_a_restore_delay_timer_, 0);
+    }
+    
+    const auto& config = ConfigManager::instance().get_config();
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
         ESP_LOGW(TAG, "Radio B TX reported in SINGLE_A mode. This is unexpected.");
+        xSemaphoreGive(interlock_mutex_);
         return;
     }
     if (!relay_controller_) {
         ESP_LOGE(TAG, "Relay controller not initialized, cannot apply TX interlock for Radio A.");
+        xSemaphoreGive(interlock_mutex_);
         return;
     }
 
-    // Check if Radio A is ALREADY considered interlocked by THIS mechanism
+    bool a_was_already_interlocked_and_off = false;
     if (pre_tx_active_relay_radio_a_ != 0) {
-        ESP_LOGD(TAG, "Radio B TX start: Radio A interlock already in effect (relay %d previously stored). No new action.", pre_tx_active_relay_radio_a_);
-        return;
-    }
-
-    // If not already interlocked by us, find out what Radio A is currently doing
-    int active_a_relay = get_active_relay_for_radio(RadioID::A);
-
-    if (active_a_relay != 0) { // Radio A is using a relay
-        // Before turning off A's relay, check for conflicts
-        if (is_radio_a_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
-            ESP_LOGW(TAG, "Radio B TX start: Conflict! Radio A (relay %d) is also transmitting. Interlock resolution is manual. Radio A relay NOT changed.", active_a_relay);
-            // Do NOT set pre_tx_active_relay_radio_a_ here, because we didn't turn off its relay.
-        } else {
-            // Ok, we need to turn off Radio A's relay. Store it first.
-            pre_tx_active_relay_radio_a_ = active_a_relay;
-            ESP_LOGI(TAG, "Radio A was using relay %d. Turning it OFF due to Radio B TX.", pre_tx_active_relay_radio_a_);
-            esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_a_, false);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to turn OFF Radio A relay %d: %s", pre_tx_active_relay_radio_a_, esp_err_to_name(err));
-                pre_tx_active_relay_radio_a_ = 0; // Failed, so don't try to restore
-            }
+        if (get_active_relay_for_radio(RadioID::A) == 0) {
+            a_was_already_interlocked_and_off = true;
+            ESP_LOGD(TAG, "Radio B TX start: Radio A interlock for relay %d already in effect and A is off. No new deactivation needed.", pre_tx_active_relay_radio_a_);
         }
-    } else {
-        ESP_LOGD(TAG, "Radio A was not using any relay. No interlock action needed for Radio B TX.");
-        // pre_tx_active_relay_radio_a_ remains 0, so no restoration will be attempted.
     }
+
+    if (!a_was_already_interlocked_and_off) {
+        int active_a_relay = get_active_relay_for_radio(RadioID::A);
+        if (active_a_relay != 0) {
+            if (is_radio_a_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
+                ESP_LOGW(TAG, "Radio B TX start: Conflict! Radio A (relay %d) is also transmitting. Interlock resolution is manual. Radio A relay NOT changed.", active_a_relay);
+            } else {
+                pre_tx_active_relay_radio_a_ = active_a_relay;
+                ESP_LOGI(TAG, "Radio A was using relay %d. Turning it OFF due to Radio B TX.", pre_tx_active_relay_radio_a_);
+                esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_a_, false);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to turn OFF Radio A relay %d: %s", pre_tx_active_relay_radio_a_, esp_err_to_name(err));
+                    pre_tx_active_relay_radio_a_ = 0; 
+                }
+            }
+        } else {
+            ESP_LOGD(TAG, "Radio A was not using any relay. No interlock action needed for Radio B TX.");
+        }
+    }
+    xSemaphoreGive(interlock_mutex_);
 }
 
 void AntennaSwitch::on_radio_b_tx_stop() {
-    ESP_LOGI(TAG, "Radio B TX: HW PTT B: %s. Restoring Radio A state if applicable.",
-             hw_ptt_b_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE");
-    const auto& config = ConfigManager::instance().get_config();
+    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE(TAG, "on_radio_b_tx_stop: Could not take mutex");
+        return;
+    }
 
+    ESP_LOGI(TAG, "Radio B TX: HW PTT B: %s. Scheduling Radio A state restoration if applicable.",
+             hw_ptt_b_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE");
+    
+    const auto& config = ConfigManager::instance().get_config();
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
+        xSemaphoreGive(interlock_mutex_);
         return;
     }
     if (!relay_controller_) {
-        ESP_LOGE(TAG, "Relay controller not initialized, cannot restore Radio A state.");
+        ESP_LOGE(TAG, "Relay controller not initialized, cannot schedule Radio A state restoration.");
+        xSemaphoreGive(interlock_mutex_);
         return;
     }
 
     if (pre_tx_active_relay_radio_a_ != 0) {
-        // Before restoring, ensure Radio A is not now transmitting itself
         if (is_radio_a_transmitting_effective()) {
-             ESP_LOGW(TAG, "Radio A is currently transmitting (effective), cannot restore its previous relay %d after Radio B TX stop.", pre_tx_active_relay_radio_a_);
-             // Decide if we clear pre_tx_active_relay_radio_a_ or retry later. For now, clear.
+             ESP_LOGW(TAG, "Radio A is currently transmitting (effective), cannot schedule restoration of its previous relay %d.", pre_tx_active_relay_radio_a_);
              pre_tx_active_relay_radio_a_ = 0;
-             return;
         } else {
-            ESP_LOGI(TAG, "Restoring Radio A relay %d to ON.", pre_tx_active_relay_radio_a_);
-            esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_a_, true);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to restore Radio A relay %d: %s", pre_tx_active_relay_radio_a_, esp_err_to_name(err));
+            if (radio_a_restore_delay_timer_ != nullptr) {
+                uint16_t current_delay_ms = ConfigManager::instance().get_config_ref().radio_restore_delay_ms;
+                if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback for logging safety
+                ESP_LOGI(TAG, "Radio B TX stop: Scheduling Radio A relay %d restoration in %u ms.", pre_tx_active_relay_radio_a_, current_delay_ms);
+                if (xTimerReset(radio_a_restore_delay_timer_, pdMS_TO_TICKS(10)) != pdPASS) {
+                    ESP_LOGE(TAG, "Failed to reset radio_a_restore_delay_timer_. Relay %d will not be restored by timer.", pre_tx_active_relay_radio_a_);
+                }
+            } else {
+                ESP_LOGE(TAG, "Radio A restore delay timer not initialized! Relay %d will not be restored.", pre_tx_active_relay_radio_a_);
             }
         }
-        pre_tx_active_relay_radio_a_ = 0;
+    } else {
+         ESP_LOGD(TAG, "No Radio A relay was stored. No restoration action for Radio A.");
     }
-    ESP_LOGW(TAG, "Note: Radio B TX detection and interlock is partially stubbed until Radio B TX state is available.");
+    xSemaphoreGive(interlock_mutex_);
 }
+
+// Timer callback for Radio A restoration
+void AntennaSwitch::radio_a_restore_timer_callback(TimerHandle_t xTimer) {
+    AntennaSwitch* self = static_cast<AntennaSwitch*>(pvTimerGetTimerID(xTimer));
+    if (!self) {
+        ESP_LOGE(TAG, "Radio A restore timer callback: self is null");
+        return;
+    }
+
+    if (xSemaphoreTake(self->interlock_mutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGE(TAG, "Radio A restore timer: Could not take mutex. Rescheduling.");
+        if (self->radio_a_restore_delay_timer_ != nullptr && self->pre_tx_active_relay_radio_a_ != 0) {
+            uint16_t current_delay_ms = ConfigManager::instance().get_config_ref().radio_restore_delay_ms;
+            if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
+            TickType_t reschedule_delay_ticks = pdMS_TO_TICKS(current_delay_ms / 2);
+            if (reschedule_delay_ticks == 0) reschedule_delay_ticks = pdMS_TO_TICKS(50); // Ensure non-zero
+             xTimerReset(self->radio_a_restore_delay_timer_, reschedule_delay_ticks);
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "Radio A restore timer expired.");
+
+    if (self->pre_tx_active_relay_radio_a_ == 0) {
+        ESP_LOGD(TAG, "Radio A restore timer: No pre_tx_active_relay_radio_a_ to restore (cleared or restored).");
+        xSemaphoreGive(self->interlock_mutex_);
+        return;
+    }
+
+    if (self->is_radio_b_transmitting_effective()) {
+        ESP_LOGW(TAG, "Radio A restore timer: Radio B started transmitting again. Aborting restoration of relay %d.", self->pre_tx_active_relay_radio_a_);
+        // pre_tx_active_relay_radio_a_ is NOT cleared here. on_radio_b_tx_start would have handled it.
+        xSemaphoreGive(self->interlock_mutex_);
+        return;
+    }
+
+    if (self->is_radio_a_transmitting_effective()) {
+        ESP_LOGW(TAG, "Radio A restore timer: Radio A is now transmitting on its own. Aborting restoration of its previous relay %d.", self->pre_tx_active_relay_radio_a_);
+        self->pre_tx_active_relay_radio_a_ = 0; 
+        xSemaphoreGive(self->interlock_mutex_);
+        return;
+    }
+
+    if (!self->relay_controller_) {
+        ESP_LOGE(TAG, "Radio A restore timer: Relay controller not initialized.");
+        self->pre_tx_active_relay_radio_a_ = 0; 
+        xSemaphoreGive(self->interlock_mutex_);
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Radio A restore timer: Restoring Radio A relay %d to ON.", self->pre_tx_active_relay_radio_a_);
+    esp_err_t err = self->relay_controller_->set_relay(self->pre_tx_active_relay_radio_a_, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Radio A restore timer: Failed to restore Radio A relay %d: %s", self->pre_tx_active_relay_radio_a_, esp_err_to_name(err));
+    }
+    self->pre_tx_active_relay_radio_a_ = 0; 
+    xSemaphoreGive(self->interlock_mutex_);
+}
+
 
 esp_err_t AntennaSwitch::update_last_used_antenna_preference(int activated_relay_id, RadioID radio_of_activated_relay) {
     auto current_cfg_ptr = std::make_unique<antenna_switch_config_t>();
