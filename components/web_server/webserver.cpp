@@ -657,29 +657,29 @@ esp_err_t WebServer::reset_config_handler(httpd_req_t *req) {
         10,
         1,
         {
-            {
-                {"160m", 1800000, 2000000, {true}},
-                {"80m", 3500000, 4000000, {true}},
-                {"40m", 7000000, 7300000, {true}},
-                {"30m", 10100000, 10150000, {true}},
-                {"20m", 14000000, 14350000, {true}},
-                {"17m", 18068000, 18168000, {true}},
-                {"15m", 21000000, 21450000, {true}},
-                {"12m", 24890000, 24990000, {true}},
-                {"10m", 28000000, 29700000, {true}},
-                {"6m", 50000000, 54000000, {true}}
+            { // Radio A defaults
+                {"160m", 1800000, 2000000, 1}, // Assuming antenna_ports_mask, 1 enables port 0
+                {"80m", 3500000, 4000000, 1},
+                {"40m", 7000000, 7300000, 1},
+                {"30m", 10100000, 10150000, 1},
+                {"20m", 14000000, 14350000, 1},
+                {"17m", 18068000, 18168000, 1},
+                {"15m", 21000000, 21450000, 1},
+                {"12m", 24890000, 24990000, 1},
+                {"10m", 28000000, 29700000, 1},
+                {"6m", 50000000, 54000000, 1}
             },
             { // Radio B defaults (mirroring Radio A for simplicity)
-                {"160m", 1800000, 2000000, {true}},
-                {"80m", 3500000, 4000000, {true}},
-                {"40m", 7000000, 7300000, {true}},
-                {"30m", 10100000, 10150000, {true}},
-                {"20m", 14000000, 14350000, {true}},
-                {"17m", 18068000, 18168000, {true}},
-                {"15m", 21000000, 21450000, {true}},
-                {"12m", 24890000, 24990000, {true}},
-                {"10m", 28000000, 29700000, {true}},
-                {"6m", 50000000, 54000000, {true}}
+                {"160m", 1800000, 2000000, 1}, // Assuming antenna_ports_mask, 1 enables port 0
+                {"80m", 3500000, 4000000, 1},
+                {"40m", 7000000, 7300000, 1},
+                {"30m", 10100000, 10150000, 1},
+                {"20m", 14000000, 14350000, 1},
+                {"17m", 18068000, 18168000, 1},
+                {"15m", 21000000, 21450000, 1},
+                {"12m", 24890000, 24990000, 1},
+                {"10m", 28000000, 29700000, 1},
+                {"6m", 50000000, 54000000, 1}
             }
         },
         9600,
@@ -705,7 +705,7 @@ esp_err_t WebServer::reset_config_handler(httpd_req_t *req) {
         "esp32-antenna-switch", // mqtt_client_id
         "omnirig/radio_info", // mqtt_topic
         RADIO_OP_MODE_SINGLE_A, // radio_operation_mode (default to Radio A only)
-        { {0} } // last_used_antenna[2][MAX_BANDS] initialized to all zeros
+        {0} // last_used_antenna[2][MAX_BANDS] initialized to all zeros (changed {{0}} to {0} to fix scalar init error)
     };
 
     if (const esp_err_t ret = AntennaSwitch::instance().set_config(&default_config); ret != ESP_OK) {
