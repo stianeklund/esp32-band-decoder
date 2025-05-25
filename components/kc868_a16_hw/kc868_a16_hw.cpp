@@ -22,7 +22,7 @@ static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
     const esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(cmd);
     
-    vTaskDelay(pdMS_TO_TICKS(10)); // Keep this delay for I2C timing
+    // vTaskDelay(pdMS_TO_TICKS(10)); // Commented out for PTT optimization - restore if I2C issues occur
     return ret;
 }
 
@@ -39,7 +39,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
     const esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(cmd);
     
-    vTaskDelay(pdMS_TO_TICKS(10)); // Keep this delay for I2C timing
+    // vTaskDelay(pdMS_TO_TICKS(10)); // Commented out for PTT optimization - restore if I2C issues occur
     return ret;
 }
 
