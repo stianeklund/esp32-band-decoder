@@ -550,7 +550,7 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
     }
 
     const bool tx_state_changed = new_tx_state != transmitting; // Compare new with current member state
-    std::string old_mode = current_mode;                   // Capture current mode before update
+    const std::string old_mode = current_mode;                   // Capture current mode before update
 
     // Update internal states
     transmitting = new_tx_state;
@@ -559,12 +559,14 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
 
     if (tx_state_changed) {
         ESP_LOGV(TAG, "Radio %s (IF command)", transmitting ? "started transmitting" : "stopped transmitting");
-        if (transmitting) {
-            AntennaSwitch::instance().on_radio_a_tx_start();
-        } else {
-            AntennaSwitch::instance().on_radio_a_tx_stop();
-        }
+        // The call to set_transmitting will handle notifying AntennaSwitch
+        set_transmitting(new_tx_state);
     }
+    // If only frequency changed, but TX state did not, we still need to inform AntennaSwitch
+    // about the frequency for potential antenna changes.
+    // However, if TX state DID change, set_transmitting already called on_cat_tx_a_state_change,
+    // which in turn calls on_radio_a_tx_start/stop, which handles frequency.
+    // So, direct frequency handling here is mainly for when TX state *doesn't* change.
 
     if (current_mode != old_mode && !tx_state_changed) {
         ESP_LOGV(TAG, "Mode changed from %s to %s", old_mode.c_str(), current_mode.c_str());
@@ -599,23 +601,29 @@ esp_err_t CatParser::process_fa_command(const std::string_view command) {
     return ESP_OK;
 }
 
+void CatParser::set_transmitting(const bool new_state) {
+    if (transmitting != new_state) { // 'transmitting' is the member bool of CatParser
+        ESP_LOGD(TAG, "CatParser internal transmit state changing to: %s", new_state ? "ON" : "OFF");
+        transmitting = new_state; // Update CatParser's own state
+
+        // Notify AntennaSwitch about this change for Radio A
+        AntennaSwitch::instance().on_cat_tx_a_state_change(new_state);
+    }
+}
+
 esp_err_t CatParser::process_tx_command(const std::string_view payload) {
     (void)payload; // ignore the payload, not needed here
-    if (!transmitting) {
-        transmitting = true;
-        ESP_LOGD(TAG, "Radio started transmitting (TX command)");
-        AntennaSwitch::instance().on_radio_a_tx_start(); // Notify AntennaSwitch
-    }
+    // Call the centralized set_transmitting method which now notifies AntennaSwitch
+    set_transmitting(true); 
+    // Log message is now part of set_transmitting if state changes, or AntennaSwitch's handlers
     return ESP_OK;
 }
 
 esp_err_t CatParser::process_rx_command(const std::string_view payload) {
     (void)payload;
-    if (transmitting) {
-        transmitting = false;
-        ESP_LOGD(TAG, "Radio stopped transmitting (RX command)");
-        AntennaSwitch::instance().on_radio_a_tx_stop(); // Notify AntennaSwitch
-    }
+    // Call the centralized set_transmitting method which now notifies AntennaSwitch
+    set_transmitting(false);
+    // Log message is now part of set_transmitting if state changes, or AntennaSwitch's handlers
     return ESP_OK;
 }
 

@@ -1,7 +1,7 @@
+#include <cstdio>
 #include <esp_event.h>
 #include <esp_task_wdt.h>
 #include <nvs_flash.h>
-#include <cstdio>
 
 #ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 #include "esp_heap_caps.h" // For heap stats
@@ -10,23 +10,20 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_system.h" // For esp_restart
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "restart_manager.h"
-#include "system_initializer.h"
 #include "relay_controller.h"
+#include "restart_manager.h"
+#include "serial_cli.h"
+#include "system_initializer.h"
 #include "webserver.h"
 #include "wifi_manager.hpp"
-#include "serial_cli.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static auto TAG = "MAIN";
 
-// Global pointer to RelayController
-static RelayController *g_relay_controller = nullptr;
-static SerialCli g_serial_cli; // Global or static instance of SerialCli
+static RelayController* g_relay_controller = nullptr;
+static SerialCli g_serial_cli;
 
-
-// Function to display FreeRTOS runtime statistics
 
 #ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 static void display_runtime_stats() {
@@ -76,7 +73,7 @@ public:
 extern "C" [[noreturn]] void app_main(void) {
     // Initialize all variables at the start
     esp_err_t ret = ESP_OK;
-    RelayController *relay_controller = nullptr;
+    RelayController* relay_controller = nullptr;
     SystemCleanup cleanup; // RAII cleanup for NVS
     constexpr int MAX_WIFI_WAIT_SECONDS = 30;
     constexpr int MAX_WIFI_WAIT_MS = MAX_WIFI_WAIT_SECONDS * 1000;
@@ -118,12 +115,13 @@ extern "C" [[noreturn]] void app_main(void) {
                     ESP_LOGI(TAG, "Waiting for WiFi configuration... (%d/%d)",
                              elapsed_ms/1000 + 1, MAX_WIFI_WAIT_SECONDS);
                 }
-                
+
                 // Feed the watchdog during this potentially long wait
-                const esp_err_t wdt_status_wifi_wait = esp_task_wdt_status(xTaskGetCurrentTaskHandle());
-                if (wdt_status_wifi_wait == ESP_OK) {
+                if (const esp_err_t wdt_status_wifi_wait = esp_task_wdt_status(xTaskGetCurrentTaskHandle());
+                    wdt_status_wifi_wait == ESP_OK) {
                     esp_task_wdt_reset();
-                } else if (wdt_status_wifi_wait == ESP_ERR_NOT_FOUND) {
+                }
+                else if (wdt_status_wifi_wait == ESP_ERR_NOT_FOUND) {
                     // This should not happen if WDT was initialized and task added by SystemInitializer
                     ESP_LOGW(TAG, "Main task not subscribed to WDT during WiFi wait loop!");
                 }
@@ -141,8 +139,11 @@ extern "C" [[noreturn]] void app_main(void) {
                 // ret = ESP_ERR_TIMEOUT; // No longer treating this as fatal for app_main startup
                 // goto error_handler;
             }
-        } else {
-            ESP_LOGI(TAG, "System is in SmartConfig mode or no credentials, waiting for configuration via CLI or SmartConfig.");
+        }
+        else {
+            ESP_LOGI(
+                TAG,
+                "System is in SmartConfig mode or no credentials, waiting for configuration via CLI or SmartConfig.");
             // Don't treat SmartConfig mode as an error, go directly to SmartConfig handling
             // OR, better, let the main loop run and allow CLI to be used.
             // The smartconfig_handler label might not be the best flow if CLI is primary.
@@ -153,7 +154,7 @@ extern "C" [[noreturn]] void app_main(void) {
     }
 
     // Only proceed with full initialization after WiFi is connected (or timeout/smartconfig mode)
-    ESP_LOGI(TAG, "Initializing full system..."); // Changed log from ESP_LOGV
+    ESP_LOGD(TAG, "Initializing full system...");
     ret = SystemInitializer::initialize_full(&relay_controller);
     if (ret != ESP_OK) {
         goto error_handler;
@@ -168,34 +169,37 @@ extern "C" [[noreturn]] void app_main(void) {
         if (WebServer::instance().init() != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize WebServer");
             if (ret == ESP_OK) ret = ESP_FAIL; // Keep track of first error
-            // Not going to error_handler, as system can run without webserver
-        } else {
+        }
+        else {
             ESP_LOGI(TAG, "Starting WebServer and registering core handlers...");
             if (WebServer::instance().start() != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to start WebServer or register core handlers");
                 if (ret == ESP_OK) ret = ESP_FAIL;
-            } else {
+            }
+            else {
                 ESP_LOGI(TAG, "Registering WebServer URI handlers...");
                 if (WebServer::instance().register_uri_handlers() != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to register WebServer URI handlers");
                     if (ret == ESP_OK) ret = ESP_FAIL;
                     WebServer::instance().stop(); // Stop the server if handlers fail
-                } else {
+                }
+                else {
                     ESP_LOGI(TAG, "WebServer started and all handlers registered successfully.");
                 }
             }
         }
-    } else {
+    }
+    else {
         ESP_LOGW(TAG, "WiFi not connected. WebServer will not be started. Use Serial CLI to configure WiFi.");
     }
-    
+
     // Main loop
     while (true) {
         // Feed the watchdog
-        const esp_err_t wdt_status = esp_task_wdt_status(xTaskGetCurrentTaskHandle());
-        if (wdt_status == ESP_OK) {
+        if (const esp_err_t wdt_status = esp_task_wdt_status(xTaskGetCurrentTaskHandle()); wdt_status == ESP_OK) {
             esp_task_wdt_reset();
-        } else if (wdt_status == ESP_ERR_NOT_FOUND) {
+        }
+        else if (wdt_status == ESP_ERR_NOT_FOUND) {
             ESP_LOGW(TAG, "Task not subscribed to WDT, attempting to resubscribe.");
             if (esp_task_wdt_add(xTaskGetCurrentTaskHandle()) != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to add task to WDT.");
@@ -213,18 +217,18 @@ extern "C" [[noreturn]] void app_main(void) {
             display_runtime_stats();
         }
 #endif // CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-        
+
         // Delay to reduce system load and allow other tasks to run
         // This should be unconditional and inside the main loop
         vTaskDelay(pdMS_TO_TICKS(500));
     } // This brace now correctly closes the while(true) loop,
-      // regardless of CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS.
+    // regardless of CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS.
 
-// The following block provides a dedicated mode for WiFi configuration
-// where SmartConfig is actively initiated, and the Serial CLI remains available.
-// If WiFi connection is established, the system restarts.
-// This section is currently not jumped to via a goto, but could be refactored into a function
-// or used with a goto if specific unrecoverable startup states need to force this mode.
+    // The following block provides a dedicated mode for WiFi configuration
+    // where SmartConfig is actively initiated, and the Serial CLI remains available.
+    // If WiFi connection is established, the system restarts.
+    // This section is currently not jumped to via a goto, but could be refactored into a function
+    // or used with a goto if specific unrecoverable startup states need to force this mode.
     ESP_LOGI(TAG, "Entering SmartConfig handler. Attempting to start SmartConfig.");
 
     // Optional: Clear existing credentials to ensure a fresh SmartConfig attempt,
@@ -235,8 +239,11 @@ extern "C" [[noreturn]] void app_main(void) {
     // but calling it here makes it explicit for this handler.
     if (WifiManager::instance().start_smartconfig() == ESP_OK) {
         ESP_LOGI(TAG, "SmartConfig initiated by handler. CLI is available for alternative configuration.");
-    } else {
-        ESP_LOGW(TAG, "Failed to explicitly start SmartConfig via handler. WifiManager might still attempt it based on events.");
+    }
+    else {
+        ESP_LOGW(
+            TAG,
+            "Failed to explicitly start SmartConfig via handler. WifiManager might still attempt it based on events.");
     }
 
     ESP_LOGI(TAG, "SmartConfig handler active. CLI is available. Waiting for WiFi connection to restart system...");
@@ -271,28 +278,34 @@ error_handler:
     if (RestartManager::check_restart_count() == ESP_FAIL) {
         ESP_LOGE(TAG, "Maximum restart attempts reached. Forcing SmartConfig mode and CLI availability.");
         // Optionally clear credentials to ensure SmartConfig doesn't try to use faulty ones from previous attempts.
-        // WifiManager::instance().clear_credentials(); 
-        
+        // WifiManager::instance().clear_credentials();
+
         ESP_LOGI(TAG, "Attempting to start SmartConfig due to max restarts.");
         if (WifiManager::instance().start_smartconfig() == ESP_OK) {
             ESP_LOGI(TAG, "SmartConfig initiated due to max restarts. CLI is also available.");
-        } else {
-            ESP_LOGW(TAG, "Failed to explicitly start SmartConfig after max restarts. WifiManager might still attempt it based on events.");
+        }
+        else {
+            ESP_LOGW(
+                TAG,
+                "Failed to explicitly start SmartConfig after max restarts. WifiManager might still attempt it based on events.")
+            ;
         }
 
         // Loop indefinitely, allowing CLI to be used or SmartConfig to (eventually) succeed.
         // The serial_cli_task is already running.
         while (true) {
             if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
-                 esp_task_wdt_reset();
+                esp_task_wdt_reset();
             }
             if (WifiManager::instance().is_connected()) {
-                ESP_LOGI(TAG, "Connection established after max restarts (possibly via CLI/SmartConfig), restarting system...");
+                ESP_LOGI(
+                    TAG,
+                    "Connection established after max restarts (possibly via CLI/SmartConfig), restarting system...");
                 RestartManager::clear_restart_count();
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 esp_restart();
             }
-            vTaskDelay(pdMS_TO_TICKS(1000)); 
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
 

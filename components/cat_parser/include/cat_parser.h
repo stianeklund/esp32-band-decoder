@@ -31,7 +31,7 @@ public:
 
     uint32_t get_frequency() const { return current_frequency; }
     bool is_transmitting() const { return transmitting; }
-    void set_transmitting(const bool tx_state) { transmitting = tx_state; }
+    void set_transmitting(bool tx_state); // Definition moved to .cpp
     bool is_rit_on() const { return rit_on; }
     bool is_xit_on() const { return xit_on; }
     bool is_split_on() const { return split_on; }
@@ -100,7 +100,7 @@ inline esp_err_t cat_parser_process_command(const char *command) {
 
 inline esp_err_t cat_parser_update_config() { return CatParser::instance().update_config(); }
 inline uint32_t cat_parser_get_frequency() { return CatParser::instance().get_frequency(); }
-inline uint32_t cat_parser_get_transmit() { return CatParser::instance().is_transmitting(); }
+inline bool cat_parser_get_transmit() { return CatParser::instance().is_transmitting(); } // Return type bool
 inline void cat_parser_set_transmit(const bool transmitting) { CatParser::instance().set_transmitting(transmitting); }
 inline esp_err_t cat_parser_set_frequency(const uint32_t frequency) { return CatParser::instance().handle_frequency_change(frequency); }
 

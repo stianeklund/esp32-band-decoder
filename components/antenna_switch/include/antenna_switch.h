@@ -134,28 +134,26 @@ public:
     esp_err_t set_relay_radio_b(int relay_id, bool state);
 
 private:
-    // Private constructor for singleton
-    AntennaSwitch(); // Will be defined in .cpp to initialize timers/mutex
+    AntennaSwitch();
     
     // Internal state for hardware PTT
-    std::atomic<bool> hw_ptt_a_active_{false};
-    std::atomic<bool> hw_ptt_b_active_{false};
+    std::atomic<bool> hw_ptt_a_active_{false}; // HW input ptt signal for Radio A
+    std::atomic<bool> hw_ptt_b_active_{false}; // HW input ptt signal for Radio B
+    std::atomic<bool> cat_tx_a_active_{false}; // Stores CAT-reported TX state for Radio A
+    std::atomic<bool> cat_tx_b_active_{false}; // Stores CAT-reported TX state for Radio B
 
     // Pointer to relay controller
     RelayController* relay_controller_ = nullptr;
-    int pre_tx_active_relay_radio_a_ = 0; // Stores active relay for A if B starts TX
-    int pre_tx_active_relay_radio_b_ = 0; // Stores active relay for B if A starts TX
+    int pre_tx_active_relay_radio_a_ = 0;         // Stores active relay for A if B starts TX
+    mutable int pre_tx_active_relay_radio_b_ = 0; // Stores active relay for B if A starts TX
     int auto_resolved_conflict_prev_a_relay_ = 0; // Stores Radio A's relay if turned off by B due to auto-resolved port conflict
     int auto_resolved_conflict_prev_b_relay_ = 0; // Stores Radio B's relay if turned off by A due to auto-resolved port conflict
 
 
-    // Helper to get active relay for a specific radio
     int get_active_relay_for_radio(RadioID radio) const;
 
-    // Helper to update last used antenna preference
     esp_err_t update_last_used_antenna_preference(int activated_relay_id, RadioID radio_of_activated_relay);
 
-    // Helper to attempt restoration of relays deselected by auto-resolved port conflicts
     void attempt_restore_auto_resolved_radio_a_relay();
     void attempt_restore_auto_resolved_radio_b_relay();
 
@@ -163,10 +161,8 @@ private:
     TimerHandle_t radio_b_restore_delay_timer_ = nullptr;
     TimerHandle_t radio_a_restore_delay_timer_ = nullptr;
 
-    // Mutex for interlock logic
     SemaphoreHandle_t interlock_mutex_ = nullptr;
 
-    // Helper methods for timer callbacks (static)
     static void radio_b_restore_timer_callback(TimerHandle_t xTimer);
     static void radio_a_restore_timer_callback(TimerHandle_t xTimer);
 
@@ -179,11 +175,12 @@ public:
     void on_hw_ptt_a_state_change(bool active);
     void on_hw_ptt_b_state_change(bool active);
 
-    // ... existing public members ...
+    // Callback for CatParser to report TX state changes (primarily for Radio A)
+    void on_cat_tx_a_state_change(bool active);
     void on_radio_a_tx_start();
     void on_radio_a_tx_stop();
-    void on_radio_b_tx_start(); // For future use when Radio B TX state is known
-    void on_radio_b_tx_stop();  // For future use
+    void on_radio_b_tx_start();
+    void on_radio_b_tx_stop();
 };
 
 #endif // ANTENNA_SWITCH_H
