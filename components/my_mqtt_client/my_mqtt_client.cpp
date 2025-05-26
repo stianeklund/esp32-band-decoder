@@ -6,6 +6,9 @@
 #include "cat_parser.h"
 #include "config_manager.h"
 
+// Ensure TAG is defined for logging
+static const char *TAG = "MQTTClient";
+
 MQTTClient &MQTTClient::instance() {
     static MQTTClient instance;
     return instance;
@@ -13,15 +16,36 @@ MQTTClient &MQTTClient::instance() {
 
 MQTTClient::MQTTClient()
     : client_(nullptr)
-      , current_frequency_(0) {
+      , current_frequency_(0)
+      , is_transmitting_(false) // Initialize all members
+      , has_serial_data_(false) {
 }
 
 esp_err_t MQTTClient::init() {
     const auto &config = get_cached_config();
 
     if (!config.mqtt_enabled) {
-        ESP_LOGD(TAG, "MQTT is disabled in configuration");
-        return ESP_OK;
+        ESP_LOGI(TAG, "MQTT is disabled in configuration.");
+        if (client_) {
+            ESP_LOGI(TAG, "MQTT client was previously initialized, now de-initializing as MQTT is disabled.");
+
+            if (const esp_err_t destroy_err = esp_mqtt_client_destroy(client_); destroy_err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to destroy MQTT client: %s", esp_err_to_name(destroy_err));
+                // Log error but continue, as the goal is to be in a disabled state.
+            }
+            client_ = nullptr;
+        }
+        return ESP_OK; // Successfully handled disabled state
+    }
+
+    // MQTT is enabled in configuration.
+    if (client_) {
+        ESP_LOGI(TAG, "MQTT client already exists. Destroying and re-initializing to apply current configuration.");
+        esp_err_t destroy_err = esp_mqtt_client_destroy(client_);
+        if (destroy_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to destroy existing MQTT client during re-init: %s. Attempting to create new instance anyway.", esp_err_to_name(destroy_err));
+        }
+        client_ = nullptr; // Mark as null before re-initializing
     }
 
     esp_mqtt_client_config_t mqtt_cfg = {};
@@ -30,11 +54,11 @@ esp_err_t MQTTClient::init() {
     mqtt_cfg.credentials.username = config.mqtt_username;
     mqtt_cfg.credentials.authentication.password = config.mqtt_password;
     mqtt_cfg.credentials.client_id = config.mqtt_client_id;
-    mqtt_cfg.buffer.size = 1024; // Optimize buffer sizes
+    mqtt_cfg.buffer.size = 1024;
     mqtt_cfg.buffer.out_size = 1024;
     mqtt_cfg.network.disable_auto_reconnect = false;
     mqtt_cfg.network.timeout_ms = 10000;
-    mqtt_cfg.task.priority = 5; // Increase MQTT task priority
+    mqtt_cfg.task.priority = 5;
     mqtt_cfg.task.stack_size = 6144;
 
     ESP_LOGI(TAG, "Initializing MQTT client with broker: %s, port: %d, username: %s, client_id: %s",
@@ -52,23 +76,45 @@ esp_err_t MQTTClient::init() {
                                                          this);
 
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to register MQTT event handler");
+        ESP_LOGE(TAG, "Failed to register MQTT event handler: %s", esp_err_to_name(err));
+        esp_mqtt_client_destroy(client_); // Clean up partially initialized client
+        client_ = nullptr;
         return err;
     }
 
+    ESP_LOGI(TAG, "MQTT client initialized successfully.");
     return ESP_OK;
 }
 
 esp_err_t MQTTClient::connect() const {
+    if (const auto &config = get_cached_config(); !config.mqtt_enabled) {
+        ESP_LOGI(TAG, "MQTT is disabled in configuration. Not attempting to connect.");
+
+        // If client_ is not null here, init() should have ideally cleaned it up.
+        // This check primarily prevents starting a connection if config says disabled.
+        return ESP_OK; // Considered success as per disabled state. Or return ESP_ERR_INVALID_STATE.
+    }
+
+    if (!client_) {
+        ESP_LOGE(TAG, "MQTT client not initialized, but MQTT is enabled in config. Call init() first.");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Attempting to start MQTT client (connect to broker)...");
     if (const esp_err_t err = esp_mqtt_client_start(client_); err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start MQTT client");
+        ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(err));
         return err;
     }
+    ESP_LOGI(TAG, "MQTT client start command issued."); // esp_mqtt_client_start is non-blocking
     return ESP_OK;
 }
 
-esp_err_t MQTTClient::subscribe_to_omnirig_topics() const { // Removed unused rig_id parameter
+esp_err_t MQTTClient::subscribe_to_omnirig_topics() const {
     const auto &config = get_cached_config();
+    if (!config.mqtt_enabled || !client_) {
+        ESP_LOGW(TAG, "MQTT not enabled or client not initialized. Cannot subscribe to topics.");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     ESP_LOGI(TAG, "Attempting to subscribe to topic: %s", config.mqtt_topic);
     if (const int msg_id = esp_mqtt_client_subscribe(client_, config.mqtt_topic, 1); msg_id < 0) {
@@ -83,7 +129,7 @@ esp_err_t MQTTClient::subscribe_to_omnirig_topics() const { // Removed unused ri
 void MQTTClient::handle_radio_info(const char *data, int data_len) {
     cJSON *root = cJSON_ParseWithLength(data, data_len);
     if (root == nullptr) {
-        ESP_LOGE(TAG, "Failed to parse JSON");
+        ESP_LOGE(TAG, "Failed to parse JSON from MQTT data");
         return;
     }
 
@@ -92,17 +138,18 @@ void MQTTClient::handle_radio_info(const char *data, int data_len) {
 }
 
 void MQTTClient::parse_radio_info(const cJSON *json) {
+    // This check is for a different purpose (data source priority)
     if (const auto &config = get_cached_config();
         !config.allow_concurrent_data_sources && has_serial_data_) {
+        ESP_LOGD(TAG, "MQTT data received but serial data has priority and concurrent sources disallowed.");
         return;
     }
 
     // Get all needed values at once to reduce JSON operations
     const cJSON *freq = cJSON_GetObjectItem(json, "Freq");
-    const cJSON *tx = cJSON_GetObjectItem(json, "IsTransmitting");
 
     // Handle transmit state first as it's more time-critical
-    if (cJSON_IsBool(tx)) {
+    if (const cJSON *tx = cJSON_GetObjectItem(json, "IsTransmitting"); cJSON_IsBool(tx)) {
         if (const bool new_tx_state = cJSON_IsTrue(tx); new_tx_state != is_transmitting_) {
             is_transmitting_ = new_tx_state;
             cat_parser_set_transmit(new_tx_state); // Update CAT parser immediately
@@ -110,7 +157,6 @@ void MQTTClient::parse_radio_info(const cJSON *json) {
         }
     }
 
-    // Then handle frequency if needed
     if (freq && freq->valueint > 0) {
         if (const uint32_t new_freq = freq->valueint; new_freq != current_frequency_) {
             current_frequency_ = new_freq;
@@ -124,10 +170,16 @@ void MQTTClient::parse_radio_info(const cJSON *json) {
 }
 
 esp_err_t MQTTClient::publish_message(const char *topic, const char *message) const {
+    if (const auto &config = get_cached_config(); !config.mqtt_enabled || !client_) {
+        ESP_LOGW(TAG, "MQTT not enabled or client not initialized. Cannot publish message.");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (const int msg_id = esp_mqtt_client_publish(client_, topic, message, 0, 1, 0); msg_id < 0) {
         ESP_LOGE(TAG, "Failed to publish message to topic: %s", topic);
         return ESP_FAIL;
     }
+    ESP_LOGV(TAG, "Published MQTT message to topic: %s", topic);
     return ESP_OK;
 }
 
@@ -144,26 +196,45 @@ uint32_t MQTTClient::get_current_frequency() const {
 }
 
 void MQTTClient::mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
-    const auto client = static_cast<MQTTClient *>(handler_args);
+    const auto client_ptr = static_cast<MQTTClient *>(handler_args);
+    if (!client_ptr) {
+        ESP_LOGE(TAG, "MQTT event handler called with null client context");
+        return;
+    }
 
     switch (const auto event = static_cast<esp_mqtt_event_handle_t>(event_data); event->event_id) {
         case MQTT_EVENT_CONNECTED: {
             ESP_LOGI(TAG, "MQTT Connected to broker");
-
-            if (const esp_err_t err = client->subscribe_to_omnirig_topics(); err != ESP_OK) { // Call updated: no rig_id
-                ESP_LOGE(TAG, "Failed to subscribe to MQTT topics");
+            // Check config again, in case it changed to disabled just before connection completed.
+            if (const auto& current_config = client_ptr->get_cached_config(); current_config.mqtt_enabled && client_ptr->client_) {
+                 if (const esp_err_t err = client_ptr->subscribe_to_omnirig_topics(); err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to subscribe to MQTT topics after connection.");
+                }
+            } else {
+                ESP_LOGW(TAG, "MQTT_EVENT_CONNECTED received, but MQTT is now disabled or client is null. Not subscribing.");
             }
             break;
         }
 
-        case MQTT_EVENT_DISCONNECTED:
-            ESP_LOGI(TAG, "MQTT Disconnected from broker");
+        case MQTT_EVENT_DISCONNECTED: {
+            if (const auto& current_config = client_ptr->get_cached_config(); current_config.mqtt_enabled) {
+                ESP_LOGI(TAG, "MQTT Disconnected from broker.");
+            } else {
+                ESP_LOGD(TAG, "MQTT Disconnected event received, MQTT is disabled in config.");
+            }
             break;
-
+        }
+        
         case MQTT_EVENT_DATA:
             ESP_LOGV(TAG, "Received MQTT data on topic: %.*s", event->topic_len, event->topic);
             ESP_LOGV(TAG, "Data: %.*s", event->data_len, event->data);
-            client->handle_radio_info(event->data, event->data_len);
+
+            // Ensure client_ptr->client_ is valid before processing, though if we get DATA, it should be.
+            if (client_ptr->client_) {
+                 client_ptr->handle_radio_info(event->data, event->data_len);
+            } else {
+                ESP_LOGW(TAG, "MQTT_EVENT_DATA received, but internal client handle is null.");
+            }
             break;
 
         default:

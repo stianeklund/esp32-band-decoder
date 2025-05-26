@@ -8,7 +8,7 @@
 #include "mqtt_client.h"
 #include "config_cache.h"
 
-class MQTTClient : public ConfigCache {
+class MQTTClient final : public ConfigCache {
 public:
     static MQTTClient& instance();
     esp_err_t init();
