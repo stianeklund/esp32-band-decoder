@@ -938,19 +938,14 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
 
     ss_buffer << "<h1>Relay Configuration</h1>";
     ss_buffer << "<form id='configForm' class='config-form' onsubmit='submitConfig(event)'>";
+    ss_buffer << "<h2>General Device Settings</h2>";
     ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
-    ss_buffer << "<label for='num_bands'>Number of bands:</label>";
-    ss_buffer << "<input type='number' id='num_bands' name='num_bands' value='" << std::to_string(config.num_bands)
-            << "' min='1' max='" << MAX_BANDS << "' onchange='updateBandRows()'>";
-    ss_buffer << "</div>";
-    ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
-    ss_buffer << "<h2>Switch Configuration</h2>";
     ss_buffer << "<label for='num_antenna_ports'>Number of outputs:</label>";
     ss_buffer << "<input type='number' id='num_antenna_ports' name='num_antenna_ports' value='"
             << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "' onchange='updateAntennaPorts()'>";
     ss_buffer << "</div>";
 
-    // Radio Operation Mode Dropdown
+// Radio Operation Mode Dropdown
     ss_buffer << "<div class='form-group'>";
     ss_buffer << "<label for='radio_operation_mode'>Radio Operation Mode:</label>";
     ss_buffer << "<select id='radio_operation_mode' name='radio_operation_mode' onchange='toggleInterlockVisibility()'>";
@@ -960,96 +955,130 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "</select>";
     ss_buffer << "</div>";
 
-    // Interlock Option (conditionally visible)
+// Interlock Option (conditionally visible)
     ss_buffer << "<div class='form-group' id='interlock_options_div' style='display: "
        << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "block" : "none") << ";'>";
     ss_buffer << "<label style='font-weight: normal;'><input type='checkbox' name='interlock_auto_resolves_conflict' "
        << (config.interlock_auto_resolves_conflict ? "checked" : "")
        << " onchange='toggleRadioBPortVisibility()'> Automatically resolve same-antenna conflict (for Concurrent mode)</label>"; // Added onchange
     
-    // Auto Restore Option
+// Auto Restore Option
     ss_buffer << "<div id='auto_restore_option_div' style='margin-top: 10px; display: none;'>"; // Initially hidden, JS will manage
     ss_buffer << "<label style='font-weight: normal;'><input type='checkbox' name='auto_restore_on_conflict_resolution' "
        << (config.auto_restore_on_conflict_resolution ? "checked" : "")
        << " onchange='toggleRadioBPortVisibility()'> Automatically restore other radio's antenna after conflict is clear</label>"; // Added onchange
     ss_buffer << "</div>";
 
-    // Interlock Restore Delay
+// Interlock Restore Delay
     ss_buffer << "<div class='form-group' id='interlock_restore_delay_div' style='margin-top: 10px; display: none;'>"; // Initially hidden, JS will manage
     ss_buffer << "<label for='radio_restore_delay_ms'>Interlock Restore Delay (ms):</label>";
     ss_buffer << "<input type='number' id='radio_restore_delay_ms' name='radio_restore_delay_ms' value='"
               << (config.radio_restore_delay_ms > 0 ? config.radio_restore_delay_ms : 200) // Default to 200 if 0 or uninit
-              << "' min='50' max='5000' step='50'>";
+              << "' min='1' max='5000' step='1'>";
     ss_buffer << "</div>";
 
     ss_buffer << "</div>"; // End of interlock_options_div
+
+    ss_buffer << "<div class='auto-mode-container'>"; // Re-using auto-mode-container class for styling
+    // ss_buffer << "<h2>Auto Mode</h2>"; // Removed H2
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='auto_mode' " << (config.auto_mode ? "checked" : "") << ">";
+    ss_buffer << " Enable Automatic band selection";
+    ss_buffer << "</label>";
+    ss_buffer << "</div>";
+
+    ss_buffer << "<div class='auto-mode-container'>"; // Re-using auto-mode-container class for styling
+    // ss_buffer << "<h2>Data Sources</h2>"; // Removed H2
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='allow_concurrent_data_sources' " << (config.allow_concurrent_data_sources ? "checked" : "") << ">";
+    ss_buffer << " Allow concurrent UART and MQTT data sources";
+    ss_buffer << "</label>";
+    ss_buffer << "</div>";
+    // This is the end of "General Device Settings". Send the accumulated chunk.
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+    // num_bands div removed from here.
+    // Duplicated "Switch Configuration" H2 and num_antenna_ports div removed.
+
+    // Radio Operation Mode Dropdown
+    // Duplicated Radio Operation Mode block and its send_ss_chunk are removed.
+
+    ss_buffer << "<h2>Band & Antenna Configuration</h2>";
+    ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
+    ss_buffer << "<label for='num_bands'>Number of bands:</label>";
+    ss_buffer << "<input type='number' id='num_bands' name='num_bands' value='" << std::to_string(config.num_bands)
+            << "' min='1' max='" << MAX_BANDS << "' onchange='updateBandRows()'>";
+    ss_buffer << "</div>";
+    // Insert Bands Table here
+    ss_buffer << "<table>";
+    ss_buffer << "<thead style='background-color: var(--primary-color); color: white;'>";
+    ss_buffer << "<tr>";
+    ss_buffer << "<th>Band</th>";
+    ss_buffer << "<th>Start Freq</th>";
+    ss_buffer << "<th>End Freq</th>";
+    ss_buffer << "<th id='antenna_ports_a_header'>Antenna Ports (Radio A)</th>";
+    ss_buffer << "<th id='antenna_ports_b_header'>Antenna Ports (Radio B)</th>";
+    ss_buffer << "</tr>";
+    ss_buffer << "</thead>";
+    ss_buffer << "<tbody>";
+    // Send H2 for Band Config, num_bands div, and table header/tbody opening together.
+    ret = send_ss_chunk(ss_buffer); 
+    if (ret != ESP_OK) return ret;
+
+    for (int i = 0; i < config.num_bands; i++) {
+        ss_buffer << "<tr>";
+        ss_buffer << "<td><select name='band_" << i << "' onchange='updateFrequencies(this, " << i << ")'>";
+
+        // Find matching band from description
+        std::string selected_band;
+        for (const auto &[band_name_key, band_val]: HtmlContent::band_info) { // Renamed band_info to band_val to avoid conflict
+            if (strcmp(config.bands[0][i].description, band_val.name) == 0) {
+                selected_band = band_name_key;
+                break;
+            }
+        }
+
+        // Generate options with correct selection
+        for (const auto &[band_name_key, band_val]: HtmlContent::band_info) { // Renamed band_info to band_val
+            ss_buffer << "<option value='" << band_name_key << "' "
+               << (band_name_key == selected_band ? "selected" : "")
+               << ">" << band_val.name << "</option>";
+        }
+
+        ss_buffer << "</select></td>";
+        ss_buffer << "<td>" << config.bands[0][i].start_freq << "</td>"; // Frequencies assumed same for Radio A and B for a given band row
+        ss_buffer << "<td>" << config.bands[0][i].end_freq << "</td>";
+            
+        // Antenna Ports for Radio A
+        ss_buffer << "<td>";
+        for (int j = 0; j < config.num_antenna_ports; j++) {
+            ss_buffer << "<input type='checkbox' name='ports_a_" << i << "_" << j << "' value='1' "
+                    << (config.bands[0][i].antenna_ports[j] ? "checked" : "") << ">" << (j + 1) << " ";
+        }
+        ss_buffer << "</td>";
+
+        // Antenna Ports for Radio B
+        ss_buffer << "<td class='radio_b_ports_cell'>"; // Added class for easier JS targeting if needed
+        for (int j = 0; j < config.num_antenna_ports; j++) {
+            bool radio_b_port_checked = config.bands[1][i].antenna_ports[j];
+            ss_buffer << "<input type='checkbox' name='ports_b_" << i << "_" << j << "' value='1' "
+                    << (radio_b_port_checked ? "checked" : "") << ">" << (j + 1) << " ";
+        }
+        ss_buffer << "</td></tr>";
+        ret = send_ss_chunk(ss_buffer); // Send each row as a chunk
+        if (ret != ESP_OK) return ret;
+    }
+
+    ss_buffer << "</tbody>";
+    ss_buffer << "</table>";
+    // Send table closing tags.
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
 
     // The "Configure Bands for Radio:" dropdown was removed as both Radio A and B 
     // configurations are now displayed and editable simultaneously in the table.
-
-    ss_buffer << "<h2>UART Configuration</h2>";
-    ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
-    ss_buffer << "<label for='uart_baud_rate'>Baud Rate:</label>";
-    ss_buffer << "<select id='uart_baud_rate' name='uart_baud_rate'>";
-    for (const int baud_rates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200}; const int rate: baud_rates) {
-        ss_buffer << "<option value='" << rate << "' "
-                << (config.uart_baud_rate == rate ? "selected" : "")
-                << ">" << rate << "</option>";
-    }
-    ss_buffer << "</select></div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='uart_parity'>Parity:</label>";
-    ss_buffer << "<select id='uart_parity' name='uart_parity'>";
-    ss_buffer << "<option value='0' " << (config.uart_parity == 0 ? "selected" : "") << ">None</option>";
-    ss_buffer << "<option value='2' " << (config.uart_parity == 2 ? "selected" : "") << ">Even</option>";
-    ss_buffer << "<option value='3' " << (config.uart_parity == 3 ? "selected" : "") << ">Odd</option>";
-    ss_buffer << "</select></div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='uart_stop_bits'>Stop Bits:</label>";
-    ss_buffer << "<select id='uart_stop_bits' name='uart_stop_bits'>";
-    ss_buffer << "<option value='1' " << (config.uart_stop_bits == 1 ? "selected" : "") << ">1</option>";
-    ss_buffer << "<option value='2' " << (config.uart_stop_bits == 2 ? "selected" : "") << ">1.5</option>";
-    ss_buffer << "<option value='3' " << (config.uart_stop_bits == 3 ? "selected" : "") << ">2</option>";
-    ss_buffer << "</select></div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='uart_flow_ctrl'>Flow Control:</label>";
-    ss_buffer << "<select id='uart_flow_ctrl' name='uart_flow_ctrl'>";
-    ss_buffer << "<option value='0' " << (config.uart_flow_ctrl == 0 ? "selected" : "") << ">None</option>";
-    ss_buffer << "<option value='1' " << (config.uart_flow_ctrl == 1 ? "selected" : "") << ">RTS</option>";
-    ss_buffer << "<option value='2' " << (config.uart_flow_ctrl == 2 ? "selected" : "") << ">CTS</option>";
-    ss_buffer << "<option value='3' " << (config.uart_flow_ctrl == 3 ? "selected" : "") << ">CTS/RTS</option>";
-    ss_buffer << "</select></div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='uart_tx_pin'>UART TX Pin:</label>";
-    ss_buffer << "<select id='uart_tx_pin' name='uart_tx_pin'>";
-    ss_buffer << "<option value='-1' " << (config.uart_tx_pin == -1 ? "selected" : "") << ">Disabled</option>";
-    for (int pin = 0; pin <= 39; pin++) { // Assuming GPIO pins 0-39 are valid choices
-        // Skip pin if it's the "disabled" value, to avoid duplicate entries if -1 was a valid GPIO for some reason
-        if (pin == -1) continue; 
-        ss_buffer << "<option value='" << pin << "' "
-           << (config.uart_tx_pin == pin ? "selected" : "")
-           << ">GPIO" << pin << "</option>";
-    }
-    ss_buffer << "</select></div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='uart_rx_pin'>UART RX Pin:</label>";
-    ss_buffer << "<select id='uart_rx_pin' name='uart_rx_pin'>";
-    for (int pin = 0; pin <= 39; pin++) {
-        ss_buffer << "<option value='" << pin << "' "
-           << (config.uart_rx_pin == pin ? "selected" : "")
-           << ">GPIO" << pin << "</option>";
-    }
-    ss_buffer << "</select></div>";
-    ret = send_ss_chunk(ss_buffer);
-    if (ret != ESP_OK) return ret;
-
+    // Original UART block removed.
+    // The next section is the original PTT Configuration (Radio A)
     ss_buffer << "<h2>PTT Configuration (Radio A)</h2>";
     ss_buffer << "<div class='form-group'>";
     ss_buffer << "<label for='ptt_input_radio_a'>PTT Input Pin (Radio A):</label>";
@@ -1095,129 +1124,6 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "</div>"; // End of ptt_config_radio_b_div
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
-
-    ss_buffer << "<h2>MQTT Configuration</h2>";
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label>";
-    ss_buffer << "<input type='checkbox' name='mqtt_enabled' " << (config.mqtt_enabled ? "checked" : "") << ">";
-    ss_buffer << " Enable MQTT";
-    ss_buffer << "</label>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='mqtt_broker'>MQTT Broker:</label>";
-    ss_buffer << "<input type='text' id='mqtt_broker' name='mqtt_broker' value='" << config.mqtt_broker << "'>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='mqtt_port'>MQTT Port:</label>";
-    ss_buffer << "<input type='number' id='mqtt_port' name='mqtt_port' value='" << config.mqtt_port << "'>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='mqtt_rig_id'>Rig ID:</label>";
-    ss_buffer << "<input type='text' id='mqtt_rig_id' name='mqtt_rig_id' value='" << config.mqtt_rig_id << "'>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='mqtt_username'>MQTT Username:</label>";
-    ss_buffer << "<input type='text' id='mqtt_username' name='mqtt_username' value='" << (config.mqtt_username[0] != '\0' ? config.mqtt_username : "") << "'>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='mqtt_password'>MQTT Password:</label>";
-    ss_buffer << "<input type='password' id='mqtt_password' name='mqtt_password' value='" << (config.mqtt_password[0] != '\0' ? config.mqtt_password : "") << "'>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='mqtt_client_id'>MQTT Client ID:</label>";
-    ss_buffer << "<input type='text' id='mqtt_client_id' name='mqtt_client_id' value='" << config.mqtt_client_id << "'>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='form-group'>";
-    ss_buffer << "<label for='mqtt_topic'>MQTT Topic:</label>";
-    ss_buffer << "<input type='text' id='mqtt_topic' name='mqtt_topic' value='" << config.mqtt_topic << "'>";
-    ss_buffer << "</div>";
-    ret = send_ss_chunk(ss_buffer);
-    if (ret != ESP_OK) return ret;
-
-    ss_buffer << "<table>";
-    ss_buffer << "<thead style='background-color: var(--primary-color); color: white;'>";
-    ss_buffer << "<tr>";
-    ss_buffer << "<th>Band</th>";
-    ss_buffer << "<th>Start Freq</th>";
-    ss_buffer << "<th>End Freq</th>";
-    ss_buffer << "<th id='antenna_ports_a_header'>Antenna Ports (Radio A)</th>";
-    ss_buffer << "<th id='antenna_ports_b_header'>Antenna Ports (Radio B)</th>";
-    ss_buffer << "</tr>";
-    ss_buffer << "</thead>";
-    ss_buffer << "<tbody>";
-    ret = send_ss_chunk(ss_buffer);
-    if (ret != ESP_OK) return ret;
-
-    for (int i = 0; i < config.num_bands; i++) {
-        ss_buffer << "<tr>";
-        ss_buffer << "<td><select name='band_" << i << "' onchange='updateFrequencies(this, " << i << ")'>";
-
-        // Find matching band from description
-        std::string selected_band;
-        for (const auto &[band_name_key, band_val]: HtmlContent::band_info) { // Renamed band_info to band_val to avoid conflict
-            if (strcmp(config.bands[0][i].description, band_val.name) == 0) {
-                selected_band = band_name_key;
-                break;
-            }
-        }
-
-        // Generate options with correct selection
-        for (const auto &[band_name_key, band_val]: HtmlContent::band_info) { // Renamed band_info to band_val
-            ss_buffer << "<option value='" << band_name_key << "' "
-               << (band_name_key == selected_band ? "selected" : "")
-               << ">" << band_val.name << "</option>";
-        }
-
-        ss_buffer << "</select></td>";
-        ss_buffer << "<td>" << config.bands[0][i].start_freq << "</td>"; // Frequencies assumed same for Radio A and B for a given band row
-        ss_buffer << "<td>" << config.bands[0][i].end_freq << "</td>";
-        
-        // Antenna Ports for Radio A
-        ss_buffer << "<td>";
-        for (int j = 0; j < config.num_antenna_ports; j++) {
-            ss_buffer << "<input type='checkbox' name='ports_a_" << i << "_" << j << "' value='1' "
-                    << (config.bands[0][i].antenna_ports[j] ? "checked" : "") << ">" << (j + 1) << " ";
-        }
-        ss_buffer << "</td>";
-
-        // Antenna Ports for Radio B
-        ss_buffer << "<td class='radio_b_ports_cell'>"; // Added class for easier JS targeting if needed
-        for (int j = 0; j < config.num_antenna_ports; j++) {
-            bool radio_b_port_checked = config.bands[1][i].antenna_ports[j];
-            ss_buffer << "<input type='checkbox' name='ports_b_" << i << "_" << j << "' value='1' "
-                    << (radio_b_port_checked ? "checked" : "") << ">" << (j + 1) << " ";
-        }
-        ss_buffer << "</td></tr>";
-        ret = send_ss_chunk(ss_buffer); // Send each row as a chunk
-        if (ret != ESP_OK) return ret;
-    }
-
-    ss_buffer << "</tbody>";
-    ss_buffer << "</table>";
-
-    ss_buffer << "<div class='auto-mode-container'>";
-    ss_buffer << "<h2>Auto Mode</h2>";
-    ss_buffer << "<label>";
-    ss_buffer << "<input type='checkbox' name='auto_mode' " << (config.auto_mode ? "checked" : "") << ">";
-    ss_buffer << " Enable Automatic band selection";
-    ss_buffer << "</label>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='auto-mode-container'>";
-    ss_buffer << "<h2>Data Sources</h2>";
-    ss_buffer << "<label>";
-    ss_buffer << "<input type='checkbox' name='allow_concurrent_data_sources' " << (config.allow_concurrent_data_sources ? "checked" : "") << ">";
-    ss_buffer << " Allow concurrent UART and MQTT data sources";
-    ss_buffer << "</label>";
-    ss_buffer << "</div>";
-
     ss_buffer << "<div class='relay-names-container' style='background-color: var(--card-background-color); border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 30px;'>";
     ss_buffer << "<h2>Relay Names</h2>";
     ss_buffer << "<p>Configure names for each relay:</p>";
@@ -1247,7 +1153,104 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     // They are automatically mirrored from Radio A
     
     ss_buffer << "</tbody></table>";
+    ss_buffer << "</div>"; // End of relay-names-container
+
+    ss_buffer << "<h2>Data Source Configuration</h2>";
+
+    // UART Configuration
+    ss_buffer << "<h3>CAT Data (UART)</h3>";
+    ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
+    ss_buffer << "<label for='uart_baud_rate'>Baud Rate:</label>";
+    ss_buffer << "<select id='uart_baud_rate' name='uart_baud_rate'>";
+    for (const int baud_rates[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200}; const int rate: baud_rates) {
+        ss_buffer << "<option value='" << rate << "' "
+                << (config.uart_baud_rate == rate ? "selected" : "")
+                << ">" << rate << "</option>";
+    }
+    ss_buffer << "</select></div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_parity'>Parity:</label>";
+    ss_buffer << "<select id='uart_parity' name='uart_parity'>";
+    ss_buffer << "<option value='0' " << (config.uart_parity == 0 ? "selected" : "") << ">None</option>";
+    ss_buffer << "<option value='2' " << (config.uart_parity == 2 ? "selected" : "") << ">Even</option>";
+    ss_buffer << "<option value='3' " << (config.uart_parity == 3 ? "selected" : "") << ">Odd</option>";
+    ss_buffer << "</select></div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_stop_bits'>Stop Bits:</label>";
+    ss_buffer << "<select id='uart_stop_bits' name='uart_stop_bits'>";
+    ss_buffer << "<option value='1' " << (config.uart_stop_bits == 1 ? "selected" : "") << ">1</option>";
+    ss_buffer << "<option value='2' " << (config.uart_stop_bits == 2 ? "selected" : "") << ">1.5</option>";
+    ss_buffer << "<option value='3' " << (config.uart_stop_bits == 3 ? "selected" : "") << ">2</option>";
+    ss_buffer << "</select></div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_flow_ctrl'>Flow Control:</label>";
+    ss_buffer << "<select id='uart_flow_ctrl' name='uart_flow_ctrl'>";
+    ss_buffer << "<option value='0' " << (config.uart_flow_ctrl == 0 ? "selected" : "") << ">None</option>";
+    ss_buffer << "<option value='1' " << (config.uart_flow_ctrl == 1 ? "selected" : "") << ">RTS</option>";
+    ss_buffer << "<option value='2' " << (config.uart_flow_ctrl == 2 ? "selected" : "") << ">CTS</option>";
+    ss_buffer << "<option value='3' " << (config.uart_flow_ctrl == 3 ? "selected" : "") << ">CTS/RTS</option>";
+    ss_buffer << "</select></div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_tx_pin'>UART TX Pin:</label>";
+    ss_buffer << "<select id='uart_tx_pin' name='uart_tx_pin'>";
+    ss_buffer << "<option value='-1' " << (config.uart_tx_pin == -1 ? "selected" : "") << ">Disabled</option>";
+    for (int pin = 0; pin <= 39; pin++) {
+        if (pin == -1) continue; 
+        ss_buffer << "<option value='" << pin << "' "
+           << (config.uart_tx_pin == pin ? "selected" : "")
+           << ">GPIO" << pin << "</option>";
+    }
+    ss_buffer << "</select></div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='uart_rx_pin'>UART RX Pin:</label>";
+    ss_buffer << "<select id='uart_rx_pin' name='uart_rx_pin'>";
+    for (int pin = 0; pin <= 39; pin++) {
+        ss_buffer << "<option value='" << pin << "' "
+           << (config.uart_rx_pin == pin ? "selected" : "")
+           << ">GPIO" << pin << "</option>";
+    }
+    ss_buffer << "</select></div>";
+    ret = send_ss_chunk(ss_buffer); // Chunk for UART settings
+    if (ret != ESP_OK) return ret;
+
+    // MQTT Configuration
+    ss_buffer << "<h3>MQTT</h3>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='mqtt_enabled' " << (config.mqtt_enabled ? "checked" : "") << ">";
+    ss_buffer << " Enable MQTT";
+    ss_buffer << "</label>";
     ss_buffer << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_broker'>MQTT Broker:</label>";
+    ss_buffer << "<input type='text' id='mqtt_broker' name='mqtt_broker' value='" << config.mqtt_broker << "'>";
+    ss_buffer << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_port'>MQTT Port:</label>";
+    ss_buffer << "<input type='number' id='mqtt_port' name='mqtt_port' value='" << config.mqtt_port << "'>";
+    ss_buffer << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_rig_id'>Rig ID:</label>";
+    ss_buffer << "<input type='text' id='mqtt_rig_id' name='mqtt_rig_id' value='" << config.mqtt_rig_id << "'>";
+    ss_buffer << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_username'>MQTT Username:</label>";
+    ss_buffer << "<input type='text' id='mqtt_username' name='mqtt_username' value='" << (config.mqtt_username[0] != '\0' ? config.mqtt_username : "") << "'>";
+    ss_buffer << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_password'>MQTT Password:</label>";
+    ss_buffer << "<input type='password' id='mqtt_password' name='mqtt_password' value='" << (config.mqtt_password[0] != '\0' ? config.mqtt_password : "") << "'>";
+    ss_buffer << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_client_id'>MQTT Client ID:</label>";
+    ss_buffer << "<input type='text' id='mqtt_client_id' name='mqtt_client_id' value='" << config.mqtt_client_id << "'>";
+    ss_buffer << "</div>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='mqtt_topic'>MQTT Topic:</label>";
+    ss_buffer << "<input type='text' id='mqtt_topic' name='mqtt_topic' value='" << config.mqtt_topic << "'>";
+    ss_buffer << "</div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
 
     ss_buffer << "<div class='button-container' style='margin: 20px 0;'>";
     ss_buffer << "<input type='submit' value='Update Configuration' class='button'>";
