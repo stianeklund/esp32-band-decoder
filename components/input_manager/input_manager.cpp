@@ -185,6 +185,6 @@ void InputManager::ptt_poll_task() {
             ESP_LOGE(TAG, "Failed to read inputs in PTT poll task: %s", esp_err_to_name(ret));
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50)); // Poll every 50ms
+        vTaskDelay(pdMS_TO_TICKS(1)); // Poll every 1ms
     }
 }

@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h" // For TimerHandle_t
 #include "freertos/semphr.h" // For SemaphoreHandle_t
+#include "esp_timer.h" // For esp_timer_handle_t
 
 // don't #include relay_controller.h here to avoid circular dependency;
 // just forward-declare RelayController for the C++ API
@@ -135,6 +136,7 @@ public:
 
 private:
     AntennaSwitch();
+    ~AntennaSwitch();
     
     // Internal state for hardware PTT
     std::atomic<bool> hw_ptt_a_active_{false}; // HW input ptt signal for Radio A
@@ -152,19 +154,19 @@ private:
 
     int get_active_relay_for_radio(RadioID radio) const;
 
-    esp_err_t update_last_used_antenna_preference(int activated_relay_id, RadioID radio_of_activated_relay);
+    esp_err_t update_last_used_antenna_preference(int activated_relay_id, RadioID radio_of_activated_relay, int band_idx_for_preference);
 
     void attempt_restore_auto_resolved_radio_a_relay();
     void attempt_restore_auto_resolved_radio_b_relay();
 
-    // Timers for delayed relay restoration
-    TimerHandle_t radio_b_restore_delay_timer_ = nullptr;
-    TimerHandle_t radio_a_restore_delay_timer_ = nullptr;
+    // Timers for delayed relay restoration (using esp_timer for sub-10ms precision)
+    esp_timer_handle_t radio_b_restore_delay_timer_ = nullptr;
+    esp_timer_handle_t radio_a_restore_delay_timer_ = nullptr;
 
     SemaphoreHandle_t interlock_mutex_ = nullptr;
 
-    static void radio_b_restore_timer_callback(TimerHandle_t xTimer);
-    static void radio_a_restore_timer_callback(TimerHandle_t xTimer);
+    static void radio_b_restore_timer_callback(void* arg);
+    static void radio_a_restore_timer_callback(void* arg);
 
 public:
     // Method to get combined TX state, considering HW PTT and CAT parser

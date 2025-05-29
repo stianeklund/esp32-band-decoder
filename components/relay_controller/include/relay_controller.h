@@ -15,7 +15,7 @@ class CatParser;
 class RelayController : public ConfigCache {
 public:
     static constexpr int NUM_RELAYS = 16; // Total number of relays
-    static constexpr int COOLDOWN_PERIOD_MS = 50;
+    static constexpr int COOLDOWN_PERIOD_MS = 1;
     static constexpr int RELAYS_PER_RADIO = NUM_RELAYS / 2;
 
 
