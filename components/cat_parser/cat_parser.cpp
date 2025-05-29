@@ -63,16 +63,12 @@ esp_err_t CatParser::init() {
     // Validate baud rate and set default if invalid
     if (current_config.uart_baud_rate <= 0) {
         ESP_LOGW(TAG, "Invalid baud rate %d, using defaults", current_config.uart_baud_rate);
+        
+        // Instead of modifying the entire config and risking corruption of other fields,
+        // just use a default baud rate for initialization without saving it back
+        // This avoids the ESP_ERR_INVALID_ARG error when num_bands might be 0
+        ESP_LOGI(TAG, "Using default baud rate 9600 for UART initialization");
         current_config.uart_baud_rate = 9600;
-        // Pass the modified current_config (which is a copy) to set_config
-        esp_err_t ret = AntennaSwitch::instance().set_config(&current_config);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to save default baud rate: %s", esp_err_to_name(ret));
-            return ret;
-        }
-        // Re-fetch the config if it was updated by set_config to ensure consistency,
-        // especially if set_config does more than just pass to ConfigManager.
-        current_config = AntennaSwitch::instance().get_config_ref();
     }
 
     // Add delay to ensure peripheral initialization is complete
