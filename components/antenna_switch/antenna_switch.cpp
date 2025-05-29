@@ -9,6 +9,7 @@
 #include "cat_parser.h"
 #include "freertos/timers.h"
 #include "config_cache.h"
+#include "esp_timer.h"
 
 static auto TAG = "ANTENNA_SWITCH";
 
@@ -41,8 +42,8 @@ AntennaSwitch::AntennaSwitch()
     uint16_t initial_delay_ms = initial_config.radio_restore_delay_ms;
 
     // Validate and set a fallback if the configured value is unreasonable (e.g., 0 from a fresh NVS or before full init)
-    if (initial_delay_ms < 50 || initial_delay_ms > 5000) { // Min 50ms, Max 5s
-        ESP_LOGW(TAG, "Initial radio_restore_delay_ms from config (%u ms) is out of range [50, 5000]. Using 200 ms.", initial_delay_ms);
+    if (initial_delay_ms < 1 || initial_delay_ms > 5000) { // Min 1ms, Max 5s
+        ESP_LOGW(TAG, "Initial radio_restore_delay_ms from config (%u ms) is out of range [1, 5000]. Using 200 ms.", initial_delay_ms);
         initial_delay_ms = 200; // Default fallback
     }
     ESP_LOGI(TAG, "Initializing interlock restore timers with delay: %u ms", initial_delay_ms);
@@ -121,8 +122,8 @@ esp_err_t AntennaSwitch::set_config(const antenna_switch_config_t *config) {
     const auto& current_config_ref = ConfigManager::instance().get_config_ref();
     uint16_t new_delay_ms = current_config_ref.radio_restore_delay_ms;
 
-    // Validate the delay (e.g., 50ms to 5000ms)
-    if (new_delay_ms < 50) new_delay_ms = 50;
+    // Validate the delay (e.g., 1ms to 5000ms)
+    if (new_delay_ms < 1) new_delay_ms = 1;
     if (new_delay_ms > 5000) new_delay_ms = 5000;
 
     TickType_t new_period_ticks = pdMS_TO_TICKS(new_delay_ms);
@@ -169,6 +170,7 @@ const antenna_switch_config_t& AntennaSwitch::get_config_ref() const {
 
 // Callback from InputManager when hardware PTT A state changes
 void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
+    ESP_LOGI(TAG, "on_hw_ptt_a_state_change: Input detected. Active: %s. Time: %lld", active ? "true" : "false", esp_timer_get_time());
     const bool old_hw_ptt_a_value = hw_ptt_a_active_.load(std::memory_order_relaxed);
 
     // TODO consider removing this, what if we don't detect TX -> RX this would leave us in a locked ptt situation?
@@ -213,6 +215,7 @@ void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
 
 // Callback from InputManager when hardware PTT B state changes
 void AntennaSwitch::on_hw_ptt_b_state_change(const bool active) {
+    ESP_LOGI(TAG, "on_hw_ptt_b_state_change: Input detected. Active: %s. Time: %lld", active ? "true" : "false", esp_timer_get_time());
     const bool old_hw_ptt_b_value = hw_ptt_b_active_.load(std::memory_order_relaxed);
 
     if (old_hw_ptt_b_value == active) {
@@ -510,7 +513,7 @@ void AntennaSwitch::on_radio_a_tx_stop() {
                 uint16_t current_delay_ms = ConfigManager::instance().get_config_ref().radio_restore_delay_ms;
                 const auto& cached_cfg_for_delay = get_cached_config();
                 current_delay_ms = cached_cfg_for_delay.radio_restore_delay_ms;
-                if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback for logging safety
+                if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback for logging safety
                 ESP_LOGI(TAG, "Radio A TX stop: Scheduling Radio B relay %d restoration in %u ms.", pre_tx_active_relay_radio_b_, current_delay_ms);
                 if (xTimerReset(radio_b_restore_delay_timer_, pdMS_TO_TICKS(10)) != pdPASS) { // Use small block time for xTimerReset
                     ESP_LOGE(TAG, "Failed to reset radio_b_restore_delay_timer_. Relay %d will not be restored by timer.", pre_tx_active_relay_radio_b_);
@@ -542,9 +545,9 @@ void AntennaSwitch::radio_b_restore_timer_callback(TimerHandle_t xTimer) {
             const auto& cached_cfg = self->get_cached_config();
             uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
 
-            if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
+            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
             TickType_t reschedule_delay_ticks = pdMS_TO_TICKS(current_delay_ms / 2);
-            if (reschedule_delay_ticks == 0) reschedule_delay_ticks = pdMS_TO_TICKS(50); // Ensure non-zero if delay is small
+            if (reschedule_delay_ticks == 0) reschedule_delay_ticks = 1; // Ensure at least 1 tick
              xTimerReset(self->radio_b_restore_delay_timer_, reschedule_delay_ticks); // Try again sooner
         }
         return;
@@ -577,7 +580,7 @@ void AntennaSwitch::radio_b_restore_timer_callback(TimerHandle_t xTimer) {
             // Reschedule the timer to try again later
             const auto& cached_cfg = self->get_cached_config();
             uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
-            if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200;
+            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
 
             if (const TickType_t retry_delay_ticks = pdMS_TO_TICKS(current_delay_ms); xTimerReset(
                 self->radio_b_restore_delay_timer_, retry_delay_ticks) != pdPASS)
@@ -713,7 +716,7 @@ void AntennaSwitch::on_radio_b_tx_stop() {
                 const auto& cached_cfg_for_delay = get_cached_config();
                 uint16_t current_delay_ms = cached_cfg_for_delay.radio_restore_delay_ms;
 
-                if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200;
+                if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
                 ESP_LOGI(TAG, "Radio B TX stop: Scheduling Radio A relay %d restoration in %u ms.", pre_tx_active_relay_radio_a_, current_delay_ms);
 
                 if (xTimerReset(radio_a_restore_delay_timer_, pdMS_TO_TICKS(10)) != pdPASS) {
@@ -743,9 +746,9 @@ void AntennaSwitch::radio_a_restore_timer_callback(TimerHandle_t xTimer) {
             const auto& cached_cfg = self->get_cached_config();
             uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
 
-            if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
+            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
             TickType_t reschedule_delay_ticks = pdMS_TO_TICKS(current_delay_ms / 2);
-            if (reschedule_delay_ticks == 0) reschedule_delay_ticks = pdMS_TO_TICKS(50); // Ensure non-zero
+            if (reschedule_delay_ticks == 0) reschedule_delay_ticks = 1; // Ensure at least 1 tick
              xTimerReset(self->radio_a_restore_delay_timer_, reschedule_delay_ticks);
         }
         return;
@@ -777,7 +780,7 @@ void AntennaSwitch::radio_a_restore_timer_callback(TimerHandle_t xTimer) {
             const auto& cached_cfg = self->get_cached_config();
             uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
 
-            if (current_delay_ms < 50 || current_delay_ms > 5000) current_delay_ms = 200;
+            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
             if (const TickType_t retry_delay_ticks = pdMS_TO_TICKS(current_delay_ms); xTimerReset(self->radio_a_restore_delay_timer_, retry_delay_ticks) != pdPASS) {
                 ESP_LOGE(TAG, "Failed to reschedule radio_a_restore_delay_timer_");
                 self->pre_tx_active_relay_radio_a_ = 0; // Clear if we can't reschedule
@@ -1015,6 +1018,7 @@ void AntennaSwitch::attempt_restore_auto_resolved_radio_b_relay() {
 
 esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
     ESP_LOGI(TAG, "AntennaSwitch: Setting relay %d to %s", relay_id, state ? "ON" : "OFF");
+    ESP_LOGI(TAG, "Time :%lld", esp_timer_get_time());
 
     if (relay_id < 1 || relay_id > RelayController::NUM_RELAYS) {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
@@ -1033,6 +1037,7 @@ esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
     // The band_number is -1 here as this is a direct relay set, not tied to a specific band's auto-selection.
     // All logic for TX interlock, conflict anticipation, preference update, and restoration
     // is handled by set_relay_for_antenna.
+    ESP_LOGI(TAG, "Time after figuring out which radio this belongs to:%lld", esp_timer_get_time());
     return set_relay_for_antenna(relay_id, /*band_number=*/-1, radio_context, state);
 }
 

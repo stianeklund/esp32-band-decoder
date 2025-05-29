@@ -84,34 +84,31 @@ esp_err_t WebServer::config_get_handler(httpd_req_t *req) {
     ESP_LOGD(TAG, "Configuration retrieved successfully");
     ESP_LOGD(TAG, "Number of bands: %d, Number of antenna ports: %d", switch_config.num_bands, switch_config.num_antenna_ports);
 
+    // Check and fix configuration values before potentially saving
+    bool config_corrected = false;
+    
     if (switch_config.num_bands <= 0 || switch_config.num_bands > MAX_BANDS) {
         ESP_LOGE(TAG, "Invalid number of bands: %d (should be between 1 and %d)", switch_config.num_bands, MAX_BANDS);
-
-        // Reset to a valid number of bands (e.g., 1)
-        switch_config.num_bands = 1;
+        switch_config.num_bands = 8; // Use a reasonable default
         ESP_LOGD(TAG, "Resetting number of bands to %d", switch_config.num_bands);
+        config_corrected = true;
+    }
 
-        // Save the corrected configuration to NVS
+    if (switch_config.num_antenna_ports <= 0 || switch_config.num_antenna_ports > MAX_ANTENNA_PORTS) {
+        ESP_LOGE(TAG, "Invalid number of antenna ports: %d (should be between 1 and %d)", switch_config.num_antenna_ports, MAX_ANTENNA_PORTS);
+        switch_config.num_antenna_ports = 6; // Use a reasonable default
+        ESP_LOGD(TAG, "Resetting number of antenna ports to %d", switch_config.num_antenna_ports);
+        config_corrected = true;
+    }
+
+    // Save the corrected configuration if any corrections were made
+    if (config_corrected) {
         if (const esp_err_t save_ret = AntennaSwitch::instance().set_config(&switch_config); save_ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to save corrected configuration: %s", esp_err_to_name(save_ret));
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save corrected configuration");
             return ESP_FAIL;
         }
-
         ESP_LOGD(TAG, "Corrected configuration saved successfully");
-    }
-    if (switch_config.num_antenna_ports == 0) {
-        ESP_LOGW(TAG, "Configuration was not set");
-        switch_config.num_antenna_ports = 1;
-    }
-
-    if (switch_config.num_antenna_ports <= 0 || switch_config.num_antenna_ports > MAX_ANTENNA_PORTS) {
-        switch_config.num_antenna_ports = 1;
-        ESP_LOGE(TAG, "Invalid number of antenna ports: %d (should be between 1 and %d)", switch_config.num_antenna_ports,
-                MAX_ANTENNA_PORTS);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                            "Invalid configuration: number of antenna ports out of range");
-        return ESP_FAIL;
     }
 
     // The HTML will be sent in chunks by generate_config_html_chunked
@@ -317,7 +314,7 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     const cJSON* restore_delay_json = cJSON_GetObjectItem(root, "radio_restore_delay_ms");
     if (cJSON_IsNumber(restore_delay_json)) {
         new_config.radio_restore_delay_ms = restore_delay_json->valueint;
-        if (new_config.radio_restore_delay_ms < 50) new_config.radio_restore_delay_ms = 50; // Min value
+        if (new_config.radio_restore_delay_ms < 1) new_config.radio_restore_delay_ms = 1; // Min value updated to 1ms
         if (new_config.radio_restore_delay_ms > 5000) new_config.radio_restore_delay_ms = 5000; // Max value
     } else {
         new_config.radio_restore_delay_ms = 200; // Default if not provided or invalid
