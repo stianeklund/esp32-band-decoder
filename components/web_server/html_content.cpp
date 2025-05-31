@@ -936,7 +936,7 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ret = send_cstr_chunk(HtmlContent::HTML_HEADER);
     if (ret != ESP_OK) return ret;
 
-    ss_buffer << "<h1>Relay Configuration</h1>";
+    ss_buffer << "<h1>Configuration</h1>"; // Changed page title
     ss_buffer << "<form id='configForm' class='config-form' onsubmit='submitConfig(event)'>";
     ss_buffer << "<h2>General Device Settings</h2>";
     ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
@@ -979,24 +979,12 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
 
     ss_buffer << "</div>"; // End of interlock_options_div
 
-    ss_buffer << "<div class='auto-mode-container'>"; // Re-using auto-mode-container class for styling
-    // ss_buffer << "<h2>Auto Mode</h2>"; // Removed H2
-    ss_buffer << "<label>";
-    ss_buffer << "<input type='checkbox' name='auto_mode' " << (config.auto_mode ? "checked" : "") << ">";
-    ss_buffer << " Enable Automatic band selection";
-    ss_buffer << "</label>";
-    ss_buffer << "</div>";
-
-    ss_buffer << "<div class='auto-mode-container'>"; // Re-using auto-mode-container class for styling
-    // ss_buffer << "<h2>Data Sources</h2>"; // Removed H2
-    ss_buffer << "<label>";
-    ss_buffer << "<input type='checkbox' name='allow_concurrent_data_sources' " << (config.allow_concurrent_data_sources ? "checked" : "") << ">";
-    ss_buffer << " Allow concurrent UART and MQTT data sources";
-    ss_buffer << "</label>";
-    ss_buffer << "</div>";
     // This is the end of "General Device Settings". Send the accumulated chunk.
+    // Auto Mode and Concurrent Data Sources are no longer part of this chunk.
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
+    // ss_buffer is now empty.
+
     // num_bands div removed from here.
     // Duplicated "Switch Configuration" H2 and num_antenna_ports div removed.
 
@@ -1004,6 +992,14 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     // Duplicated Radio Operation Mode block and its send_ss_chunk are removed.
 
     ss_buffer << "<h2>Band & Antenna Configuration</h2>";
+    // Moved "Auto Mode" checkbox here
+    ss_buffer << "<div class='auto-mode-container'>";
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='auto_mode' " << (config.auto_mode ? "checked" : "") << ">";
+    ss_buffer << " Enable Automatic band selection";
+    ss_buffer << "</label>";
+    ss_buffer << "</div>";
+
     ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
     ss_buffer << "<label for='num_bands'>Number of bands:</label>";
     ss_buffer << "<input type='number' id='num_bands' name='num_bands' value='" << std::to_string(config.num_bands)
@@ -1078,8 +1074,12 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     // The "Configure Bands for Radio:" dropdown was removed as both Radio A and B 
     // configurations are now displayed and editable simultaneously in the table.
     // Original UART block removed.
-    // The next section is the original PTT Configuration (Radio A)
-    ss_buffer << "<h2>PTT Configuration (Radio A)</h2>";
+
+    // PTT Configuration Section
+    ss_buffer << "<h2>PTT Configuration</h2>";
+
+    // PTT Configuration (Radio A)
+    ss_buffer << "<h3>Radio A</h3>";
     ss_buffer << "<div class='form-group'>";
     ss_buffer << "<label for='ptt_input_radio_a'>PTT Input Pin (Radio A):</label>";
     ss_buffer << "<select id='ptt_input_radio_a' name='ptt_input_radio_a'>";
@@ -1097,13 +1097,11 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<option value='true' " << (config.ptt_input_radio_a_active_high ? "selected" : "") << ">Active High</option>";
     ss_buffer << "<option value='false' " << (!config.ptt_input_radio_a_active_high ? "selected" : "") << ">Active Low</option>";
     ss_buffer << "</select></div>";
-    ret = send_ss_chunk(ss_buffer); // Send Radio A PTT config
-    if (ret != ESP_OK) return ret;
 
     // Radio B PTT Configuration (conditionally visible)
     ss_buffer << "<div id='ptt_config_radio_b_div' style='display: "
               << (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A ? "block" : "none") << ";'>";
-    ss_buffer << "<h2>PTT Configuration (Radio B)</h2>";
+    ss_buffer << "<h3>Radio B</h3>"; // Changed from H2 to H3
     ss_buffer << "<div class='form-group'>";
     ss_buffer << "<label for='ptt_input_radio_b'>PTT Input Pin (Radio B):</label>";
     ss_buffer << "<select id='ptt_input_radio_b' name='ptt_input_radio_b'>";
@@ -1122,8 +1120,11 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<option value='false' " << (!config.ptt_input_radio_b_active_high ? "selected" : "") << ">Active Low</option>";
     ss_buffer << "</select></div>";
     ss_buffer << "</div>"; // End of ptt_config_radio_b_div
-    ret = send_ss_chunk(ss_buffer);
+    
+    ret = send_ss_chunk(ss_buffer); // Send the entire PTT configuration section
     if (ret != ESP_OK) return ret;
+
+    // Relay Names Section
     ss_buffer << "<div class='relay-names-container' style='background-color: var(--card-background-color); border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 30px;'>";
     ss_buffer << "<h2>Relay Names</h2>";
     ss_buffer << "<p>Configure names for each relay:</p>";
@@ -1156,6 +1157,14 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "</div>"; // End of relay-names-container
 
     ss_buffer << "<h2>Data Source Configuration</h2>";
+
+    // Moved "Allow concurrent data sources" checkbox here
+    ss_buffer << "<div class='auto-mode-container'>"; // Re-using auto-mode-container class for styling
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='allow_concurrent_data_sources' " << (config.allow_concurrent_data_sources ? "checked" : "") << ">";
+    ss_buffer << " Allow concurrent UART and MQTT data sources";
+    ss_buffer << "</label>";
+    ss_buffer << "</div>";
 
     // UART Configuration
     ss_buffer << "<h3>CAT Data (UART)</h3>";
