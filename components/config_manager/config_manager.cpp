@@ -158,7 +158,7 @@ esp_err_t ConfigManager::flush_pending_save(TickType_t xTicksToWait)
                 ESP_LOGW(TAG, "Timeout waiting for NVS save completion during flush.");
                 return ESP_ERR_TIMEOUT; // Timed out
             }
-            vTaskDelay(pdMS_TO_TICKS(20)); // Poll every 20ms
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
         ESP_LOGI(TAG, "Flush: NVS save completed.");
         return ESP_OK;
