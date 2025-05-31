@@ -41,3 +41,21 @@ A singleton class that provides the main interface for relay control.
 - Interfaces with the KC868-A16 Hardware component for physical control
 - Checks transmit status via the CAT Parser
 - Maintains state information for the Web Server status display
+
+
+![PTT detection latency](https://github.com/stianeklund/esp32-band-decoder/blob/kc868/screenshots/SDS00030.png)
+
+The KC868‐A16 polls the radio’s PTT line (blue) via I²C (no interrupts possible through the IO expanders, unfortunately).
+The firmware takes on average ~1.4 ms (±0.5 ms jitter) to switch off any unwanted MOSFET output (yellow). 
+
+Radio and configuration: 
+
+* Some radios use 10 ms to key external amplifiers, others up to 25 ms, depending on the configuration.
+* 
+I made a crude RF detector (purple) to try to detect _when_ RF power reaches the dummy load. 
+![Time from ptt detection to RF out](https://github.com/stianeklund/esp32-band-decoder/blob/kc868/screenshots/SDS00029.png)
+
+The scope readings seem to indicate this is roughly 11.3–13 ms after PTT, giving us roughly a margin of 
+9–10 ms to protect downstream devices, provided relay‐release times are short. 
+
+I haven't tested this measuring the actual relays.. the mosfet outputs on the KC868-A16 are extremely fast.
