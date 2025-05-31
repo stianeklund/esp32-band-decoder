@@ -4,6 +4,7 @@
 #include "my_mqtt_client.h"
 #include "cat_parser.h"
 #include "esp_log.h"
+#include "esp_timer.h" // Added for esp_timer_get_time()
 #include "freertos/task.h"
 #include <chrono>
 #include "config_cache.h"
@@ -60,8 +61,10 @@ esp_err_t RelayController::turn_off_all_relays() {
 }
 
 esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
+    int64_t set_relay_func_begin_time = esp_timer_get_time();
     if (relay_id < 1 || relay_id > NUM_RELAYS) {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
+        ESP_LOGW(TAG, "PROF: set_relay (total, invalid arg) took %lld us", esp_timer_get_time() - set_relay_func_begin_time);
         return ESP_ERR_INVALID_ARG;
     }
     std::lock_guard lock(relay_mutex_);
@@ -86,11 +89,15 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
     ESP_LOGD(TAG, "Setting relay %d (hw: %d) to state %d", relay_id, hw_relay, state);
     
     if (should_delay()) {
+        int64_t delay_start_time = esp_timer_get_time();
         vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
+        ESP_LOGW(TAG, "PROF: vTaskDelay(COOLDOWN_PERIOD_MS) took %lld us", esp_timer_get_time() - delay_start_time);
     }
 
     // Note: kc868_a16_set_output handles the active-low conversion internally
+    int64_t hw_set_output_start_time = esp_timer_get_time();
     const esp_err_t ret = kc868_a16_set_output(hw_relay, state);
+    ESP_LOGW(TAG, "PROF: kc868_a16_set_output() took %lld us", esp_timer_get_time() - hw_set_output_start_time);
     if (ret == ESP_OK) {
         last_relay_change_ = std::chrono::steady_clock::now();
         // Update our internal state tracking with the logical state (not inverted)
@@ -103,6 +110,7 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
             currently_selected_relay_ = 0;
         }
     }
+    ESP_LOGW(TAG, "PROF: set_relay (total) took %lld us", esp_timer_get_time() - set_relay_func_begin_time);
     return ret;
 }
 

@@ -26,6 +26,10 @@ AntennaSwitch::AntennaSwitch()
       radio_a_restore_delay_timer_(nullptr),
       interlock_mutex_(nullptr)
 {
+
+    //esp_log_level_set("ANTENNA_SWITCH", ESP_LOG_WARN);
+    // esp_log_level_set("ANTENNA_SWITCH", ESP_LOG_DEBUG);
+
     interlock_mutex_ = xSemaphoreCreateMutex();
     if (interlock_mutex_ == nullptr) {
         ESP_LOGE(TAG, "Failed to create interlock_mutex_");
@@ -172,6 +176,7 @@ const antenna_switch_config_t& AntennaSwitch::get_config_ref() const {
 
 // Callback from InputManager when hardware PTT A state changes
 void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
+    int64_t ptt_a_start_time = esp_timer_get_time();
     ESP_LOGV(TAG, "on_hw_ptt_a_state_change: Input detected. Active: %s. Time: %lld", active ? "true" : "false", esp_timer_get_time());
     const bool old_hw_ptt_a_value = hw_ptt_a_active_.load(std::memory_order_relaxed);
 
@@ -213,6 +218,7 @@ void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
         ESP_LOGV(TAG, "Radio A: HW PTT raw state changed, but effective TX state remains %s.",
                  is_now_effectively_transmitting ? "ON" : "OFF");
     }
+    ESP_LOGD(TAG, "PROF: on_hw_ptt_a_state_change took %lld us", esp_timer_get_time() - ptt_a_start_time);
 }
 
 // Callback from InputManager when hardware PTT B state changes
@@ -410,12 +416,19 @@ int AntennaSwitch::get_active_relay_for_radio(RadioID radio) const {
 }
 
 void AntennaSwitch::on_radio_a_tx_start() {
+    int64_t tx_start_func_begin_time = esp_timer_get_time();
+    int64_t mutex_take_start_time = esp_timer_get_time();
     if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
         ESP_LOGE(TAG, "on_radio_a_tx_start: Could not take mutex");
+        ESP_LOGD(TAG, "PROF: xSemaphoreTake(interlock_mutex_) failed, took %lld us", esp_timer_get_time() - mutex_take_start_time);
+        ESP_LOGD(TAG, "PROF: on_radio_a_tx_start (total, mutex failed) took %lld us", esp_timer_get_time() - tx_start_func_begin_time);
         return;
     }
+    ESP_LOGD(TAG, "PROF: xSemaphoreTake(interlock_mutex_) took %lld us", esp_timer_get_time() - mutex_take_start_time);
 
+    int64_t get_a_relay_start_time = esp_timer_get_time();
     const int active_relay_radio_a = get_active_relay_for_radio(RadioID::A);
+    ESP_LOGD(TAG, "PROF: get_active_relay_for_radio(A) took %lld us", esp_timer_get_time() - get_a_relay_start_time);
 
     if (active_relay_radio_a == 0) {
         ESP_LOGW(TAG, "Radio A TX: PTT active, but no antenna selected for Radio A. Interlock for Radio B not applied.");
@@ -423,13 +436,17 @@ void AntennaSwitch::on_radio_a_tx_start() {
                  hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
                  cat_tx_a_active_.load(std::memory_order_relaxed) ? "ON" : "OFF");
         xSemaphoreGive(interlock_mutex_);
+        xSemaphoreGive(interlock_mutex_);
+        ESP_LOGD(TAG, "PROF: on_radio_a_tx_start (total, no antenna) took %lld us", esp_timer_get_time() - tx_start_func_begin_time);
         return;
     }
 
-    ESP_LOGI(TAG, "Radio A TX: HW PTT A: %s, CAT TX A: %s. Radio A using relay %d. Applying interlock for Radio B.",
+    int64_t log1_start_time = esp_timer_get_time();
+    ESP_LOGV(TAG, "Radio A TX: HW PTT A: %s, CAT TX A: %s. Radio A using relay %d. Applying interlock for Radio B.",
              hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
              cat_tx_a_active_.load(std::memory_order_relaxed) ? "ON" : "OFF",
              active_relay_radio_a);
+    ESP_LOGD(TAG, "PROF: ESP_LOGI (Radio A TX state) took %lld us", esp_timer_get_time() - log1_start_time);
 
     // Cancel any pending restoration for Radio B
     if (radio_b_restore_delay_timer_ != nullptr && esp_timer_is_active(radio_b_restore_delay_timer_)) {
@@ -440,14 +457,16 @@ void AntennaSwitch::on_radio_a_tx_start() {
 
     const auto& config = get_cached_config(); // Use cached config
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
-        ESP_LOGI(TAG, "Single Radio A mode, no interlock action needed for Radio B.");
+        ESP_LOGV(TAG, "Single Radio A mode, no interlock action needed for Radio B.");
         xSemaphoreGive(interlock_mutex_);
+        ESP_LOGD(TAG, "PROF: on_radio_a_tx_start (total, single A mode) took %lld us", esp_timer_get_time() - tx_start_func_begin_time);
         return;
     }
 
     if (!relay_controller_) {
         ESP_LOGE(TAG, "Relay controller not initialized, cannot apply TX interlock for Radio B.");
         xSemaphoreGive(interlock_mutex_);
+        ESP_LOGD(TAG, "PROF: on_radio_a_tx_start (total, no relay_controller) took %lld us", esp_timer_get_time() - tx_start_func_begin_time);
         return;
     }
 
@@ -462,25 +481,34 @@ void AntennaSwitch::on_radio_a_tx_start() {
     }
 
     if (!b_was_already_interlocked_and_off) {
-        if (const int active_b_relay = get_active_relay_for_radio(RadioID::B); active_b_relay != 0) {
+        int64_t get_b_relay_start_time = esp_timer_get_time();
+        const int active_b_relay = get_active_relay_for_radio(RadioID::B);
+        ESP_LOGD(TAG, "PROF: get_active_relay_for_radio(B) took %lld us", esp_timer_get_time() - get_b_relay_start_time);
+
+        if (active_b_relay != 0) {
             if (is_radio_b_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
                 ESP_LOGW(TAG, "Radio A TX start: Conflict! Radio B (relay %d) is also transmitting. Interlock resolution is manual. Radio B relay NOT changed.", active_b_relay);
             } else {
                 pre_tx_active_relay_radio_b_ = active_b_relay; // Store it before turning off
-                ESP_LOGI(TAG, "Radio B was using relay %d. Turning it OFF due to Radio A TX.", pre_tx_active_relay_radio_b_);
+                int64_t log2_start_time = esp_timer_get_time();
+                ESP_LOGV(TAG, "Radio B was using relay %d. Turning it OFF due to Radio A TX.", pre_tx_active_relay_radio_b_);
+                ESP_LOGV(TAG, "PROF: ESP_LOGI (Radio B turn off) took %lld us", esp_timer_get_time() - log2_start_time);
 
+                int64_t set_relay_call_start_time = esp_timer_get_time();
                 if (const esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_b_, false); err != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to turn OFF Radio B relay %d: %s", pre_tx_active_relay_radio_b_, esp_err_to_name(err));
                     pre_tx_active_relay_radio_b_ = 0; 
                 }
+                ESP_LOGD(TAG, "PROF: relay_controller_->set_relay() call took %lld us", esp_timer_get_time() - set_relay_call_start_time);
             }
         } else {
-            ESP_LOGD(TAG, "Radio B was not using any relay. No interlock action needed for Radio A TX.");
+            ESP_LOGV(TAG, "Radio B was not using any relay. No interlock action needed for Radio A TX.");
             // If B was not using any relay, but pre_tx_active_relay_radio_b_ was set (e.g. from a previous cycle where timer was cancelled)
             // it should remain set. So, don't clear pre_tx_active_relay_radio_b_ here.
         }
     }
     xSemaphoreGive(interlock_mutex_);
+    ESP_LOGD(TAG, "PROF: on_radio_a_tx_start (total) took %lld us", esp_timer_get_time() - tx_start_func_begin_time);
 }
 
 void AntennaSwitch::on_radio_a_tx_stop() {

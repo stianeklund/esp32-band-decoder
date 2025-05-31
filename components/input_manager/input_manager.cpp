@@ -56,6 +56,7 @@ esp_err_t InputManager::init() {
         return ESP_OK;
     }
 
+    // esp_log_level_set(TAG, ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Initializing InputManager...");
 
     // Initialize the underlying KC868-A16 hardware (I2C, etc.)
@@ -75,7 +76,7 @@ esp_err_t InputManager::init() {
         "ptt_poll_task",
         4096,
         this,
-        5,
+        configMAX_PRIORITIES - 2, // Increased priority
         &ptt_poll_task_handle_
     );
 
@@ -131,58 +132,90 @@ void InputManager::ptt_poll_task() {
         }
 
         const auto& config = get_cached_config();
+        int64_t time_poll_cycle_start = esp_timer_get_time();
 
-        if (const esp_err_t ret = kc868_a16_get_all_inputs(&current_inputs_mask); ret == ESP_OK) {
-            ESP_LOGV(TAG, "PTT Poll: current_inputs_mask from HW: 0x%04X", current_inputs_mask); // Log overall mask if needed
+        int64_t duration_hw_read = 0;
+        int64_t time_after_hw_read = 0; // To calculate duration_hw_read
+
+        const esp_err_t ret_hw_read = kc868_a16_get_all_inputs(&current_inputs_mask);
+        time_after_hw_read = esp_timer_get_time();
+        duration_hw_read = time_after_hw_read - time_poll_cycle_start;
+
+        if (ret_hw_read == ESP_OK) {
+            // ESP_LOGV(TAG, "PTT Poll: current_inputs_mask from HW: 0x%04X", current_inputs_mask); // Verbose, keep if needed for deep debug
 
             // --- PTT A ---
-            if (config.ptt_input_radio_a != -1) { // Check if PTT A input is configured
+            if (config.ptt_input_radio_a != -1) {
                 bool pcf8574_pin_a_physically_low;
-
+                int64_t time_before_determine_ptt_a = esp_timer_get_time(); 
+                
                 const bool ptt_a_logically_active = determine_ptt_logical_state(
                     config.ptt_input_radio_a,
                     config.ptt_input_radio_a_active_high,
                     current_inputs_mask,
                     &pcf8574_pin_a_physically_low
                 );
+                int64_t time_after_determine_ptt_a = esp_timer_get_time();
+                int64_t duration_determine_ptt_a = time_after_determine_ptt_a - time_before_determine_ptt_a;
 
                 if (ptt_a_logically_active != ptt_a_last_hw_state_) {
+                    int64_t time_ptt_a_change_confirmed = esp_timer_get_time(); // This is the critical timestamp for the event
+
+                    // Log detailed profiling info ONLY when a change occurs for PTT A
+                    ESP_LOGD(TAG, "PROF: PTT A Change Detected!");
+                    ESP_LOGD(TAG, "PROF: kc868_a16_get_all_inputs took %lld us (measured this cycle)", duration_hw_read);
+                    ESP_LOGD(TAG, "PROF: determine_ptt_logical_state (A) took %lld us", duration_determine_ptt_a);
+                    ESP_LOGD(TAG, "PROF: PTT A change confirmed. Total time from poll cycle start to confirm: %lld us",
+                             time_ptt_a_change_confirmed - time_poll_cycle_start);
+
                     ESP_LOGV(TAG, "PTT A (Input Pin %d) logical state CHANGED to: %s. (PCF8574 pin was %s, Configured terminal active: %s)",
                              config.ptt_input_radio_a,
                              ptt_a_logically_active ? "ACTIVE" : "INACTIVE",
                              pcf8574_pin_a_physically_low ? "LOW" : "HIGH",
                              config.ptt_input_radio_a_active_high ? "HIGH" : "LOW");
-
+                    
                     AntennaSwitch::instance().on_hw_ptt_a_state_change(ptt_a_logically_active);
                     ptt_a_last_hw_state_ = ptt_a_logically_active;
                 }
             }
 
             // --- PTT B ---
-            if (config.ptt_input_radio_b != -1) { // Check if PTT B input is configured
+            if (config.ptt_input_radio_b != -1) { 
                 bool pcf8574_pin_b_physically_low;
-
+                int64_t time_before_determine_ptt_b = esp_timer_get_time(); 
+                
                 const bool ptt_b_logically_active = determine_ptt_logical_state(
                     config.ptt_input_radio_b,
                     config.ptt_input_radio_b_active_high,
                     current_inputs_mask,
                     &pcf8574_pin_b_physically_low
                 );
+                int64_t time_after_determine_ptt_b = esp_timer_get_time();
+                int64_t duration_determine_ptt_b = time_after_determine_ptt_b - time_before_determine_ptt_b;
 
                 if (ptt_b_logically_active != ptt_b_last_hw_state_) {
+                    int64_t time_ptt_b_change_confirmed = esp_timer_get_time();
+
+                    // Log detailed profiling info ONLY when a change occurs for PTT B
+                    ESP_LOGD(TAG, "PROF: PTT B Change Detected!");
+                    ESP_LOGD(TAG, "PROF: kc868_a16_get_all_inputs took %lld us (measured this cycle)", duration_hw_read);
+                    ESP_LOGD(TAG, "PROF: determine_ptt_logical_state (B) took %lld us", duration_determine_ptt_b);
+                    ESP_LOGD(TAG, "PROF: PTT B change confirmed. Total time from poll cycle start to confirm: %lld us",
+                             time_ptt_b_change_confirmed - time_poll_cycle_start);
+
                      ESP_LOGV(TAG, "PTT B (Input Pin %d) logical state CHANGED to: %s. (PCF8574 pin was %s, Configured terminal active: %s)",
                              config.ptt_input_radio_b,
                              ptt_b_logically_active ? "ACTIVE" : "INACTIVE",
                              pcf8574_pin_b_physically_low ? "LOW" : "HIGH", 
                              config.ptt_input_radio_b_active_high ? "HIGH" : "LOW");
-
+                    
                     AntennaSwitch::instance().on_hw_ptt_b_state_change(ptt_b_logically_active);
                     ptt_b_last_hw_state_ = ptt_b_logically_active;
                 }
             }
 
         } else {
-            ESP_LOGE(TAG, "Failed to read inputs in PTT poll task: %s", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "Failed to read inputs in PTT poll task: %s", esp_err_to_name(ret_hw_read));
         }
 
         vTaskDelay(pdMS_TO_TICKS(1)); // Poll every 1ms
