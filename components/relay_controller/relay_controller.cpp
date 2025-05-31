@@ -16,6 +16,8 @@ RelayController::RelayController()
       last_relay_change_(std::chrono::steady_clock::now()),
       cat_parser_(CatParser::instance()),
       current_mask_{0, 0} { // Initialize masks to all off
+
+    esp_log_level_set(TAG, ESP_LOG_WARN);
 }
 
 RelayController::~RelayController() = default;
@@ -64,7 +66,7 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
     int64_t set_relay_func_begin_time = esp_timer_get_time();
     if (relay_id < 1 || relay_id > NUM_RELAYS) {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
-        ESP_LOGW(TAG, "PROF: set_relay (total, invalid arg) took %lld us", esp_timer_get_time() - set_relay_func_begin_time);
+        ESP_LOGD(TAG, "PROF: set_relay (total, invalid arg) took %lld us", esp_timer_get_time() - set_relay_func_begin_time);
         return ESP_ERR_INVALID_ARG;
     }
     std::lock_guard lock(relay_mutex_);
@@ -91,13 +93,13 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
     if (should_delay()) {
         int64_t delay_start_time = esp_timer_get_time();
         vTaskDelay(pdMS_TO_TICKS(COOLDOWN_PERIOD_MS));
-        ESP_LOGW(TAG, "PROF: vTaskDelay(COOLDOWN_PERIOD_MS) took %lld us", esp_timer_get_time() - delay_start_time);
+        ESP_LOGD(TAG, "PROF: vTaskDelay(COOLDOWN_PERIOD_MS) took %lld us", esp_timer_get_time() - delay_start_time);
     }
 
     // Note: kc868_a16_set_output handles the active-low conversion internally
     int64_t hw_set_output_start_time = esp_timer_get_time();
     const esp_err_t ret = kc868_a16_set_output(hw_relay, state);
-    ESP_LOGW(TAG, "PROF: kc868_a16_set_output() took %lld us", esp_timer_get_time() - hw_set_output_start_time);
+    ESP_LOGD(TAG, "PROF: kc868_a16_set_output() took %lld us", esp_timer_get_time() - hw_set_output_start_time);
     if (ret == ESP_OK) {
         last_relay_change_ = std::chrono::steady_clock::now();
         // Update our internal state tracking with the logical state (not inverted)
@@ -110,7 +112,7 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
             currently_selected_relay_ = 0;
         }
     }
-    ESP_LOGW(TAG, "PROF: set_relay (total) took %lld us", esp_timer_get_time() - set_relay_func_begin_time);
+    ESP_LOGD(TAG, "PROF: set_relay (total) took %lld us", esp_timer_get_time() - set_relay_func_begin_time);
     return ret;
 }
 
@@ -160,9 +162,13 @@ esp_err_t RelayController::update_all_relay_states() {
 
 uint16_t RelayController::get_relay_states() const {
     uint16_t raw_states = kc868_a16_get_all_outputs();
-    ESP_LOGD(TAG, "Raw states from hardware: 0x%04X", raw_states);
+    if (raw_states != 0x0000) {
+        ESP_LOGD(TAG, "Raw states from hardware: 0x%04X", raw_states);
+    }
     uint16_t states = ~raw_states & 0xFFFF;
-    ESP_LOGD(TAG, "Inverted states: 0x%04X", states);
+    if (states != 0xFFFF) {
+        ESP_LOGD(TAG, "Inverted states: 0x%04X", states);
+    }
     return states;
 }
 
