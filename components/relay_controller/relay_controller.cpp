@@ -97,20 +97,42 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
     }
 
     // Note: kc868_a16_set_output handles the active-low conversion internally
+    // MODIFICATION: Use kc868_a16_set_all_outputs to mirror execute_relay_change's I2C pattern
     int64_t hw_set_output_start_time = esp_timer_get_time();
-    const esp_err_t ret = kc868_a16_set_output(hw_relay, state);
-    ESP_LOGD(TAG, "PROF: kc868_a16_set_output() took %lld us", esp_timer_get_time() - hw_set_output_start_time);
+    uint16_t current_logical_states = kc868_a16_get_all_outputs(); // Get current logical ON/OFF state (0-indexed for mask)
+    uint16_t new_logical_states;
+
+    if (state) { // if turning ON
+        new_logical_states = current_logical_states | (1 << hw_relay); // hw_relay is already 0-indexed
+    } else { // if turning OFF
+        new_logical_states = current_logical_states & ~(1 << hw_relay); // hw_relay is already 0-indexed
+    }
+    
+    ESP_LOGD(TAG, "RelayController::set_relay: current_logical_states=0x%04X, new_logical_states=0x%04X for relay_id %d (hw %d) to state %s",
+             current_logical_states, new_logical_states, relay_id, hw_relay, state ? "ON" : "OFF");
+
+    const esp_err_t ret = kc868_a16_set_all_outputs(new_logical_states);
+    ESP_LOGD(TAG, "PROF: kc868_a16_set_all_outputs() took %lld us", esp_timer_get_time() - hw_set_output_start_time);
+
     if (ret == ESP_OK) {
         last_relay_change_ = std::chrono::steady_clock::now();
-        // Update our internal state tracking with the logical state (not inverted)
-        relay_states_[relay_id] = state;
+        // Update our internal state tracking for the specific relay that was targeted
+        relay_states_[relay_id] = state; 
         
-        // Update currently_selected_relay_ only if this is part of antenna selection
+        // Update currently_selected_relay_
+        // This logic might need review if set_relay is used for more than just antenna selection,
+        // but for now, it mirrors the original intent for currently_selected_relay_
         if (state) {
             currently_selected_relay_ = relay_id;
         } else if (currently_selected_relay_ == relay_id) {
+            // If the relay being turned OFF was the currently_selected_relay_,
+            // set currently_selected_relay_ to 0 (no relay selected).
+            // If another relay was active, this doesn't change it, which is consistent
+            // with set_relay affecting only one relay's logical state.
             currently_selected_relay_ = 0;
         }
+        // Note: The underlying kc868_a16_set_all_outputs updates its own comprehensive 'output_state' cache.
+        // The relay_states_ map here is RelayController's higher-level view.
     }
     ESP_LOGD(TAG, "PROF: set_relay (total) took %lld us", esp_timer_get_time() - set_relay_func_begin_time);
     return ret;
