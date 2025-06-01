@@ -1,28 +1,65 @@
 // ReSharper disable CppRedundantParentheses
 #include "include/kc868_a16_hw.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static auto TAG = "KC868_A16_HW";
 static uint16_t output_state = 0;
-static bool kc868_a16_initialized = false; // Flag to track initialization status
+static bool kc868_a16_initialized = false;
+static SemaphoreHandle_t i2c_bus_mutex_ = nullptr;
 
 // Variables to store I2C addresses for input expanders
-// These will be set to KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7 and KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15
+// These will be set to KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7 and
+// KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15
 static uint8_t discovered_pcf8574_input_addr_for_pins_0_7 = 0;
 static uint8_t discovered_pcf8574_input_addr_for_pins_8_15 = 0;
 
 static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
+    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGE(TAG, "write_pcf8574 to 0x%02X (attempt 1): Failed to take I2C bus mutex", addr);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_write_byte(cmd, data, true);
     i2c_master_stop(cmd);
-
-    const esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(50));
+    esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(25));
     i2c_cmd_link_delete(cmd);
+
+    xSemaphoreGive(i2c_bus_mutex_);
+
+    if (ret == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "write_pcf8574 to 0x%02X timed out on 1st attempt. Retrying after 10ms delay...", addr);
+        vTaskDelay(pdMS_TO_TICKS(10));
+
+        if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+            ESP_LOGE(TAG, "write_pcf8574 to 0x%02X (attempt 2): Failed to take I2C bus mutex", addr);
+            return ESP_ERR_TIMEOUT;
+        }
+        
+        cmd = i2c_cmd_link_create();
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_write_byte(cmd, data, true);
+        i2c_master_stop(cmd);
+        ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(25));
+        i2c_cmd_link_delete(cmd);
+
+        xSemaphoreGive(i2c_bus_mutex_);
+
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "write_pcf8574 to 0x%02X succeeded on retry.", addr);
+        } else {
+            ESP_LOGE(TAG, "write_pcf8574 to 0x%02X failed on retry: %s", addr, esp_err_to_name(ret));
+        }
+    } else if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "write_pcf8574 to 0x%02X failed on 1st attempt (not timeout): %s", addr, esp_err_to_name(ret));
+    }
     
-    // vTaskDelay(pdMS_TO_TICKS(10)); // Commented out for PTT optimization - restore if I2C issues occur
     return ret;
 }
 
@@ -30,28 +67,75 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
     if (data == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+        // This log is okay, as it's outside the typical successful operation path
+        ESP_LOGE(TAG, "read_pcf8574 from 0x%02X (attempt 1): Failed to take I2C bus mutex", addr);
+        return ESP_ERR_TIMEOUT;
+    }
+
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_READ, true);
     i2c_master_read_byte(cmd, data, I2C_MASTER_NACK);
     i2c_master_stop(cmd);
-
-    const esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(50));
+    esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(25));
     i2c_cmd_link_delete(cmd);
     
-    // vTaskDelay(pdMS_TO_TICKS(10)); // Commented out for PTT optimization - restore if I2C issues occur
+    xSemaphoreGive(i2c_bus_mutex_); // Release mutex IMMEDIATELY after the I2C operation
+
+    // --- Handle Attempt 1 Result ---
+    if (ret == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "read_pcf8574 from 0x%02X timed out on 1st attempt. Retrying after 10ms delay...", addr);
+        vTaskDelay(pdMS_TO_TICKS(10)); // Delay is OUTSIDE the mutex protection
+
+        // --- Attempt 2 ---
+        if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+            ESP_LOGE(TAG, "read_pcf8574 from 0x%02X (attempt 2): Failed to take I2C bus mutex", addr);
+            // Return the original error or a new one indicating mutex failure on retry
+            return ESP_ERR_TIMEOUT; 
+        }
+
+        cmd = i2c_cmd_link_create(); // Recreate command
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_READ, true);
+        i2c_master_read_byte(cmd, data, I2C_MASTER_NACK);
+        i2c_master_stop(cmd);
+        ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(25)); // Original timeout
+        i2c_cmd_link_delete(cmd);
+
+        xSemaphoreGive(i2c_bus_mutex_); // Release mutex IMMEDIATELY after the I2C operation
+
+        // --- Handle Attempt 2 Result ---
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "read_pcf8574 from 0x%02X succeeded on retry.", addr);
+        } else {
+            ESP_LOGE(TAG, "read_pcf8574 from 0x%02X failed on retry: %s", addr, esp_err_to_name(ret));
+        }
+    } else if (ret != ESP_OK) {
+        // Log non-timeout failure from first attempt
+        ESP_LOGE(TAG, "read_pcf8574 from 0x%02X failed on 1st attempt (not timeout): %s", addr, esp_err_to_name(ret));
+    }
+    // If ret was ESP_OK on the first attempt, no further logs are printed here for success.
     return ret;
 }
 
 // Helper function to check if an I2C device is present at a given address
 static bool check_i2c_device_present(const uint8_t addr) {
+    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) { // Increased timeout
+        ESP_LOGE(TAG, "check_i2c_device_present for 0x%02X: Failed to take I2C bus mutex", addr);
+        return false; // Cannot check, assume not present or error
+    }
+
     i2c_cmd_handle_t cmd_test = i2c_cmd_link_create();
 
     i2c_master_start(cmd_test);
     i2c_master_write_byte(cmd_test, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_stop(cmd_test);
-    esp_err_t test_ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd_test, pdMS_TO_TICKS(50));
+    esp_err_t test_ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd_test, pdMS_TO_TICKS(25)); // MODIFIED TIMEOUT
     i2c_cmd_link_delete(cmd_test);
+
+    xSemaphoreGive(i2c_bus_mutex_);
     return test_ret == ESP_OK;
 }
 
@@ -61,6 +145,15 @@ esp_err_t kc868_a16_hw_init() {
         return ESP_OK;
     }
     ESP_LOGI(TAG, "Initializing KC868-A16 hardware");
+
+    // Create the I2C bus mutex if it hasn't been created yet
+    if (i2c_bus_mutex_ == nullptr) {
+        i2c_bus_mutex_ = xSemaphoreCreateMutex();
+        if (i2c_bus_mutex_ == nullptr) {
+            ESP_LOGE(TAG, "Failed to create I2C bus mutex!");
+            return ESP_FAIL; // Critical failure
+        }
+    }
 
     discovered_pcf8574_input_addr_for_pins_0_7 = 0;
     discovered_pcf8574_input_addr_for_pins_8_15 = 0;
@@ -216,17 +309,29 @@ esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
     const uint8_t high_byte = ~((state_mask >> 8) & 0xFF);
 
     esp_err_t ret = write_pcf8574(PCF8574_OUTPUT_ADDR_1, low_byte);
-    if (ret != ESP_OK) return ret;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "set_all_outputs: Failed to write to ADDR_1 (0x%02X): %s", PCF8574_OUTPUT_ADDR_1, esp_err_to_name(ret));
+        return ret;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1)); // Add 1ms delay between accessing the two expanders
 
     ret = write_pcf8574(PCF8574_OUTPUT_ADDR_2, high_byte);
-    if (ret == ESP_OK) {
-        output_state = (~state_mask) & 0xFFFF;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "set_all_outputs: Failed to write to ADDR_2 (0x%02X): %s", PCF8574_OUTPUT_ADDR_2, esp_err_to_name(ret));
+        return ret;
     }
+
+    // This part only executes if both writes were successful
+    output_state = (~state_mask) & 0xFFFF; // output_state stores PCF8574 register view (active low)
+    ESP_LOGD(TAG, "set_all_outputs: Success. PCF8574s updated. Logical mask 0x%04X. output_state (active-low) 0x%04X", state_mask, output_state);
     return ret;
 }
 
 // Invert because PCF8574 is active low
 uint16_t kc868_a16_get_all_outputs() {
+    // This function returns the logical state (1 = ON, 0 = OFF)
+    // output_state stores the PCF8574 register view (active-low, 1 = OFF, 0 = ON)
     return ~output_state & 0xFFFF;
 }
 
@@ -286,7 +391,7 @@ esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask) {
     *state_mask = ~combined_raw & 0xFFFF; // Invert all bits so '1' means active (active-low inputs)
     
     ESP_LOGV(TAG, "Raw low: 0x%02X, Raw high: 0x%02X, Combined raw: 0x%04X, Final state_mask: 0x%04X",
-        byte_low, byte_high, combined_raw, *state_mask); // Example of a debug log if needed
+        byte_low, byte_high, combined_raw, *state_mask);
 
     return ESP_OK;
 }
@@ -294,8 +399,6 @@ esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask) {
 void kc868_a16_hw_scan_i2c_bus() {
     if (!kc868_a16_initialized) {
         ESP_LOGW(TAG, "I2C bus scan: KC868-A16 hardware not fully initialized. Attempting basic I2C setup for scan...");
-        // Attempt to initialize I2C driver if not already done by a full kc868_a16_hw_init()
-        // This is a minimal setup for scanning, full init might still be needed for device operation.
 
         constexpr i2c_config_t conf = {
             .mode = I2C_MODE_MASTER,
