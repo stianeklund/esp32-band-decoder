@@ -1,11 +1,11 @@
 #include "serial_cli.h"
+#include <cctype>          // For isprint
+#include <cstdio>
+#include <cstring>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "nvs_flash.h"      // For nvs_flash_erase
 #include "wifi_manager.hpp" // For WiFi commands
-#include <cstdio>
-#include <cstring>
-#include <cctype>          // For isprint
 
 SerialCli::SerialCli() :
     ssid_set_(false),
@@ -31,70 +31,6 @@ esp_err_t SerialCli::start_task() {
     }
     ESP_LOGI(TAG, "Serial CLI task created successfully."); // Changed from "started" to "created" as task runs after scheduler starts
     return ESP_OK;
-}
-
-void SerialCli::cli_task_trampoline(void* arg) {
-    if (auto* self = static_cast<SerialCli*>(arg)) {
-        self->cli_task_member();
-    } else {
-        ESP_LOGE(TAG, "cli_task_trampoline received null argument");
-        vTaskDelete(nullptr); // Delete self if arg is null
-    }
-}
-
-// ReSharper disable once CppDFAUnreachableFunctionCall
-void SerialCli::cli_task_member() {
-    char line_buffer[MAX_INPUT_SIZE];
-
-    // Small delay to ensure UART driver is fully initialized and ready,
-    // and to allow other boot messages to print first.
-    vTaskDelay(pdMS_TO_TICKS(100));
-    printf("\nSerial CLI initialized. Type 'help' for commands.\n");
-
-    while (true) { // Main loop for CLI
-        printf(PROMPT);
-        fflush(stdout); // Ensure prompt is displayed
-        
-        int pos = 0;
-        memset(line_buffer, 0, sizeof(line_buffer));
-
-        while (true) {
-            const int c = getchar();
-
-            if (c == EOF) {
-                vTaskDelay(pdMS_TO_TICKS(10));
-                continue;
-            }
-
-            if (c == '\n' || c == '\r') {
-                line_buffer[pos] = '\0'; // Null-terminate the command
-                printf("\n");            // Echo newline to the terminal
-                fflush(stdout);
-
-                if (pos > 0) {
-                    process_command(line_buffer);
-                }
-                break; // Exit inner loop, will go to next_command_prompt via outer loop's structure
-            }
-
-            if (c == '\b' || c == 127) { // Handle backspace (ASCII BS or DEL)
-                if (pos > 0) {
-                    pos--;
-                    printf("\b \b"); // Erase character on terminal: move cursor back, print space, move cursor back
-                    fflush(stdout);
-                }
-            } else if (isprint(c)) {
-                if (pos < (MAX_INPUT_SIZE - 1)) {
-                    line_buffer[pos++] = static_cast<char>(c);
-                    putchar(c); // Echo character to the terminal
-                    fflush(stdout);
-                } else {
-                    // Buffer is full, ignore character. Optionally, ring bell (putchar('\a');)
-                }
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
 }
 
 void SerialCli::process_command(char* line) {
@@ -164,9 +100,7 @@ void SerialCli::process_command(char* line) {
         printf("Type 'erase_nvs_confirm' to proceed.\n");
     } else if (strcmp(line, "erase_nvs_confirm") == 0) {
         printf("Erasing NVS...\n");
-        esp_err_t err = nvs_flash_erase();
-
-        if (err == ESP_OK) {
+        if (const esp_err_t err = nvs_flash_erase(); err == ESP_OK) {
             printf("NVS erased successfully. Rebooting...\n");
         } else {
             printf("Error erasing NVS: %s. Rebooting anyway...\n", esp_err_to_name(err));
@@ -191,4 +125,68 @@ void SerialCli::process_command(char* line) {
         printf("Unknown command: '%s'. Type 'help'.\n", line);
     }
     // If line is empty (only enter pressed), do nothing, just loop for new prompt.
+}
+
+void SerialCli::cli_task_trampoline(void* arg) {
+    if (auto* self = static_cast<SerialCli*>(arg)) {
+        self->cli_task_member();
+    } else {
+        ESP_LOGE(TAG, "cli_task_trampoline received null argument");
+        vTaskDelete(nullptr); // Delete self if arg is null
+    }
+}
+
+// ReSharper disoble once CppDFAUnreachableFunctionCall
+void SerialCli::cli_task_member() {
+    char line_buffer[MAX_INPUT_SIZE];
+
+    // Small delay to ensure UART driver is fully initialized and ready,
+    // and to allow other boot messages to print first.
+    vTaskDelay(pdMS_TO_TICKS(100));
+    printf("\nSerial CLI initialized. Type 'help' for commands.\n");
+
+    while (true) { // Main loop for CLI
+        printf(PROMPT);
+        fflush(stdout); // Ensure prompt is displayed
+
+        int pos = 0;
+        memset(line_buffer, 0, sizeof(line_buffer));
+
+        while (true) {
+            const int c = getchar();
+
+            if (c == EOF) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+
+            if (c == '\n' || c == '\r') {
+                line_buffer[pos] = '\0'; // Null-terminate the command
+                printf("\n");            // Echo newline to the terminal
+                fflush(stdout);
+
+                if (pos > 0) {
+                    process_command(line_buffer);
+                }
+                break; // Exit inner loop, will go to next_command_prompt via outer loop's structure
+            }
+
+            if (c == '\b' || c == 127) { // Handle backspace (ASCII BS or DEL)
+                if (pos > 0) {
+                    pos--;
+                    printf("\b \b"); // Erase character on terminal: move cursor back, print space, move cursor back
+                    fflush(stdout);
+                }
+            } else if (isprint(c)) {
+                if (pos < (MAX_INPUT_SIZE - 1)) {
+                    line_buffer[pos++] = static_cast<char>(c);
+                    putchar(c); // Echo character to the terminal
+                    fflush(stdout);
+                } else {
+                    // Buffer is full, ignore character. Optionally, ring bell (putchar('\a');)
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }
