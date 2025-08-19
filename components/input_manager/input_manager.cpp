@@ -1,10 +1,9 @@
 #include "input_manager.h"
-#include "kc868_a16_hw.h" // For accessing KC868-A16 hardware functions
+#include "antenna_switch.h"
 #include "esp_log.h"
-#include "antenna_switch.h" // For AntennaSwitch::instance() and its callbacks
-#include "config_manager.h" // For ConfigManager::instance().get_config()
+#include "kc868_a16_hw.h"
 
-static const char* TAG = "InputManager";
+static auto TAG = "InputManager";
 
 // Helper function to determine the logical state of a PTT input
 // and report the physical state of the PCF8574 pin for logging.
@@ -14,9 +13,12 @@ static bool determine_ptt_logical_state(
     const uint16_t all_inputs_mask,             // The raw mask from kc868_a16_get_all_inputs()
     bool* out_pcf8574_pin_physically_low        // Output: true if the PCF8574 pin for this input is physically low
 ) {
-    // all_inputs_mask bit is '1' if PCF8574 physical pin is LOW (due to inversion in kc868_a16_get_all_inputs).
-    // all_inputs_mask bit is '0' if PCF8574 physical pin is HIGH.
-    *out_pcf8574_pin_physically_low = (all_inputs_mask & (1 << configured_pin_index)) != 0;
+    // For kc868_a16_get_inputs_0_7_raw, all_inputs_mask contains raw PCF8574 data for pins 0-7:
+    // - A bit value of '0' means the corresponding PCF8574 physical pin is LOW.
+    // - A bit value of '1' means the corresponding PCF8574 physical pin is HIGH.
+    
+    // Check if the specific bit for configured_pin_index in all_inputs_mask is '0' (LOW)
+    *out_pcf8574_pin_physically_low = ((all_inputs_mask >> configured_pin_index) & 0x01) == 0;
     const bool pcf8574_pin_physically_high = !(*out_pcf8574_pin_physically_low);
 
     // The KC868-A16 input circuit relationship:
@@ -47,7 +49,15 @@ InputManager& InputManager::instance() {
     return *instance_;
 }
 
-InputManager::InputManager() : initialized_(false), ptt_poll_task_handle_(nullptr), ptt_a_last_hw_state_(false), ptt_b_last_hw_state_(false) {
+InputManager::InputManager() : 
+    initialized_(false), 
+    ptt_poll_task_handle_(nullptr), 
+    ptt_a_last_hw_state_(false), 
+    ptt_b_last_hw_state_(false),
+    ptt_input_radio_a_config_(-1),
+    ptt_input_radio_a_active_high_config_(false),
+    ptt_input_radio_b_config_(-1),
+    ptt_input_radio_b_active_high_config_(false) {
 }
 
 esp_err_t InputManager::init() {
@@ -71,12 +81,12 @@ esp_err_t InputManager::init() {
     // The pins on PCF8574 are quasi-bidirectional and default to high-impedance inputs when read.
 
     // Create and start the PTT polling task
-    BaseType_t task_created = xTaskCreate(
+    const BaseType_t task_created = xTaskCreate(
         ptt_poll_task_trampoline,
         "ptt_poll_task",
         4096,
         this,
-        configMAX_PRIORITIES - 2, // Increased priority
+        configMAX_PRIORITIES - 3, // Increased priority
         &ptt_poll_task_handle_
     );
 
@@ -92,7 +102,7 @@ esp_err_t InputManager::init() {
     return ESP_OK;
 }
 
-esp_err_t InputManager::get_input_state(uint8_t input_num, bool* state) {
+esp_err_t InputManager::get_input_state(const uint8_t input_num, bool* state) {
     if (!initialized_) {
         ESP_LOGE(TAG, "InputManager not initialized.");
         return ESP_ERR_INVALID_STATE;
@@ -115,6 +125,17 @@ esp_err_t InputManager::get_all_inputs(uint16_t* state_mask) {
     return kc868_a16_get_all_inputs(state_mask);
 }
 
+void InputManager::refresh_active_ptt_config() {
+    // This call is efficient. It only re-reads from ConfigManager (and potentially NVS)
+    // if the cache is invalid or the config version has changed.
+    const auto& config = get_cached_config(); 
+
+    ptt_input_radio_a_config_ = config.ptt_input_radio_a;
+    ptt_input_radio_a_active_high_config_ = config.ptt_input_radio_a_active_high;
+    ptt_input_radio_b_config_ = config.ptt_input_radio_b;
+    ptt_input_radio_b_active_high_config_ = config.ptt_input_radio_b_active_high;
+}
+
 // Trampoline function for the FreeRTOS task
 void InputManager::ptt_poll_task_trampoline(void* arg) {
     auto* manager = static_cast<InputManager*>(arg);
@@ -123,7 +144,7 @@ void InputManager::ptt_poll_task_trampoline(void* arg) {
 
 // The actual PTT polling task implementation
 void InputManager::ptt_poll_task() {
-    uint16_t current_inputs_mask = 0;
+    uint16_t current_inputs_mask = 0; // Will store the state of pins 0-7
 
     for (;;) {
         if (!initialized_) {
@@ -131,93 +152,86 @@ void InputManager::ptt_poll_task() {
             continue;
         }
 
-        const auto& config = get_cached_config();
-        int64_t time_poll_cycle_start = esp_timer_get_time();
+        // Refresh local PTT config from cache (efficiently checks if update is needed)
+        refresh_active_ptt_config();
 
-        int64_t duration_hw_read = 0;
-        int64_t time_after_hw_read = 0; // To calculate duration_hw_read
+        uint8_t ptt_inputs_raw_0_7;
 
-        const esp_err_t ret_hw_read = kc868_a16_get_all_inputs(&current_inputs_mask);
-        time_after_hw_read = esp_timer_get_time();
-        duration_hw_read = time_after_hw_read - time_poll_cycle_start;
-
-        if (ret_hw_read == ESP_OK) {
-            // ESP_LOGV(TAG, "PTT Poll: current_inputs_mask from HW: 0x%04X", current_inputs_mask); // Verbose, keep if needed for deep debug
+        if (const esp_err_t ret_hw_read = kc868_a16_get_inputs_0_7_raw(&ptt_inputs_raw_0_7); ret_hw_read == ESP_OK) {
+            current_inputs_mask = static_cast<uint16_t>(ptt_inputs_raw_0_7);
+            // ESP_LOGV(TAG, "PTT Poll: Raw inputs 0-7: 0x%02X, current_inputs_mask: 0x%04X", ptt_inputs_raw_0_7, current_inputs_mask);
 
             // --- PTT A ---
-            if (config.ptt_input_radio_a != -1) {
+            if (ptt_input_radio_a_config_ != -1 && ptt_input_radio_a_config_ < 8) { // Ensure config is for pins 0-7
                 bool pcf8574_pin_a_physically_low;
-                int64_t time_before_determine_ptt_a = esp_timer_get_time(); 
-                
                 const bool ptt_a_logically_active = determine_ptt_logical_state(
-                    config.ptt_input_radio_a,
-                    config.ptt_input_radio_a_active_high,
-                    current_inputs_mask,
+                    ptt_input_radio_a_config_,
+                    ptt_input_radio_a_active_high_config_,
+                    current_inputs_mask, // This now correctly represents pins 0-7 for determine_ptt_logical_state
                     &pcf8574_pin_a_physically_low
                 );
-                int64_t time_after_determine_ptt_a = esp_timer_get_time();
-                int64_t duration_determine_ptt_a = time_after_determine_ptt_a - time_before_determine_ptt_a;
 
                 if (ptt_a_logically_active != ptt_a_last_hw_state_) {
-                    int64_t time_ptt_a_change_confirmed = esp_timer_get_time(); // This is the critical timestamp for the event
-
-                    // Log detailed profiling info ONLY when a change occurs for PTT A
-                    ESP_LOGD(TAG, "PROF: PTT A Change Detected!");
-                    ESP_LOGD(TAG, "PROF: kc868_a16_get_all_inputs took %lld us (measured this cycle)", duration_hw_read);
-                    ESP_LOGD(TAG, "PROF: determine_ptt_logical_state (A) took %lld us", duration_determine_ptt_a);
-                    ESP_LOGD(TAG, "PROF: PTT A change confirmed. Total time from poll cycle start to confirm: %lld us",
-                             time_ptt_a_change_confirmed - time_poll_cycle_start);
-
                     ESP_LOGV(TAG, "PTT A (Input Pin %d) logical state CHANGED to: %s. (PCF8574 pin was %s, Configured terminal active: %s)",
-                             config.ptt_input_radio_a,
+                             ptt_input_radio_a_config_,
                              ptt_a_logically_active ? "ACTIVE" : "INACTIVE",
                              pcf8574_pin_a_physically_low ? "LOW" : "HIGH",
-                             config.ptt_input_radio_a_active_high ? "HIGH" : "LOW");
-                    
+                             ptt_input_radio_a_active_high_config_ ? "HIGH" : "LOW");
+
                     AntennaSwitch::instance().on_hw_ptt_a_state_change(ptt_a_logically_active);
                     ptt_a_last_hw_state_ = ptt_a_logically_active;
                 }
+            } else if (ptt_input_radio_a_config_ >= 8) {
+                 if (ptt_a_last_hw_state_ != false) { // If it was previously active and now config is out of range
+                    ESP_LOGW(TAG, "PTT A (Input Pin %d) is configured for an unmonitored range (>=8). Forcing INACTIVE.", ptt_input_radio_a_config_);
+                    AntennaSwitch::instance().on_hw_ptt_a_state_change(false); // Report as inactive
+                    ptt_a_last_hw_state_ = false;
+                 }
             }
 
+
             // --- PTT B ---
-            if (config.ptt_input_radio_b != -1) { 
+            if (ptt_input_radio_b_config_ != -1 && ptt_input_radio_b_config_ < 8) {
                 bool pcf8574_pin_b_physically_low;
-                int64_t time_before_determine_ptt_b = esp_timer_get_time(); 
-                
                 const bool ptt_b_logically_active = determine_ptt_logical_state(
-                    config.ptt_input_radio_b,
-                    config.ptt_input_radio_b_active_high,
+                    ptt_input_radio_b_config_,
+                    ptt_input_radio_b_active_high_config_,
                     current_inputs_mask,
                     &pcf8574_pin_b_physically_low
                 );
-                int64_t time_after_determine_ptt_b = esp_timer_get_time();
-                int64_t duration_determine_ptt_b = time_after_determine_ptt_b - time_before_determine_ptt_b;
 
                 if (ptt_b_logically_active != ptt_b_last_hw_state_) {
-                    int64_t time_ptt_b_change_confirmed = esp_timer_get_time();
-
-                    // Log detailed profiling info ONLY when a change occurs for PTT B
-                    ESP_LOGD(TAG, "PROF: PTT B Change Detected!");
-                    ESP_LOGD(TAG, "PROF: kc868_a16_get_all_inputs took %lld us (measured this cycle)", duration_hw_read);
-                    ESP_LOGD(TAG, "PROF: determine_ptt_logical_state (B) took %lld us", duration_determine_ptt_b);
-                    ESP_LOGD(TAG, "PROF: PTT B change confirmed. Total time from poll cycle start to confirm: %lld us",
-                             time_ptt_b_change_confirmed - time_poll_cycle_start);
-
-                     ESP_LOGV(TAG, "PTT B (Input Pin %d) logical state CHANGED to: %s. (PCF8574 pin was %s, Configured terminal active: %s)",
-                             config.ptt_input_radio_b,
-                             ptt_b_logically_active ? "ACTIVE" : "INACTIVE",
-                             pcf8574_pin_b_physically_low ? "LOW" : "HIGH", 
-                             config.ptt_input_radio_b_active_high ? "HIGH" : "LOW");
+                    ESP_LOGD(TAG, "PTT B (Input Pin %d) logical state CHANGED to: %s. (PCF8574 pin was %s, Configured terminal active: %s)",
+                            ptt_input_radio_b_config_,
+                            ptt_b_logically_active ? "ACTIVE" : "INACTIVE",
+                            pcf8574_pin_b_physically_low ? "LOW" : "HIGH",
+                            ptt_input_radio_b_active_high_config_ ? "HIGH" : "LOW");
                     
                     AntennaSwitch::instance().on_hw_ptt_b_state_change(ptt_b_logically_active);
                     ptt_b_last_hw_state_ = ptt_b_logically_active;
                 }
+            } else if (ptt_input_radio_b_config_ >= 8) {
+                if (ptt_b_last_hw_state_ != false) { // If it was previously active and now config is out of range
+                    ESP_LOGW(TAG, "PTT B (Input Pin %d) is configured for an unmonitored range (>=8). Forcing INACTIVE.", ptt_input_radio_b_config_);
+                    AntennaSwitch::instance().on_hw_ptt_b_state_change(false); // Report as inactive
+                    ptt_b_last_hw_state_ = false;
+                }
             }
-
         } else {
-            ESP_LOGE(TAG, "Failed to read inputs in PTT poll task: %s", esp_err_to_name(ret_hw_read));
+            ESP_LOGE(TAG, "Failed to read inputs (0-7) in PTT poll task: %s", esp_err_to_name(ret_hw_read));
+            // If read fails, consider PTTs as inactive to prevent them from being stuck active
+            if (ptt_a_last_hw_state_) {
+                AntennaSwitch::instance().on_hw_ptt_a_state_change(false);
+                ptt_a_last_hw_state_ = false;
+                ESP_LOGW(TAG, "PTT A forced INACTIVE due to read error.");
+            }
+            if (ptt_b_last_hw_state_) {
+                AntennaSwitch::instance().on_hw_ptt_b_state_change(false);
+                ptt_b_last_hw_state_ = false;
+                ESP_LOGW(TAG, "PTT B forced INACTIVE due to read error.");
+            }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1)); // Poll every 1ms
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }

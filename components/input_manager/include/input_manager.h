@@ -54,8 +54,20 @@ private:
 
     bool initialized_ = false;
     TaskHandle_t ptt_poll_task_handle_ = nullptr;
-    bool ptt_a_last_hw_state_ = false; // Stores the last raw hardware state (true for high, false for low)
-    bool ptt_b_last_hw_state_ = false; // Stores the last PTT B state
+    bool ptt_a_last_hw_state_ = false; 
+    bool ptt_b_last_hw_state_ = false; 
+
+    // Locally cached PTT configuration
+    int ptt_input_radio_a_config_ = -1;
+    bool ptt_input_radio_a_active_high_config_ = false;
+    int ptt_input_radio_b_config_ = -1;
+    bool ptt_input_radio_b_active_high_config_ = false;
+
+    /**
+     * @brief Refreshes the locally cached PTT configuration settings 
+     *        from the main configuration cache if necessary.
+     */
+    void refresh_active_ptt_config();
 };
 
 #endif // INPUT_MANAGER_H
