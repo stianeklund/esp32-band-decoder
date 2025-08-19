@@ -21,6 +21,7 @@ public:
     void set_has_serial_data(bool has_data);
     [[nodiscard]] uint32_t get_current_frequency() const;
     [[nodiscard]] bool is_transmitting() const { return is_transmitting_; }
+    [[nodiscard]] bool has_serial_data() const { return has_serial_data_; }
 
 private:
     MQTTClient();

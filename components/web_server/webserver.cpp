@@ -20,6 +20,7 @@
 // Headers with class interfaces
 #include "antenna_switch.h"
 #include "cat_parser.h"
+#include "my_mqtt_client.h"
 
 static const char* TAG = "WEBSERVER";
 
@@ -162,6 +163,19 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
         ("Antenna " + std::to_string(active_antenna_a_num)).c_str() : "None");
     cJSON_AddBoolToObject(root, "transmitting", is_transmitting);
     
+    // Determine data source for Radio A
+    bool has_serial_data = MQTTClient::instance().has_serial_data();
+    bool mqtt_enabled = config.mqtt_enabled;
+    bool mqtt_has_frequency = MQTTClient::instance().get_current_frequency() > 0;
+    
+    const char* data_source_a = "None";
+    if (has_serial_data) {
+        data_source_a = "Serial";
+    } else if (mqtt_enabled && mqtt_has_frequency) {
+        data_source_a = "MQTT";
+    }
+    cJSON_AddStringToObject(root, "data_source", data_source_a);
+    
     std::vector<int> available_antennas_a;
 
     if (current_freq > 0) { // Only if frequency is known for Radio A
@@ -203,6 +217,11 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
         constexpr auto is_transmitting_b = false;
         cJSON_AddNumberToObject(root, "frequency_b", current_freq_b);
         cJSON_AddBoolToObject(root, "transmitting_b", is_transmitting_b);
+        
+        // For now, Radio B uses the same data source determination as Radio A
+        // This could be different if Radio B had a separate CAT interface
+        const char* data_source_b = data_source_a;
+        cJSON_AddStringToObject(root, "data_source_b", data_source_b);
 
         // Placeholder for available_antennas_b. This will be empty until current_freq_b is known.
 

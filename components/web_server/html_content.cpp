@@ -504,6 +504,7 @@ std::string HtmlContent::generate_root_html(const antenna_switch_config_t &confi
     ss << "<table>";
     ss << "<tr><th>Frequency</th><td id='current-frequency'>Updating...</td></tr>";
     ss << "<tr><th>Port</th><td><span id='active-antenna'>Updating...</span></td></tr>";
+    ss << "<tr><th>Data Source</th><td><span id='data-source'>Updating...</span></td></tr>";
     ss << "</table>";
     ss << "</div>"; // End of Radio A status-box
 
@@ -514,6 +515,7 @@ std::string HtmlContent::generate_root_html(const antenna_switch_config_t &confi
         ss << "<table>";
         ss << "<tr><th>Frequency</th><td id='current-frequency-b'>Updating...</td></tr>";
         ss << "<tr><th>Port</th><td><span id='active-antenna-b'>Updating...</span></td></tr>";
+        ss << "<tr><th>Data Source</th><td><span id='data-source-b'>Updating...</span></td></tr>";
         ss << "</table>";
         ss << "</div>"; // End of Radio B status-box
     }
@@ -792,6 +794,13 @@ ss << R"(
                         document.getElementById("active-antenna").textContent = data.antenna;
                     }
 
+                    // Update data source for Radio A
+                    if (data.data_source) {
+                        document.getElementById("data-source").textContent = data.data_source;
+                    } else {
+                        document.getElementById("data-source").textContent = "Unknown";
+                    }
+
                     // Update Radio B status display if elements exist
                     const freqBElement = document.getElementById("current-frequency-b");
                     const antennaBElement = document.getElementById("active-antenna-b");
@@ -821,6 +830,16 @@ ss << R"(
                             }
                         } else {
                             antennaBElement.textContent = "None";
+                        }
+
+                        // Update data source for Radio B
+                        const dataSourceBElement = document.getElementById("data-source-b");
+                        if (dataSourceBElement) {
+                            if (data.data_source_b) {
+                                dataSourceBElement.textContent = data.data_source_b;
+                            } else {
+                                dataSourceBElement.textContent = "Unknown";
+                            }
                         }
                     }
                     
@@ -882,6 +901,15 @@ ss << R"(
                     console.error("Error:", error);
                     document.getElementById("current-frequency").textContent = "Error updating";
                     document.getElementById("active-antenna").textContent = "Error updating";
+                    document.getElementById("data-source").textContent = "Error updating";
+                    
+                    // Update Radio B error display if elements exist
+                    const freqBElement = document.getElementById("current-frequency-b");
+                    const antennaBElement = document.getElementById("active-antenna-b");
+                    const dataSourceBElement = document.getElementById("data-source-b");
+                    if (freqBElement) freqBElement.textContent = "Error updating";
+                    if (antennaBElement) antennaBElement.textContent = "Error updating";
+                    if (dataSourceBElement) dataSourceBElement.textContent = "Error updating";
                 });
         }
 
