@@ -369,8 +369,8 @@ esp_err_t CatParser::process_ai_command(const std::string_view command_payload) 
             radio_provides_auto_updates_ = false;
             ESP_LOGI(TAG, "Kenwood AI Set: Radio Auto Information OFF. CAT polling will be required for updates.");
             break;
-        case '1': // Auto Information ON (1 second interval)
-        case '2': // Auto Information ON (2 second interval)
+        case '2': // Auto Information ON
+        case '4': // Auto Information ON
             radio_provides_auto_updates_ = true;
             ESP_LOGI(TAG, "Kenwood AI Set: Radio Auto Information ON (P1=%c). CAT polling not required.", p1_val);
             break;
@@ -378,9 +378,6 @@ esp_err_t CatParser::process_ai_command(const std::string_view command_payload) 
             ESP_LOGE(TAG, "Kenwood AI Set: Invalid parameter P1='%c'. Expected '0' through '6'.", p1_val);
             return ESP_ERR_INVALID_ARG;
         }
-        // The command has been processed, and the state `radio_provides_auto_updates_` is updated.
-        // Other parts of the system can use this state to decide on polling.
-        // No direct call to AntennaSwitch auto_mode, as Kenwood AI is about radio data reporting.
         return ESP_OK;
     }
     
@@ -397,6 +394,7 @@ std::from_chars_result CatParser::get_from_chars_result(const std::string_view c
 }
 
 // ReSharper disable once CppMemberFunctionMayBeStatic
+// CUSTOM CAT command
 esp_err_t CatParser::process_ap_command(const std::string_view command) {
     unsigned long ports_val;
     const auto end_ptr = command.data() + command.length();
@@ -440,32 +438,31 @@ void CatParser::handle_frequency_update(const uint32_t frequency) {
     handle_frequency_change(frequency);
 }
 
-// Public C-string version calls the string_view version
 esp_err_t CatParser::process_command(const char *command_cstr) {
     if (!command_cstr) {
         return ESP_ERR_INVALID_ARG;
     }
-    return process_command(std::string_view(command_cstr)); // Call the string_view version
+    return process_command(std::string_view(command_cstr));
 }
 
-// New core process_command implementation
 esp_err_t CatParser::process_command(std::string_view commands_str_with_semicolons) {
     size_t start_pos = 0;
-    esp_err_t first_error = ESP_OK; // To track the first error encountered
+    esp_err_t first_error = ESP_OK;
 
     while (start_pos < commands_str_with_semicolons.length()) {
         size_t end_pos = commands_str_with_semicolons.find(';', start_pos);
         std::string_view command_content;
 
-        if (end_pos == std::string_view::npos) { // No more semicolons, process the rest
+        if (end_pos == std::string_view::npos) {
             command_content = commands_str_with_semicolons.substr(start_pos);
             start_pos = commands_str_with_semicolons.length(); // Mark as consumed
-        } else { // Semicolon found
+        } else {
             command_content = commands_str_with_semicolons.substr(start_pos, end_pos - start_pos);
-            start_pos = end_pos + 1; // Move past the semicolon for next iteration
+            start_pos = end_pos + 1;
         }
 
-        if (!command_content.empty()) { // Only dispatch if there's actual content
+        // Only dispatch if there's actual content
+        if (!command_content.empty()) {
             ESP_LOGV(TAG, "Dispatching from process_command: %.*s", static_cast<int>(command_content.length()), command_content.data());
             // dispatch_one_command expects the command *without* the semicolon.
             esp_err_t dispatch_ret = dispatch_one_command(command_content);
@@ -473,7 +470,7 @@ esp_err_t CatParser::process_command(std::string_view commands_str_with_semicolo
                 ESP_LOGW(TAG, "Error dispatching command '%.*s': %s",
                          static_cast<int>(command_content.length()), command_content.data(),
                          esp_err_to_name(dispatch_ret));
-                if (first_error == ESP_OK) { // Store the first error encountered
+                if (first_error == ESP_OK) {
                     first_error = dispatch_ret;
                 }
                 // Continue processing remaining commands in the string

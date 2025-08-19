@@ -21,8 +21,8 @@
 // I2C configuration
 #define I2C_MASTER_SCL_IO GPIO_NUM_5        // SCL pin
 #define I2C_MASTER_SDA_IO GPIO_NUM_4        // SDA pin
-// #define I2C_MASTER_FREQ_HZ 100000   // 100kHz
-#define I2C_MASTER_FREQ_HZ 400000   // 400kHz (technically overclocking here but it seems to be working OK)
+// #define I2C_MASTER_FREQ_HZ 100000   // 100 kHz
+#define I2C_MASTER_FREQ_HZ 400000   // 400 kHz (the PCF8574 can only do 100 kHz.. overclocking seems  to work OK)
 #define I2C_MASTER_NUM I2C_NUM_0    // I2C port number
 
 esp_err_t kc868_a16_hw_init();
@@ -32,9 +32,8 @@ esp_err_t kc868_a16_set_all_outputs(uint16_t state_mask);
 uint16_t kc868_a16_get_all_outputs();
 esp_err_t kc868_a16_get_input_state(uint8_t input_num, bool* state);
 esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask);
-esp_err_t kc868_a16_get_inputs_0_7_raw(uint8_t* data); // Get raw byte from input expander for pins 0-7
+esp_err_t kc868_a16_get_inputs_0_7_raw(uint8_t* data);
 
-// Function to scan the I2C bus and log found devices
 void kc868_a16_hw_scan_i2c_bus();
 
 #endif // KC868_A16_HW_H

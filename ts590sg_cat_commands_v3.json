@@ -1,0 +1,4132 @@
+{
+  "AC": {
+    "command": "AC",
+    "name": "Internal antenna tuner status",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "P1 controls RX path AT, P2 controls TX path AT, P3 starts/stops tuning. RX IN/THRU cannot be set; tuning will not begin if TX path is THRU; to start, set AC111.",
+    "formats": {
+      "set": "ACP1P2P3;",
+      "read": "AC;",
+      "answer": "ACP1P2P3;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "RX-AT THRU",
+          "1": "RX-AT IN"
+        },
+        "description": "Receive path AT unit state"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "TX-AT THRU",
+          "1": "TX-AT IN"
+        },
+        "description": "Transmit path AT unit state"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Stop/Stopped",
+          "1": "Start/Active"
+        },
+        "description": "Start or stop the AT tuning cycle"
+      }
+    ]
+  },
+  "AG": {
+    "command": "AG",
+    "name": "AF gain",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "P1 always 0; P2 is level 000–255.",
+    "formats": {
+      "set": "AGP1P2P2P2;",
+      "read": "AGP1;",
+      "answer": "AGP1P2P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "const",
+        "const": "0",
+        "description": "Always 0"
+      },
+      {
+        "id": "P2",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 255,
+        "unit": "steps",
+        "description": "AF volume level (000=min, 255=max)"
+      }
+    ]
+  },
+  "AI": {
+    "command": "AI",
+    "name": "Auto Information (AI) function",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "When AI is ON, the radio sends answer frames on changes. P1=4 (with backup) is supported from TS‑590S FW 2.00; on P1=2 AI is not retained across power off.",
+    "formats": {
+      "set": "AIP1;",
+      "read": "AI;",
+      "answer": "AIP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "AI OFF",
+          "2": "AI ON (no backup)",
+          "4": "AI ON (backup)"
+        },
+        "description": "Auto information mode"
+      }
+    ]
+  },
+  "AN": {
+    "command": "AN",
+    "name": "Antenna/DRV selection",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Enter only parameters you change; use 9 for 'no change'. In TS‑590SG, when DRV is configured as ANT Out, P3 shows antenna output ON/OFF. In answers P1–P3 are never 9.",
+    "formats": {
+      "set": "ANP1P2P3;",
+      "read": "AN;",
+      "answer": "ANP1P2P3;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "ANT1",
+          "1": "ANT2",
+          "9": "No change (set only)"
+        },
+        "description": "Main antenna connector selection"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "RX ANT not used",
+          "1": "RX ANT used",
+          "9": "No change (set only)"
+        },
+        "description": "Enable/disable external RX-only antenna"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Drive/Antenna Out OFF",
+          "1": "Drive/Antenna Out ON",
+          "9": "No change (set only)"
+        },
+        "description": "DRV (or Antenna Out) port enable"
+      }
+    ]
+  },
+  "AS": {
+    "command": "AS",
+    "name": "Auto Mode channel entry",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Channelized auto-mode map. Frequency is 11 digits in Hz; mode from MD table; Data mode mirrors DA. Channel frequencies must be nondecreasing; resetting all channels: set to 9.5 MHz, LSB, DATA OFF.",
+    "formats": {
+      "set": "ASP1P2P2P3P3P3P3P3P3P3P3P3P3P3P4P5;",
+      "read": "ASP1P2P2;",
+      "answer": "ASP1P2P2P3P3P3P3P3P3P3P3P3P3P3P4P5;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "const",
+        "const": "0",
+        "description": "Always 0"
+      },
+      {
+        "id": "P2",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 31,
+        "description": "Auto Mode channel number (00–31)"
+      },
+      {
+        "id": "P3",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Frequency in Hz (11 digits; pad unused high digits with 0)"
+      },
+      {
+        "id": "P4",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "1": "LSB",
+          "2": "USB",
+          "3": "CW",
+          "4": "FM",
+          "5": "AM",
+          "6": "FSK",
+          "7": "CWR",
+          "9": "FSKR"
+        },
+        "description": "Operating mode (see MD)"
+      },
+      {
+        "id": "P5",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "DATA OFF",
+          "1": "DATA ON"
+        },
+        "description": "Data mode flag (see DA)"
+      }
+    ]
+  },
+  "BC": {
+    "command": "BC",
+    "name": "Beat Cancel status",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "BCP1;",
+      "read": "BC;",
+      "answer": "BCP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "BC OFF",
+          "1": "BC1 ON",
+          "2": "BC2 ON"
+        },
+        "description": "Beat cancel mode"
+      }
+    ]
+  },
+  "CN": {
+    "command": "CN",
+    "name": "CTCSS frequency",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Tone squelch frequency table index.",
+    "formats": {
+      "set": "CNP1P1;",
+      "read": "CN;",
+      "answer": "CNP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "enum",
+        "enum": {
+          "00": "67.0",
+          "01": "69.3",
+          "02": "71.9",
+          "03": "74.4",
+          "04": "77.0",
+          "05": "79.7",
+          "06": "82.5",
+          "07": "85.4",
+          "08": "88.5",
+          "09": "91.5",
+          "10": "94.8",
+          "11": "97.4",
+          "12": "100.0",
+          "13": "103.5",
+          "14": "107.2",
+          "15": "110.9",
+          "16": "114.8",
+          "17": "118.8",
+          "18": "123.0",
+          "19": "127.3",
+          "20": "131.8",
+          "21": "136.5",
+          "22": "141.3",
+          "23": "146.2",
+          "24": "151.4",
+          "25": "156.7",
+          "26": "162.2",
+          "27": "167.9",
+          "28": "173.8",
+          "29": "179.9",
+          "30": "186.2",
+          "31": "192.8",
+          "32": "203.5",
+          "33": "206.5",
+          "34": "210.7",
+          "35": "218.1",
+          "36": "225.7",
+          "37": "229.1",
+          "38": "233.6",
+          "39": "241.8",
+          "40": "250.3",
+          "41": "254.1"
+        },
+        "description": "CTCSS frequency table index; values map to Hz list"
+      }
+    ]
+  },
+  "CT": {
+    "command": "CT",
+    "name": "CTCSS / Cross Tone function state",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "If Tone or CTCSS is ON when Cross Tone is turned ON, they automatically turn OFF.",
+    "formats": {
+      "set": "CTP1;",
+      "read": "CT;",
+      "answer": "CTP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "CTCSS OFF",
+          "1": "CTCSS ON",
+          "2": "Cross Tone ON"
+        },
+        "description": "CTCSS control"
+      }
+    ]
+  },
+  "DA": {
+    "command": "DA",
+    "name": "DATA mode flag",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Usable in LSB/USB/FM/AM; using in CW/FSK causes error. When read in non-DATA mode, P1 is always 0.",
+    "formats": {
+      "set": "DAP1;",
+      "read": "DA;",
+      "answer": "DAP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "DATA OFF",
+          "1": "DATA ON"
+        },
+        "description": "Enable/disable DATA mode"
+      }
+    ]
+  },
+  "DN": {
+    "command": "DN",
+    "name": "Frequency/Channel down (MIC DWN)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "P1 means one step down; with P1 set (01–99) adjusts by that many steps. In Memory/Quick Memory mode with no P1 acts as channel down.",
+    "formats": {
+      "set": "DNP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 99,
+        "description": "Step count (00–99); 00 is no-op"
+      }
+    ]
+  },
+  "UP": {
+    "command": "UP",
+    "name": "Frequency/Channel up (MIC UP)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "P1 means one step up; with P1 set (01–99) adjusts by that many steps. In Memory/Quick Memory mode with no P1 acts as channel up.",
+    "formats": {
+      "set": "UPP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 99,
+        "description": "Step count (00–99); 00 is no-op"
+      }
+    ]
+  },
+  "EM": {
+    "command": "EM",
+    "name": "Emergency communication frequency mode",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "No parameters. Switches to emergency frequency. Not available on E-market versions.",
+    "formats": {
+      "set": "EM;"
+    },
+    "params": []
+  },
+  "EQ": {
+    "command": "EQ",
+    "name": "Equalizer type/mode/curve",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "TS‑590S supports from FW 2.00. TX EQ cannot be changed from OFF in CW/CWR/FSK/FSKR modes.",
+    "formats": {
+      "set": "EQP1P2P3;",
+      "read": "EQP1P2;",
+      "answer": "EQP1P2P3;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "TX EQ",
+          "1": "RX EQ"
+        },
+        "description": "Equalizer target"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "SSB",
+          "1": "SSB-DATA",
+          "2": "CW/CW-R",
+          "3": "FM",
+          "4": "FM-DATA",
+          "5": "AM",
+          "6": "AM-DATA",
+          "7": "FSK/FSK-R"
+        },
+        "description": "Operating mode"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "HB1",
+          "2": "HB2",
+          "3": "FP",
+          "4": "BB1",
+          "5": "BB2",
+          "6": "C (TX)/FLAT (RX)",
+          "7": "U (USER)"
+        },
+        "description": "EQ curve selection"
+      }
+    ]
+  },
+  "EX": {
+    "command": "EX",
+    "name": "Extended menu item access (TS-590SG)",
+    "availability": "TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Extended menu item access. Menu number (000-099) + 4 zeros for READ, menu number + 4 zeros + value for SET/ANSWER. Values may be zero-padded (e.g., '05') or unpadded (e.g., '5') - both are valid. Command type determined by source: Local with value = SET, Remote with value = ANSWER. See 'TS-590SG EX Command Parameter List.json' for menu-specific parameters.",
+    "formats": {
+      "set": "EX[menu][0000][value];",
+      "read": "EX[menu][0000];",
+      "answer": "EX[menu][0000][value];"
+    },
+    "examples": {
+      "read": "EX0060000;",
+      "set_local": "EX006000005;",
+      "answer_remote": "EX006000005;"
+    },
+    "params": [
+      {
+        "id": "menu",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 99,
+        "description": "Menu number (000-099), zero-padded 3 digits"
+      },
+      {
+        "id": "padding",
+        "width": 4,
+        "type": "const",
+        "const": "0000",
+        "description": "Always '0000' - separates menu from value"
+      },
+      {
+        "id": "value",
+        "width": "var",
+        "type": "string",
+        "optional": true,
+        "description": "Menu value (omitted for READ). May be zero-padded (e.g., '05') or unpadded (e.g., '5'). Maximum 8 characters. Valid values depend on specific menu item."
+      }
+    ],
+    "parsing_notes": [
+      "Total parameter length 7 chars (menu + '0000') = READ command",
+      "Total parameter length 8+ chars = SET (local source) or ANSWER (remote source)",
+      "Numeric values accept both zero-padded ('01', '05') and unpadded ('1', '5') formats",
+      "Parameter validation should compare numeric values, not exact string matches"
+    ]
+  },
+  "FA": {
+    "command": "FA",
+    "name": "VFO A frequency",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "FAP1P1P1P1P1P1P1P1P1P1P1;",
+      "read": "FA;",
+      "answer": "FAP1P1P1P1P1P1P1P1P1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "11-digit absolute frequency; pad with leading zeros"
+      }
+    ]
+  },
+  "FB": {
+    "command": "FB",
+    "name": "VFO B frequency",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "FBP1P1P1P1P1P1P1P1P1P1P1;",
+      "read": "FB;",
+      "answer": "FBP1P1P1P1P1P1P1P1P1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "11-digit absolute frequency; pad with leading zeros"
+      }
+    ]
+  },
+  "FL": {
+    "command": "FL",
+    "name": "IF filter select",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "FLP1;",
+      "read": "FL;",
+      "answer": "FLP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "1": "IF Filter A",
+          "2": "IF Filter B"
+        },
+        "description": "Select stored IF filter A/B"
+      }
+    ]
+  },
+  "FR": {
+    "command": "FR",
+    "name": "Select VFO/Memory (simplex)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "FR P1=0/1/2 selects VFO A/B or Memory; FT supports 0/1 only and forces split.",
+    "formats": {
+      "set": "FRP1;",
+      "read": "FR;",
+      "answer": "FRP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "VFO A",
+          "1": "VFO B",
+          "2": "Memory Channel (FR only)"
+        },
+        "description": "Target oscillator or memory"
+      }
+    ]
+  },
+  "FT": {
+    "command": "FT",
+    "name": "Select VFO (split)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "FR P1=0/1/2 selects VFO A/B or Memory; FT supports 0/1 only and forces split.",
+    "formats": {
+      "set": "FTP1;",
+      "read": "FT;",
+      "answer": "FTP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "VFO A",
+          "1": "VFO B",
+          "2": "Memory Channel (FR only)"
+        },
+        "description": "Target oscillator or memory"
+      }
+    ]
+  },
+  "FS": {
+    "command": "FS",
+    "name": "Fine Tuning function",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "FSP1;",
+      "read": "FS;",
+      "answer": "FSP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "Enable/disable Fine Tuning function"
+      }
+    ]
+  },
+  "FV": {
+    "command": "FV",
+    "name": "Firmware version readback",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "read": "FV;",
+      "answer": "FVP1P1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": "4",
+        "type": "string",
+        "description": "ASCII firmware version string, e.g., 'FV1.00;'. Returned only."
+      }
+    ]
+  },
+  "FW": {
+    "command": "FW",
+    "name": "DSP filter bandwidth / FM narrow flag",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "P1 is bandwidth in Hz for CW and FSK from specific allowed lists. In FM: P1=0000 (Normal) or 0001 (Narrow). Not usable in SSB/AM.",
+    "formats": {
+      "set": "FWP1P1P1P1;",
+      "read": "FW;",
+      "answer": "FWP1P1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 4,
+        "type": "number",
+        "unit": "Hz",
+        "description": "See mode-specific allowed values. CW: 0050, 0080, 0100, 0150, 0200, 0250, 0300, 0400, 0500, 0600, 1000, 1500, 2000, 2500 FSK: 0250, 0500, 1000, 1500 FM: 0000 (Normal), 0001 (Narrow)"
+      }
+    ]
+  },
+  "GC": {
+    "command": "GC",
+    "name": "AGC mode",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "P1=3 turns AGC from OFF back to its previous Slow/Fast status; has no effect when AGC already ON. Not available in FM.",
+    "formats": {
+      "set": "GCP1;",
+      "read": "GC;",
+      "answer": "GCP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "AGC OFF",
+          "1": "AGC Slow",
+          "2": "AGC Fast",
+          "3": "AGC Off→On (restore previous)"
+        },
+        "description": "AGC state/mode"
+      }
+    ]
+  },
+  "GT": {
+    "command": "GT",
+    "name": "AGC time constant",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Valid 01–20. Not readable if AGC is OFF or in FM.",
+    "formats": {
+      "set": "GTP1P1;",
+      "read": "GT;",
+      "answer": "GTP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 1,
+        "max": 20,
+        "unit": "steps",
+        "description": "AGC decay setting (01–20)"
+      }
+    ]
+  },
+  "ID": {
+    "command": "ID",
+    "name": "Transceiver ID",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "read": "ID;",
+      "answer": "IDP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "enum",
+        "enum": {
+          "021": "TS-590S",
+          "023": "TS-590SG"
+        },
+        "description": "Model code"
+      }
+    ]
+  },
+  "IF": {
+    "command": "IF",
+    "name": "Transceiver status",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "Comprehensive status frame. Not available in Data mode; AI causes auto answers on certain changes.",
+    "formats": {
+      "read": "IF;",
+      "answer": "IFP1P1P1P1P1P1P1P1P1P1P1P2P2P2P2P2P3P3P3P3P3P4P5P6P7P7P8P9P10P11P12P13P14P15;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Displayed frequency (11 digits)"
+      },
+      {
+        "id": "P2",
+        "width": 5,
+        "type": "spaces",
+        "description": "5 spaces"
+      },
+      {
+        "id": "P3",
+        "width": 5,
+        "type": "signed",
+        "unit": "Hz",
+        "description": "RIT/XIT offset (±9990 Hz). A positive offset has one whitespace and 4 digits. A negative offset has a `-` preceeding the 4 digit offset"
+      },
+      {
+        "id": "P4",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "RIT OFF",
+          "1": "RIT ON"
+        },
+        "description": "RIT status"
+      },
+      {
+        "id": "P5",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "XIT OFF",
+          "1": "XIT ON"
+        },
+        "description": "XIT status"
+      },
+      {
+        "id": "P6",
+        "width": 1,
+        "type": "number",
+        "description": "Memory channel (hundreds digit) 0-9"
+      },
+      {
+        "id": "P7",
+        "width": 2,
+        "type": "alias",
+        "description": "(combined with P6 to form channel number, two digits), e.g. 31, together with P6 it becomes 031"
+      },
+      {
+        "id": "P8",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "RX",
+          "1": "TX"
+        },
+        "description": "TX/RX state"
+      },
+      {
+        "id": "P9",
+        "width": 1,
+        "type": "enum",
+        "description": "Operating mode (see MD)"
+      },
+      {
+        "id": "P10",
+        "width": 1,
+        "type": "enum",
+        "description": "VFO/Memory selection (see FR/FT)"
+      },
+      {
+        "id": "P11",
+        "width": 1,
+        "type": "enum",
+        "description": "Scan status (see SC)"
+      },
+      {
+        "id": "P12",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Simplex",
+          "1": "Split"
+        },
+        "description": "Simplex/Split"
+      },
+      {
+        "id": "P13",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "Tone ON",
+          "2": "CTCSS ON",
+          "3": "Cross Tone ON"
+        },
+        "description": "Tone/CTCSS state"
+      },
+      {
+        "id": "P14",
+        "width": 2,
+        "type": "number",
+        "description": "Tone/CTCSS frequency index (see TN/CN)"
+      },
+      {
+        "id": "P15",
+        "width": 1,
+        "type": "const",
+        "const": "0",
+        "description": "Always 0"
+      }
+    ]
+  },
+  "MD": {
+    "command": "MD",
+    "name": "Operating mode",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "MDP1;",
+      "read": "MD;",
+      "answer": "MDP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "None (setting failure)",
+          "1": "LSB",
+          "2": "USB",
+          "3": "CW",
+          "4": "FM",
+          "5": "AM",
+          "6": "FSK",
+          "7": "CW-R",
+          "8": "None (setting failure)",
+          "9": "FSK-R"
+        },
+        "description": "Operating mode selector"
+      }
+    ]
+  },
+  "MF": {
+    "command": "MF",
+    "name": "Menu bank select",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "MFP1;",
+      "read": "MF;",
+      "answer": "MFP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Menu A",
+          "1": "Menu B"
+        },
+        "description": "Select active menu bank"
+      }
+    ]
+  },
+  "MG": {
+    "command": "MG",
+    "name": "Microphone gain",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "MGP1P1P1;",
+      "read": "MG;",
+      "answer": "MGP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 100,
+        "unit": "steps",
+        "description": "Mic gain (000–100)"
+      }
+    ]
+  },
+  "MK": {
+    "command": "MK",
+    "name": "Mode key operation (virtual)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "MKP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "LSB/USB key",
+          "1": "CW/FSK key",
+          "2": "FM/AM key",
+          "3": "CW/-R key",
+          "4": "FSK/-R key"
+        },
+        "description": "Simulate front-panel mode-key press"
+      }
+    ]
+  },
+  "ML": {
+    "command": "ML",
+    "name": "TX Monitor output level",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "000=OFF; TS-590S range 001–009; TS-590SG 001–020. Values above max clamp to max.",
+    "formats": {
+      "set": "MLP1P1P1;",
+      "read": "ML;",
+      "answer": "MLP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 20,
+        "unit": "steps",
+        "description": "TX Monitor level (model dependent max)"
+      }
+    ]
+  },
+  "MR": {
+    "command": "MR",
+    "name": "Memory channel read",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "P1 distinguishes simplex/split or start/end for section channels. Empty memories return zeros; name blank.",
+    "formats": {
+      "read": "MRP1P2P3P3;",
+      "answer": "MRP1P2P3P3P4P4P4P4P4P4P4P4P4P4P4P5P6P7P8P9P10P10P10P11P12P13P13P13P13P13P13P13P13P13P14P14P15P16P16P16P16P16P16P16P16;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Simplex",
+          "1": "Split"
+        },
+        "description": "Split or simplex operation"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "number",
+        "description": "Memory channel hundreds digit"
+      },
+      {
+        "id": "P3",
+        "width": 2,
+        "type": "number",
+        "description": "Memory channel last two digits"
+      },
+      {
+        "id": "P4",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Frequency"
+      },
+      {
+        "id": "P5",
+        "width": 1,
+        "type": "enum",
+        "description": "Mode (see MD)"
+      },
+      {
+        "id": "P6",
+        "width": 1,
+        "type": "enum",
+        "description": "Data mode (see DA)"
+      },
+      {
+        "id": "P7",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "TONE/CTCSS OFF",
+          "1": "TONE ON",
+          "2": "CTCSS ON",
+          "3": "Cross Tone ON"
+        },
+        "description": "Tone system"
+      },
+      {
+        "id": "P8",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 42,
+        "description": "Tone frequency index (TN)"
+      },
+      {
+        "id": "P9",
+        "width": 2,
+        "min": 0,
+        "max": 42,
+        "type": "number",
+        "description": "CTCSS frequency index (CN)"
+      },
+      {
+        "id": "P10",
+        "width": 3,
+        "type": "const",
+        "const": "000",
+        "description": "Always 000"
+      },
+      {
+        "id": "P11",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "FILTER A",
+          "1": "FILTER B"
+        },
+        "description": "Filter A/B for stored mode (always 0 on early TS-590S FW 1.xx)"
+      },
+      {
+        "id": "P12",
+        "width": 1,
+        "type": "const",
+        "const": "0",
+        "description": "Always 0"
+      },
+      {
+        "id": "P13",
+        "width": 9,
+        "type": "const",
+        "const": "000000000",
+        "description": "Always 000000000"
+      },
+      {
+        "id": "P14",
+        "width": 2,
+        "type": "enum",
+        "enum": {
+          "00": "FM Normal",
+          "01": "FM Narrow"
+        },
+        "description": "FM width"
+      },
+      {
+        "id": "P15",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Channel Lockout OFF",
+          "1": "Channel Lockout ON"
+        },
+        "description": "Channel lockout flag"
+      },
+      {
+        "id": "P16",
+        "width": "var",
+        "type": "string",
+        "maxlen": 8,
+        "description": "Memory name (up to 8 ASCII)"
+      }
+    ]
+  },
+  "NR": {
+    "command": "NR",
+    "name": "Noise Reduction mode",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "NRP1;",
+      "read": "NR;",
+      "answer": "NRP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "NR OFF",
+          "1": "NR1 ON",
+          "2": "NR2 ON"
+        },
+        "description": "Noise Reduction selection"
+      }
+    ]
+  },
+  "NT": {
+    "command": "NT",
+    "name": "Notch Filter",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "P2 (bandwidth) meaningful only when P1=2 (Manual). In answers, P2 is 0 unless P1=2.",
+    "formats": {
+      "set": "NTP1P2;",
+      "read": "NT;",
+      "answer": "NTP1P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Notch OFF",
+          "1": "Auto Notch",
+          "2": "Manual Notch"
+        },
+        "description": "Notch mode"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Normal (manual)",
+          "1": "Wide (manual)"
+        },
+        "description": "Manual Notch bandwidth (only with P1=2)"
+      }
+    ]
+  },
+  "PA": {
+    "command": "PA",
+    "name": "Pre‑amplifier",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "PAP1;",
+      "read": "PA;",
+      "answer": "PAP1P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "Preamp enable"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "const",
+        "const": "0",
+        "description": "Always 0 in answer"
+      }
+    ]
+  },
+  "PB": {
+    "command": "PB",
+    "name": "Voice/CW message playback",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "P2 gives playback channel (1–4 or 5=constant). P3–P5 return queue buffer states.",
+    "formats": {
+      "set": "PBP1;",
+      "read": "PB;",
+      "answer": "PBP2P3P4P5;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Stop playback",
+          "1": "Play CH1",
+          "2": "Play CH2",
+          "3": "Play CH3",
+          "4": "Play CH4",
+          "5": "Play constant recording"
+        },
+        "description": "Playback action"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "1": "Channel 1",
+          "2": "Channel 2",
+          "3": "Channel 3",
+          "4": "Channel 4",
+          "5": "Constant recorded sound"
+        },
+        "description": "Playback channel (answer only)"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "None",
+          "1": "CH1",
+          "2": "CH2",
+          "3": "CH3",
+          "4": "CH4",
+          "5": "Constant"
+        },
+        "description": "Queue buffer #1 (answer)"
+      },
+      {
+        "id": "P4",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "None",
+          "1": "CH1",
+          "2": "CH2",
+          "3": "CH3",
+          "4": "CH4",
+          "5": "Constant"
+        },
+        "description": "Queue buffer #2 (answer)"
+      },
+      {
+        "id": "P5",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "None",
+          "1": "CH1",
+          "2": "CH2",
+          "3": "CH3",
+          "4": "CH4",
+          "5": "Constant"
+        },
+        "description": "Queue buffer #3 (answer)"
+      }
+    ]
+  },
+  "PC": {
+    "command": "PC",
+    "name": "Sets and reads the output power",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "SSB/CW/FM/FSK: 005–100 W; AM: 005–025 W. Step 1 W when Power Fine is ON, otherwise 5 W rounded down.",
+    "formats": {
+      "set": "PCP1P1P1;",
+      "read": "PC;",
+      "answer": "PCP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 5,
+        "max": 100,
+        "unit": "W",
+        "description": "Power level (mode‑dependent max)"
+      }
+    ]
+  },
+  "PL": {
+    "command": "PL",
+    "name": "Speech Processor input/output levels",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "PLP1P1P1P2P2P2;",
+      "read": "PL;",
+      "answer": "PLP1P1P1P2P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 100,
+        "description": "Input level (000–100)"
+      },
+      {
+        "id": "P2",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 100,
+        "description": "Output level (000–100)"
+      }
+    ]
+  },
+  "PR": {
+    "command": "PR",
+    "name": "Speech Processor enable",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "PRP1;",
+      "read": "PR;",
+      "answer": "PRP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "Speech Processor state"
+      }
+    ]
+  },
+  "RG": {
+    "command": "RG",
+    "name": "RF Gain",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "RGP1P1P1;",
+      "read": "RG;",
+      "answer": "RGP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 255,
+        "unit": "steps",
+        "description": "RF Gain (000–255)"
+      }
+    ]
+  },
+  "RI": {
+    "command": "RI",
+    "name": "RX frequency and mode (read)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "AI auto-answers only on frequency changes during split TX from memory.",
+    "formats": {
+      "read": "RI;",
+      "answer": "RIP1P1P1P1P1P1P1P1P1P1P1P2P3P4P4;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "RX frequency"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "number",
+        "description": "RX mode (see MD), e.g. 1 for LSB"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "00": "DATA OFF",
+          "01": "DATA ON"
+        },
+        "description": "DATA mode flag"
+      },
+      {
+        "id": "P4",
+        "width": 2,
+        "type": "const",
+        "const": "00",
+        "description": "Always 00"
+      }
+    ]
+  },
+  "RL": {
+    "command": "RL",
+    "name": "Noise Reduction level",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "When NR1: 01–10 effective level; when NR2: 00–09 (2–20 ms) following speed. Error when NR is OFF.",
+    "formats": {
+      "set": "RLP1P1;",
+      "read": "RL;",
+      "answer": "RLP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 10,
+        "description": "NR1: 01–10 level; NR2: 00–09 SPAC speed"
+      }
+    ]
+  },
+  "RM": {
+    "command": "RM",
+    "name": "Meter function/value",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Answer always returns SWR, COMP, and ALC values.",
+    "formats": {
+      "set": "RMP1;",
+      "read": "RM;",
+      "answer": "RMP1P2P2P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "No selection",
+          "1": "SWR",
+          "2": "COMP",
+          "3": "ALC"
+        },
+        "description": "Meter type to read"
+      },
+      {
+        "id": "P2",
+        "width": 4,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Meter in dots (0000–0030)"
+      }
+    ]
+  },
+  "SD": {
+    "command": "SD",
+    "name": "CW break-in delay",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "0000=Full break‑in. 0050–1000 ms steps of 50; values round down to nearest step; >1000 clamps to 1000.",
+    "formats": {
+      "set": "SDP1P1P1P1;",
+      "read": "SD;",
+      "answer": "SDP1P1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 4,
+        "type": "number",
+        "min": 0,
+        "max": 1000,
+        "unit": "ms",
+        "description": "Time delay for break‑in"
+      }
+    ]
+  },
+  "SH": {
+    "command": "SH",
+    "name": "Receive high‑cut / Shift or Width (SSB-DATA)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "00–99; in SSB‑DATA, SH=Shift. Values above per‑mode max clamp.",
+    "formats": {
+      "set": "SHP1P1;",
+      "read": "SH;",
+      "answer": "SHP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 99,
+        "description": "Index into per‑mode tables"
+      }
+    ]
+  },
+  "SL": {
+    "command": "SL",
+    "name": "Receive low‑cut / Width (SSB-DATA)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "00–99; in SSB‑DATA, SL=Width. Values above per‑mode max clamp.",
+    "formats": {
+      "set": "SLP1P1;",
+      "read": "SL;",
+      "answer": "SLP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 99,
+        "description": "Index into per‑mode tables"
+      }
+    ]
+  },
+  "TC": {
+    "command": "TC",
+    "name": "Terminal Control",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "TC P1;",
+      "read": "TC;",
+      "answer": "TC P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Terminal Control OFF",
+          "1": "Terminal Control ON"
+        },
+        "description": "Used to indicate that the terminal is in use, for example ARCP590G sends TC 1; to the radio to indicate it has connected"
+      }
+    ]
+  },
+  "TO": {
+    "command": "TO",
+    "name": "Tone state (FM/AM)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "TOP1;",
+      "read": "TO;",
+      "answer": "TOP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Tone OFF",
+          "1": "Tone ON"
+        },
+        "description": "Tone generator state"
+      }
+    ]
+  },
+  "TP": {
+    "command": "TP",
+    "name": "TX Tune power",
+    "availability": "TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "005–100 W. Step and clamping rules same as PC.",
+    "formats": {
+      "set": "TPP1P1P1;",
+      "read": "TP;",
+      "answer": "TPP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 5,
+        "max": 100,
+        "unit": "W",
+        "description": "TX Tune power level"
+      }
+    ]
+  },
+  "TS": {
+    "command": "TS",
+    "name": "TF-Set",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Set and reads the TF-Set status",
+    "formats": {
+      "set": "TSP1;",
+      "read": "TS;",
+      "answer": "TSP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "TF-Set OFF",
+          "1": "TF-Set ON"
+        },
+        "description": "Enable/disable TF‑Set"
+      }
+    ]
+  },
+  "TX": {
+    "command": "TX",
+    "name": "Transmit control",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "If no parameter, defaults to 0 (SEND). Answer is only output when AI is ON.",
+    "formats": {
+      "set": "TXP1;",
+      "answer": "TXP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "SEND (MIC)",
+          "1": "DATA SEND (ACC2/USB)",
+          "2": "TX Tune"
+        },
+        "description": "Transmit path"
+      }
+    ]
+  },
+  "TY": {
+    "command": "TY",
+    "name": "Type",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "Undocumented CAT command",
+    "formats": {
+      "read": "TY;",
+      "answer": "TYP1P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "character",
+        "value": "K",
+        "description": "Type, K=Kenwood"
+      },
+      {
+        "id": "P2",
+        "width": 2,
+        "type": "const",
+        "const": "0",
+        "description": "Always 0"
+      }
+    ]
+  },
+
+  "UR": {
+    "command": "UR",
+    "name": "RX equalizer (18-band user levels)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Each band level range 00–30, where 06 is 0 dB; each increment = −1 dB step from 06; 30=+6 dB. Requires equalizer not OFF in menu; with AI ON, changes trigger an answer.",
+    "formats": {
+      "set": "URP1P1P2P2P3P3P4P4P5P5P6P6P7P7P8P8P9P9P10P10P11P11P12P12P13P13P14P14P15P15P16P16P17P17P18P18;",
+      "read": "UR;",
+      "answer": "URP1P1P2P2P3P3P4P4P5P5P6P6P7P7P8P8P9P9P10P10P11P11P12P12P13P13P14P14P15P15P16P16P17P17P18P18;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 0 Hz"
+      },
+      {
+        "id": "P2",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 300 Hz"
+      },
+      {
+        "id": "P3",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 600 Hz"
+      },
+      {
+        "id": "P4",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 900 Hz"
+      },
+      {
+        "id": "P5",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 1200 Hz"
+      },
+      {
+        "id": "P6",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 1500 Hz"
+      },
+      {
+        "id": "P7",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 1800 Hz"
+      },
+      {
+        "id": "P8",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 2100 Hz"
+      },
+      {
+        "id": "P9",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 2400 Hz"
+      },
+      {
+        "id": "P10",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 2700 Hz"
+      },
+      {
+        "id": "P11",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 3000 Hz"
+      },
+      {
+        "id": "P12",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 3300 Hz"
+      },
+      {
+        "id": "P13",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 3600 Hz"
+      },
+      {
+        "id": "P14",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 3900 Hz"
+      },
+      {
+        "id": "P15",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 4200 Hz"
+      },
+      {
+        "id": "P16",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 4500 Hz"
+      },
+      {
+        "id": "P17",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 4800 Hz"
+      },
+      {
+        "id": "P18",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 5100 Hz"
+      }
+    ]
+  },
+  "UT": {
+    "command": "UT",
+    "name": "TX equalizer (18-band user levels)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Each band level range 00–30, where 06 is 0 dB; each increment = −1 dB step from 06; 30=+6 dB. Requires equalizer not OFF in menu; with AI ON, changes trigger an answer.",
+    "formats": {
+      "set": "UTP1P1P2P2P3P3P4P4P5P5P6P6P7P7P8P8P9P9P10P10P11P11P12P12P13P13P14P14P15P15P16P16P17P17P18P18;",
+      "read": "UT;",
+      "answer": "UTP1P1P2P2P3P3P4P4P5P5P6P6P7P7P8P8P9P9P10P10P11P11P12P12P13P13P14P14P15P15P16P16P17P17P18P18;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 0 Hz"
+      },
+      {
+        "id": "P2",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 300 Hz"
+      },
+      {
+        "id": "P3",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 600 Hz"
+      },
+      {
+        "id": "P4",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 900 Hz"
+      },
+      {
+        "id": "P5",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 1200 Hz"
+      },
+      {
+        "id": "P6",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 1500 Hz"
+      },
+      {
+        "id": "P7",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 1800 Hz"
+      },
+      {
+        "id": "P8",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 2100 Hz"
+      },
+      {
+        "id": "P9",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 2400 Hz"
+      },
+      {
+        "id": "P10",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 2700 Hz"
+      },
+      {
+        "id": "P11",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 3000 Hz"
+      },
+      {
+        "id": "P12",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 3300 Hz"
+      },
+      {
+        "id": "P13",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 3600 Hz"
+      },
+      {
+        "id": "P14",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 3900 Hz"
+      },
+      {
+        "id": "P15",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 4200 Hz"
+      },
+      {
+        "id": "P16",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 4500 Hz"
+      },
+      {
+        "id": "P17",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 4800 Hz"
+      },
+      {
+        "id": "P18",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "description": "Band level index for 5100 Hz"
+      }
+    ]
+  },
+  "VD": {
+    "command": "VD",
+    "name": "VOX delay time",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "VDP1P1P1P1;",
+      "read": "VD;",
+      "answer": "VDP1P1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 4,
+        "type": "number",
+        "min": 0,
+        "max": 3000,
+        "unit": "ms",
+        "description": "Delay in ms (steps of 150; >3000 clamps to 3000)"
+      }
+    ]
+  },
+  "BD": {
+    "command": "BD",
+    "name": "Band select (down slot)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "While a Section Memory Channel is displayed, BD sends the start frequency of the displayed range.",
+    "formats": {
+      "set": "BDP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 10,
+        "description": "Band number; see enum"
+      },
+      {
+        "id": "P1_enum",
+        "width": 2,
+        "type": "enum",
+        "enum": {
+          "00": "1.8 MHz",
+          "01": "3.5 MHz",
+          "02": "7 MHz",
+          "03": "10 MHz",
+          "04": "14 MHz",
+          "05": "18 MHz",
+          "06": "21 MHz",
+          "07": "24 MHz",
+          "08": "28 MHz",
+          "09": "50 MHz",
+          "10": "GENE (general coverage)"
+        },
+        "description": "Band mapping"
+      }
+    ]
+  },
+  "BU": {
+    "command": "BU",
+    "name": "Band select (up slot)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "While a Section Memory Channel is displayed, BU sends the end frequency of the displayed range.",
+    "formats": {
+      "set": "BUP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 10,
+        "description": "Band number; see enum"
+      },
+      {
+        "id": "P1_enum",
+        "width": 2,
+        "type": "enum",
+        "enum": {
+          "00": "1.8 MHz",
+          "01": "3.5 MHz",
+          "02": "7 MHz",
+          "03": "10 MHz",
+          "04": "14 MHz",
+          "05": "18 MHz",
+          "06": "21 MHz",
+          "07": "24 MHz",
+          "08": "28 MHz",
+          "09": "50 MHz",
+          "10": "GENE (general coverage)"
+        },
+        "description": "Band mapping"
+      }
+    ]
+  },
+  "BP": {
+    "command": "BP",
+    "name": "Manual notch frequency",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "BPP1P1P1;",
+      "read": "BP;",
+      "answer": "BPP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 127,
+        "description": "Adjusts the Notch Frequency of the Manual Notch Filter"
+      }
+    ]
+  },
+  "BY": {
+    "command": "BY",
+    "name": "BUSY status (Sky Command)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "read": "BY;",
+      "answer": "BYP1P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Not busy",
+          "1": "Busy"
+        },
+        "description": "Busy status"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Always 0"
+        },
+        "description": "Reserved"
+      }
+    ]
+  },
+  "CA": {
+    "command": "CA",
+    "name": "CW TUNE",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "CAP1;",
+      "read": "CA;",
+      "answer": "CAP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Cancel",
+          "1": "Start"
+        },
+        "description": "Control/status"
+      }
+    ]
+  },
+  "CD0": {
+    "command": "CD0",
+    "name": "Morse code decoder (enable)",
+    "availability": "TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "CD0P1;",
+      "read": "CD0;",
+      "answer": "CD0P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "Morse Decoder state"
+      }
+    ]
+  },
+  "CD1": {
+    "command": "CD1",
+    "name": "Morse code decoder threshold",
+    "availability": "TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "CD1P1P1P1;",
+      "read": "CD1;",
+      "answer": "CD1P1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 1,
+        "max": 30,
+        "description": "Threshold level (rectified to 001–030)"
+      }
+    ]
+  },
+  "CD2": {
+    "command": "CD2",
+    "name": "Morse code decoder output (ASCII)",
+    "availability": "TS-590SG",
+    "supports": [
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "answer": "CD2P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "type": "text",
+        "min_width": 1,
+        "max_width": 2,
+        "description": "Decoded character; 1 char normally, 2 for abbreviations"
+      }
+    ]
+  },
+  "CG": {
+    "command": "CG",
+    "name": "Carrier level",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "CGP1P1P1;",
+      "read": "CG;",
+      "answer": "CGP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 100,
+        "unit": "%",
+        "description": "Carrier level"
+      }
+    ]
+  },
+  "CH": {
+    "command": "CH",
+    "name": "MULTI/CH encoder single step",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "CHP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Up one step",
+          "1": "Down one step"
+        },
+        "description": "Encoder tick"
+      }
+    ]
+  },
+  "ES": {
+    "command": "ES",
+    "name": "Sets or reads the Advanced startup option",
+    "availability": "TS-590S",
+    "supports": [],
+    "notes": "Not supported on TS-590SG.",
+    "formats": {},
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Shiftable RX during split TX"
+        },
+        "description": "Function (TS-590S)"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "State (TS-590S)"
+      }
+    ]
+  },
+  "IS": {
+    "command": "IS",
+    "name": "IF shift (CW/CW-R only)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "ISP1P2P2P2P2;",
+      "read": "IS;",
+      "answer": "ISP1P2P2P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "text",
+        "description": "Literal space (0x20)"
+      },
+      {
+        "id": "P2",
+        "width": 4,
+        "type": "number",
+        "min": 0,
+        "max": 9999,
+        "unit": "Hz",
+        "description": "Shift amount; valid only in CW/CW-R"
+      }
+    ]
+  },
+  "KS": {
+    "command": "KS",
+    "name": "Keying speed (CW)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "KSP1P1P1;",
+      "read": "KS;",
+      "answer": "KSP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 4,
+        "max": 60,
+        "unit": "WPM",
+        "description": "CW speed (clamped to 004–060)"
+      }
+    ]
+  },
+  "KY": {
+    "command": "KY",
+    "name": "Morse keyer (text / stop)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Answer P1: 0=buffer space available, 1=no buffer space",
+    "formats": {
+      "set": [
+        "KYP1P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2P2;",
+        "KYP1;"
+      ],
+      "read": "KY;",
+      "answer": "KYP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          " ": "Set1: literal space",
+          "0": "Set2: stop"
+        },
+        "description": "Control/placeholder"
+      },
+      {
+        "id": "P2",
+        "type": "text",
+        "width": 24,
+        "description": "Message text (fixed 24 characters, space-padded); A–Z, 0–9, space and symbols ' \" ( ) * + , – . / : = ? @ ; plus abbreviations BT, AR, AS, HH, SK, KN, BK, SN"
+      }
+    ]
+  },
+  "LK": {
+    "command": "LK",
+    "name": "Panel lock",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "LKP1P2;",
+      "read": "LK;",
+      "answer": "LKP1P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "Lock state"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Always 0"
+        },
+        "description": "Reserved"
+      }
+    ]
+  },
+  "LM": {
+    "command": "LM",
+    "name": "VGS-1 recorder control/status",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "LMP1P2;",
+      "read": "LM;",
+      "answer": "LMP1P2P3P3P3;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Not recording",
+          "1": "Ch1",
+          "2": "Ch2",
+          "3": "Ch3",
+          "4": "Ch4",
+          "5": "RX"
+        },
+        "description": "Target"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Stop",
+          "1": "Ready",
+          "2": "(ans) Recording",
+          "3": "Ready (rear)",
+          "4": "(ans) Recording (rear)",
+          "5": "Erase"
+        },
+        "description": "Control/status"
+      },
+      {
+        "id": "P3",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 100,
+        "description": "Remaining time or record progress (see manual)"
+      }
+    ]
+  },
+  "MC": {
+    "command": "MC",
+    "name": "Memory channel select",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "MCP1P2P2;",
+      "read": "MC;",
+      "answer": "MCP1P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "text",
+        "description": "0–9 for 00–99, space for 100–299"
+      },
+      {
+        "id": "P2",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 99,
+        "description": "Lower two digits"
+      }
+    ]
+  },
+  "MW": {
+    "command": "MW",
+    "name": "Memory write",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "Field layout mirrors MR; see MR/PR for full semantics.",
+    "formats": {
+      "set": "MWP1P2P3P3P4P4P4P4P4P4P4P4P4P4P4P5P6P7P8P8P9P10P10P10P11P12P13P13P13P13P13P13P13P13P13P14P14P15P16P16P16P16P16P16P16P16;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Simplex",
+          "1": "Split"
+        },
+        "description": "Simplex or split "
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "number",
+        "min": 0,
+        "max": 9,
+        "unit": "",
+        "description": "Channel number"
+      },
+      {
+        "id": "P3",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 99,
+        "unit": "",
+        "description": "Channel number"
+      },
+      {
+        "id": "P4",
+        "width": 11,
+        "type": "number",
+        "min": 0,
+        "unit": "Hz",
+        "description": "Frequency (11 digits in Hz)"
+      },
+      {
+        "id": "P5",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "1": "LSB",
+          "2": "USB",
+          "3": "CW",
+          "4": "FM",
+          "5": "AM",
+          "6": "FSK",
+          "7": "CWR",
+          "9": "FSKR"
+        },
+        "description": "Mode, refer to the MD command"
+      },
+      {
+        "id": "P6",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "DATA OFF",
+          "1": "DATA ON"
+        },
+        "description": "Data, refer to the DA command"
+      },
+      {
+        "id": "P7",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "TONE/CTCSS OFF",
+          "1": "TONE ON",
+          "2": "CTCSS ON",
+          "3": "Cross Tone ON"
+        },
+        "description": "Tone/CTCSS parameters"
+      },
+      {
+        "id": "P8",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 42,
+        "unit": "",
+        "description": "Tone frequency (refer to the TN command"
+      },
+      {
+        "id": "P9",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 42,
+        "unit": "",
+        "description": "CTCSS frequency (refer to the CN command)"
+      },
+      {
+        "id": "P10",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 0,
+        "unit": "",
+        "description": "Always 000"
+      },
+      {
+        "id": "P11",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "FILTER A",
+          "1": "FILTER B"
+        },
+        "unit": "",
+        "description": "Selected status of FILTER A/B (Status of FILTER A/B in the mode indicated by P5 and P6 parameters)"
+      },
+      {
+        "id": "P12",
+        "width": 1,
+        "type": "number",
+        "min": 0,
+        "max": 0,
+        "description": "Always 0"
+      },
+      {
+        "id": "P13",
+        "width": 9,
+        "type": "number",
+        "min": 0,
+        "max": 0,
+        "unit": "",
+        "description": "Always 000000000"
+      },
+      {
+        "id": "P14",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "FM Normal",
+          "1": "FM Narrow"
+        },
+        "description": "FM mode"
+      },
+      {
+        "id": "P15",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Channel Lockout OFF",
+          "1": "Channel Lockout ON"
+        }
+      },
+      {
+        "id": "P16",
+        "type": "number",
+        "min": 0,
+        "max": 9,
+        "width": 8,
+        "unit": "",
+        "description": "Memory name (up to 8 digits)"
+      }
+    ]
+  },
+  "NB": {
+    "command": "NB",
+    "name": "Noise blanker (type)",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "NBP1;",
+      "read": "NB;",
+      "answer": "NBP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "NB1 ON",
+          "2": "NB2 ON",
+          "3": "NB3 ON"
+        },
+        "description": "Noise blanker selection"
+      }
+    ]
+  },
+  "NL": {
+    "command": "NL",
+    "name": "Noise blanker level",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "NLP1P1P1;",
+      "read": "NL;",
+      "answer": "NLP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 1,
+        "max": 10,
+        "unit": "",
+        "description": "NB level (0–100) in steps of 1"
+      }
+    ]
+  },
+  "PS": {
+    "command": "PS",
+    "name": "Power control",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "When turning power Off by setting the P1 parameter to 0, more current is consumed than if you turn the power Off by operating the transceiver panel power switch. However, you can switch the power back On without any special procedures, using the PS command. When turning the power Off by setting the P1 parameter to 9, the same amount of standby current is consumed as if you turned power Off by operating the transceiver panel power switch. In this case, to turn the power back On using the PS command you must perform the following procedure: 1. When using hardware flow control, turn the flow control off, 2.Send dummy data (;). 3. Send PS1; within 2 seconds of sending the dummy data",
+    "formats": {
+      "set": "PSP1;",
+      "read": "PS;",
+      "answer": "PSP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON",
+          "9": "Power OFF (low current mode)"
+        },
+        "description": "Power state"
+      }
+    ]
+  },
+  "QD": {
+    "command": "QD",
+    "name": "Deletes the Quick Memory",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "You cannot perform this command when Quick memory mode is OFF (an error occurs)",
+    "formats": {
+      "set": "QD;"
+    }
+  },
+  "QI": {
+    "command": "QI",
+    "name": "Stores the settings in the Quick Memory",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "QI;"
+    }
+  },
+  "QR": {
+    "command": "QR",
+    "name": "Quick memory read",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "QRP1P2;",
+      "read": "QR;",
+      "answer": "QRP1P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+            "0": "Quick Memory OFF",
+            "1": "Quick Memory ON"
+        }
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "number",
+        "min": 0,
+        "max": 9,
+        "description": "Quick Memory channel number"
+      }
+    ]
+  }
+  ,
+  "RA": {
+    "command": "RA",
+    "name": "Sets and reads the RF attenuator status",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "RAP1P1;",
+      "read": "RA;",
+      "answer": "RAP1P1P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "enum",
+        "enum": {
+          "00": "ATT OFF",
+          "01": "ATT ON"
+        }
+      },
+      {
+        "id": "P2",
+        "width": 2,
+        "type": "number",
+        "notes": "only included in the answer, not a part of the set command",
+        "description": "Always 00"
+      }
+    ]
+  },
+  "RC": {
+    "command": "RC",
+    "name": "RIT/XIT clear",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "RC;"
+    },
+    "params": []
+  },
+  "RD": {
+    "command": "RD",
+    "name": "RIT down one step",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "When Scan is OFF: This command is only used for the RIT/XIT frequency. The RU command is used to increase the frequency and the RD command is used to decrease the frequency. When no value for parameter P1 is entered, the frequency is adjusted by 1 step. The RIT/XIT setting has a frequency range of +- 9.999 kHz ~ -9.999 kHz. When Scan is ON: This command is used to set or read the scan speed. When the scan speed changes, a response is returned. When no value for parameter P1 is entered, the current scan speed is retrieved. Enter “RDxxxxx;” to increase the scan speed (where “x” can be\nany character). Enter “RUxxxxx;” to increase the scan speed (where “x” can be nany character).  Enter “RDxxxxx;” to decrease the scan speed (where “x” can be any character)",
+    "formats": {
+      "set": "RDP1P1P1P1;",
+      "read": "RD;",
+      "answer": "RDP2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 5,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Frequency in Hz"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "number",
+        "min": 0,
+        "max": 9,
+        "description": "Scan speed"
+      }
+    ]
+  },
+  "RU": {
+    "command": "RU",
+    "name": "RIT down one step",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "When Scan is OFF: This command is only used for the RIT/XIT frequency. The RU command is used to increase the frequency and the RD command is used to decrease the frequency. When no value for parameter P1 is entered, the frequency is adjusted by 1 step. The RIT/XIT setting has a frequency range of +- 9.999 kHz ~ -9.999 kHz. When Scan is ON: This command is used to set or read the scan speed. When the scan speed changes, a response is returned. When no value for parameter P1 is entered, the current scan speed is retrieved. Enter “RDxxxxx;” to increase the scan speed (where “x” can be\nany character). Enter “RUxxxxx;” to increase the scan speed (where “x” can be nany character).  Enter “RDxxxxx;” to decrease the scan speed (where “x” can be any character)",
+    "formats": {
+      "read": "RU;",
+      "set": "RUP1P1P1P1;",
+      "answer": "RUP2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 5,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Frequency in Hz"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "number",
+        "min": 0,
+        "max": 9,
+        "description": "Scan speed"
+      }
+    ]
+  },
+  "RT": {
+    "command": "RT",
+    "name": "RIT on/off",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "RTP1;",
+      "read": "RT;",
+      "answer": "RTP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "RIT state"
+      }
+    ]
+  },
+  "RX": {
+    "command": "RX",
+    "name": "Sets the receiver function status",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "answer"
+    ],
+    "notes": "A response is output only when the AI function is working",
+    "formats": {
+      "read": "RX;",
+      "answer": "RX;"
+    }
+  },
+  "RS": {
+    "command": "RS",
+    "name": "Transceiver status",
+    "availability": "TS-590S/TS-590SG, TS-480",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "Undocumented CAT command",
+    "formats": {
+      "read": "RS;",
+      "answer": "RSP1"
+    },
+
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Normal",
+          "1": "Busy"
+        }
+      }
+    ]
+  },
+  "XT": {
+    "command": "XT",
+    "name": "XIT on/off",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "XTP1;",
+      "read": "XT;",
+      "answer": "XTP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "XIT state"
+      }
+    ]
+  },
+  "SC": {
+    "command": "SC",
+    "name": "Scan status/control",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "SCP1;",
+      "read": "SC;",
+      "answer": "SCP2P3;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Scan OFF",
+          "1": "Scan ON (VFO Scan, Memory Scan, Quick Memory Scan)",
+          "4": "Tone Scan ON",
+          "5": "CTCSS Scan ON"
+        },
+        "description": "Scan parameter"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Scan OFF",
+          "1": "Scan ON (VFO Scan, Memory Scan, Quick Memory Scan)",
+          "4": "Tone Scan ON",
+          "5": "CTCSS Scan ON",
+          "7": "Program Scan ON"
+        },
+        "description": "Scan parameter"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Cancel",
+          "1": "Set"
+        },
+        "description": "(0) Cancel the Slow Scan frequency point and outside Slow Scan frequency range, or (1) Set the Slow Scan frequency point and inside Slow Scan frequency range"
+      }
+    ]
+  },
+  "SP": {
+    "command": "SP",
+    "name": "Sets and reads the split operation frequency",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "SPP1;",
+      "read": "SP;",
+      "answer": "SPP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "No operation Setting complete",
+          "1": "During the setting operation Setting start.",
+          "2": "Cancel (Setting command only)"
+        },
+        "description": "Sets the split opertaion frequency"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Plus direction",
+          "1": "Minus direction"
+        },
+        "description": "Shift direction of the split operation frequency"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Plus direction",
+          "1": "Minus direction"
+        },
+        "description": "Shift direction of the split operation frequency"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "number",
+        "min": 0,
+        "max": 9,
+        "unit": "Hz",
+        "description": "Shift value of split operation frequency 1-9 kHz"
+        }
+    ]
+  },
+  "SM": {
+    "command": "SM",
+    "name": "Reads the S-meter value",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "The P2 parameter value is the number of dots dsplayed on the meter. The SM command reads the S-meter during reception and the RF (power) during transmission.",
+    "formats": {
+      "set": "SMP1;",
+      "read": "SM0;",
+      "answer": "SMP1P2P2P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "number",
+        "value": "0",
+        "description": "always 0"
+      },
+      {
+        "id": "P2",
+        "width": 4,
+        "type": "number",
+        "min": 0,
+        "max": 30,
+        "unit": "",
+        "description": "S-meter value."
+      }
+    ]
+  },
+  "SQ": {
+    "command": "SQ",
+    "name": "Squelch",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "SQP1P2P2P2;",
+      "read": "SQP1;",
+      "answer": "SQP1P2P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "number",
+        "min": 0,
+        "max": 0,
+        "description": "Always 0"
+      },
+      {
+        "id": "P2",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 255,
+        "unit": "",
+        "description": "Squelch Level (0–255), in steps of 1"
+      }
+    ]
+  },
+  "SR": {
+    "command": "SR",
+    "name": "Resets the transceiver",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "SRP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+            "0": "VFO Reset",
+            "1": "Full reset"
+        },
+        "unit": "",
+        "description": "Resets the transceiver"
+      }
+    ]
+  },
+  "SS": {
+    "command": "SS",
+    "name": "Sets and reads the Program Slow Scan Frequency",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "SSP1P2P3P3P3P3P3P3P3P3P3P3P3;",
+      "read": "SSP1P2;",
+      "answer": "SSP1P2P3P3P3P3P3P3P3P3P3P3P3;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "number",
+        "min": 0,
+        "max": 9,
+        "unit": "",
+        "description": "Memory channel number for Program Slow Scan"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "number",
+        "min": "0",
+        "max": "4",
+        "description": "Slow down frequency spot"
+      },
+      {
+        "id": "P3",
+        "width": 11,
+        "type": "number",
+        "description": "Slow down frequency (11 digits in Hz)"
+      }
+    ]
+  },
+  "SU": {
+    "command": "SU",
+    "name": "Scan Group",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "SUP1P2P3P4P5P6P7P8P9P10P11P12P13;",
+      "read": "SUP1;",
+      "answer": "SUP1P2P3P4P5P6P7P8P9P10P11P12P13;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Program scan section defined memory setting",
+          "1": "Memory Scan group setting"
+        },
+        "description": "Program scan or memory scan setting"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P0. Group 0 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P1. Group 1 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P4",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P2. Group 2 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P5",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P3. Group 3 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P6",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P4. Group 4 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P7",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P5. Group 5 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P8",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P6. Group 6 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P9",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P7. Group 7 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P10",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P8. Group 8 when setting the Memory Scan Group"
+      },{
+        "id": "P11",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "The section set in Channel P9. Group 9 when setting the Memory Scan Group"
+      },
+      {
+        "id": "P12",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "Group P when setting the Memory Scan Group or 0 when setting Program Scan Section"
+      },
+      {
+        "id": "P13",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Unselected",
+          "1": "Selected"
+        },
+        "description": "Group E when setting the Memory Scan Group or 0 when setting Program Scan Section"
+      }
+    ]
+  },
+  "SV": {
+    "command": "SV",
+    "name": "Memory Transfer",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "Performs the Memory Transfer function",
+    "formats": {
+      "set": "SV;"
+    }
+  },
+  "TN": {
+    "command": "TN",
+    "name": "Tone frequency index",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Sets and reads the Tone frequency",
+    "formats": {
+      "set": "TNP1P1;",
+      "read": "TN;",
+      "answer": "TNP1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 2,
+        "type": "number",
+        "min": 0,
+        "max": 42,
+        "unit": "",
+        "description": "Tone index (00–42)"
+      }
+    ]
+  },
+  "VR": {
+    "command": "VR",
+    "name": "Sets and reads the Vox Gain",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "The cancel status is not retained when the transceiver power is turned off. In TS-590S, the cancel status is retained when the transceiver power is turned off. In TS-590SG, Read and Answer are supported from firmware version 2.00",
+    "formats": {
+      "set": "VRP1;",
+      "read": "VR;",
+      "answer": "VRP2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Auto",
+          "1": "Voice 1",
+          "2": "Voice 2",
+          "3": "Voice 3",
+          "4": "Cancel"
+        },
+        "description": "Selection"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "VGS-1 not installed",
+          "1": "VGS-1 installed"
+        },
+        "description": "Selection"
+      }
+    ]
+  },
+  "VG": {
+    "command": "VG",
+    "name": "Sets and reads the VOX gain",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "An entered value of 010 or higher will result in 09 being entered",
+    "formats": {
+      "set": "VGP1P1P1;",
+      "read": "VG;",
+      "answer": "VGP1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 3,
+        "type": "number",
+        "min": 0,
+        "max": 9,
+        "description": "VOX gain (000–009)"
+      }
+    ]
+  },
+  "VS0": {
+    "command": "VS0",
+    "name": "Sets and reads the Visual Scan start/ stop/ pause status",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "Visual Scan will not start when the AI function is OFF. Visual Scan can only be used in VFO mode. You cannot start Visual Scan while transmitting. During Visual Scan, reception is muted and the S meter will not display signal strength. (While paused, reception and the S meter function normally.) During Visual Scan, you cannot change the band, the VFO A/B, the Memory Channel mode, or the Quick Memory Channel mode. Additonally you cannot transmit. When the transceiver power is turned OFF, Visual Scan will also turn OFF",
+    "formats": {
+      "set": "VS0P1;",
+      "read": "VS0;",
+      "answer": "VS0P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "Visual Scan OFF",
+          "1": "Visual Scan ON",
+          "2": "Visual Scan Pause",
+          "3": "Visual Scan restart (when paused) (set command only)"
+        },
+        "description": "Visual Scan status"
+      }
+    ]
+  },
+  "VS1": {
+    "command": "VS1",
+    "name": "Sets the Visual Scan center frequency",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "To read the center frequency, use the VS3; command. The center frequency is stored in each band, and can be changed using the Band Direct key. Do not enter a frequency outside the reception frequency range. An error will occur.",
+    "formats": {
+      "set": "VS1P1P1P1P1P1P1P1P1P1P1P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Center frequency (11 digits in Hz, unused high level digits are set to 0), "
+      }
+    ]
+  },
+  "VS2": {
+    "command": "VS2",
+    "name": "Sets the Visual Scan span",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "To read the span use the VS3; command. The span is stored in each band, and can be changed using the Band Direct key.",
+    "formats": {
+      "set": "VS2P1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "20 kHz (in steps of 100 Hz)",
+          "1": "50 kHz (in steps of 250 Hz)",
+          "2": "100 kHz (in steps of 500 Hz)",
+          "3": "200 kHz (in steps of 1 kHz)",
+          "4": "500 kHz (in steps of 5 kHz)",
+          "5": "1 MHz (in steps of 5 kHz)",
+          "6": "2 MHz (in steps of 10 kHz)"
+        },
+        "description": "Step size"
+      }
+    ]
+  },
+  "VS3": {
+    "command": "VS3",
+    "name": "Reads the Visual Scan upper/ lower/ center frequency, and span.",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "read": "VS3;",
+      "answer": "VS3P1P1P1P1P1P1P1P1P1P1P1P2P2P2P2P2P2P2P2P2P2P2P3P3P3P3P3P3P3P3P3P3P3P4;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Lower frequency (Hz)"
+        },
+      {
+        "id": "P2",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Center frequency (Hz)"
+      },
+      {
+        "id": "P3",
+        "width": 11,
+        "type": "number",
+        "unit": "Hz",
+        "description": "Upper frequency (Hz)"
+      },
+      {
+        "id": "P4",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "20 kHz +- 10 kHz (steps of 100Hz)",
+          "1": "50 kHz +- 25 kHz (steps of 250Hz)",
+          "2": "100 kHz +- 50 kHz (steps of 500Hz)",
+          "3": "200 kHz +- 100 kHz (steps of 1kHz)",
+          "4": "500 kHz +- 250 kHz (steps of 2.5kHz)",
+          "5": "1 MHz +- 1 MHz (steps of 5kHz)",
+          "6": "2 MHz +- 1 kHz (steps of 10kHz)"
+        },
+        "description": "Span"
+      }
+    ]
+  },
+  "VS4": {
+    "command": "VS4",
+    "name": "Reads the Visual Scan sweep frequency and signal level",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "read": "VS4;",
+      "answer": "VS4P1P1P1P1P1P1P1P1P1P1P1P2P2P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 11,
+        "type": "number",
+        "min": 0,
+        "unit": "Hz",
+        "description": "Sweep frequency"
+      },
+      {
+        "id": "P2",
+        "width": 4,
+        "type": "number",
+        "min": 0,
+        "max": 60,
+        "unit": "",
+        "description": "Signal level (0–60)"
+      }
+    ]
+  },
+  "VV": {
+    "command": "VV",
+    "name": "Performs the VFO copy (A=B) function.",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set"
+    ],
+    "notes": "",
+    "formats": {
+      "set": "VV;"
+    }
+  },
+  "VX": {
+    "command": "VX",
+    "name": "VOX on/off",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "When transmitting the VX command in CW mode, the Break-in\nfunction is set and read, rather than the VOX function.",
+    "formats": {
+      "set": "VXP1;",
+      "read": "VX;",
+      "answer": "VXP1;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+          "0": "OFF",
+          "1": "ON"
+        },
+        "description": "VOX state"
+      }
+    ]
+  },
+  "XI": {
+    "command": "XI",
+    "name": "Reads the transmit frequency and mode.",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "read": "XI;",
+      "answer": "XIP1P1P1P1P1P1P1P1P1P1P1P2P3P4P4;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 11,
+        "type": "number",
+        "description": "Frequency (11 digits in Hz)"
+      },
+      {
+        "id": "P2",
+        "width": 1,
+        "type": "number",
+        "description": "Transmission mode (refer to the MD command)"
+      },
+      {
+        "id": "P3",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+            "0": "Data mode OFF",
+            "1": "Data mode ON"
+        },
+        "description": "Data mode"
+      },
+      {
+        "id": "P4",
+        "width": 2,
+        "type": "number",
+        "description": "Always 00"
+      }
+    ]
+  },
+  "XO": {
+    "command": "XO",
+    "name": "Sets and reads the offset direction and frequency for the transverter mode",
+    "availability": "TS-590S/TS-590SG",
+    "supports": [
+      "set",
+      "read",
+      "answer"
+    ],
+    "notes": "",
+    "formats": {
+      "read": "XO;",
+      "set": "XOP1P2P2P2P2P2P2P2P2P2P2P2;",
+      "answer": "XOP1P2P2P2P2P2P2P2P2P2P2P2;"
+    },
+    "params": [
+      {
+        "id": "P1",
+        "width": 1,
+        "type": "enum",
+        "enum": {
+            "0": "Plus direction",
+            "1": "Minus direction"
+        },
+        "description": "(For the transceiver frequency, the transverter frequency can be set in either direction)"
+      },
+      {
+        "id": "P2",
+        "width": 11,
+        "type": "number",
+        "description": "Offset frequency in Hz (11 digits in Hz)"
+      }
+    ]
+  }
+}

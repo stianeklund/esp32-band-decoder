@@ -7,7 +7,7 @@
 #include "freertos/task.h"
 #include "config_cache.h"
 
-class InputManager : public ConfigCache {
+class InputManager final : public ConfigCache {
 public:
     // Singleton instance method
     static InputManager& instance();
