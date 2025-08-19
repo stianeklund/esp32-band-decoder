@@ -16,9 +16,8 @@ static uint8_t discovered_pcf8574_input_addr_for_pins_0_7 = 0;
 static uint8_t discovered_pcf8574_input_addr_for_pins_8_15 = 0;
 
 static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
-
     if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGE(TAG, "write_pcf8574 to 0x%02X (attempt 1): Failed to take I2C bus mutex", addr);
+        ESP_LOGW(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for write_pcf8574 to 0x%02X (attempt 1) after 100ms", pcTaskGetName(NULL), addr);
         return ESP_ERR_TIMEOUT;
     }
 
@@ -37,10 +36,10 @@ static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
         vTaskDelay(pdMS_TO_TICKS(10));
 
         if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-            ESP_LOGE(TAG, "write_pcf8574 to 0x%02X (attempt 2): Failed to take I2C bus mutex", addr);
+            ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for write_pcf8574 to 0x%02X (attempt 2) after 100ms", pcTaskGetName(NULL), addr);
             return ESP_ERR_TIMEOUT;
         }
-        
+
         cmd = i2c_cmd_link_create();
         i2c_master_start(cmd);
         i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
@@ -69,8 +68,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
     }
 
     if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-        // This log is okay, as it's outside the typical successful operation path
-        ESP_LOGE(TAG, "read_pcf8574 from 0x%02X (attempt 1): Failed to take I2C bus mutex", addr);
+        ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for read_pcf8574 from 0x%02X (attempt 1) after 100ms", pcTaskGetName(NULL), addr);
         return ESP_ERR_TIMEOUT;
     }
 
@@ -91,7 +89,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
 
         // --- Attempt 2 ---
         if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-            ESP_LOGE(TAG, "read_pcf8574 from 0x%02X (attempt 2): Failed to take I2C bus mutex", addr);
+            ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for read_pcf8574 from 0x%02X (attempt 2) after 100ms", pcTaskGetName(NULL), addr);
             // Return the original error or a new one indicating mutex failure on retry
             return ESP_ERR_TIMEOUT; 
         }
@@ -108,7 +106,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
 
         // --- Handle Attempt 2 Result ---
         if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "read_pcf8574 from 0x%02X succeeded on retry.", addr);
+            ESP_LOGD(TAG, "read_pcf8574 from 0x%02X succeeded on retry.", addr);
         } else {
             ESP_LOGE(TAG, "read_pcf8574 from 0x%02X failed on retry: %s", addr, esp_err_to_name(ret));
         }
@@ -123,7 +121,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
 // Helper function to check if an I2C device is present at a given address
 static bool check_i2c_device_present(const uint8_t addr) {
     if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) { // Increased timeout
-        ESP_LOGE(TAG, "check_i2c_device_present for 0x%02X: Failed to take I2C bus mutex", addr);
+        ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for check_i2c_device_present for 0x%02X after 100ms", pcTaskGetName(NULL), addr);
         return false; // Cannot check, assume not present or error
     }
 
@@ -132,7 +130,7 @@ static bool check_i2c_device_present(const uint8_t addr) {
     i2c_master_start(cmd_test);
     i2c_master_write_byte(cmd_test, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_stop(cmd_test);
-    esp_err_t test_ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd_test, pdMS_TO_TICKS(25)); // MODIFIED TIMEOUT
+    esp_err_t test_ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd_test, pdMS_TO_TICKS(25));
     i2c_cmd_link_delete(cmd_test);
 
     xSemaphoreGive(i2c_bus_mutex_);
@@ -186,7 +184,7 @@ esp_err_t kc868_a16_hw_init() {
     }
 
     // Verify Input PCF8574 expanders at their fixed/expected addresses
-    ESP_LOGI(TAG, "Verifying Input PCF8574 expanders...");
+    ESP_LOGD(TAG, "Verifying Input PCF8574 expanders...");
 
     // Assuming KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7 (0x22) and
     // KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15 (0x21) are defined in kc868_a16_hw.h or similar
@@ -198,7 +196,7 @@ esp_err_t kc868_a16_hw_init() {
             found_chip_for_0_7 = false; // Treat as not found due to conflict
         } else {
             discovered_pcf8574_input_addr_for_pins_0_7 = KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7;
-            ESP_LOGI(TAG, "Input expander for pins 0-7 (X01-X08) verified at 0x%02X.", discovered_pcf8574_input_addr_for_pins_0_7);
+            ESP_LOGD(TAG, "Input expander for pins 0-7 (X01-X08) verified at 0x%02X.", discovered_pcf8574_input_addr_for_pins_0_7);
         }
     } else {
         ESP_LOGE(TAG, "Input expander for pins 0-7 (X01-X08) NOT found at expected address 0x%02X.", KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7);
@@ -216,7 +214,7 @@ esp_err_t kc868_a16_hw_init() {
         }
         else {
             discovered_pcf8574_input_addr_for_pins_8_15 = KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15;
-            ESP_LOGI(TAG, "Input expander for pins 8-15 (X09-X16) verified at 0x%02X.", discovered_pcf8574_input_addr_for_pins_8_15);
+            ESP_LOGD(TAG, "Input expander for pins 8-15 (X09-X16) verified at 0x%02X.", discovered_pcf8574_input_addr_for_pins_8_15);
         }
     } else {
         ESP_LOGE(TAG, "Input expander for pins 8-15 (X09-X16) NOT found at expected address 0x%02X.", KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
@@ -393,6 +391,26 @@ esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask) {
     return ESP_OK;
 }
 
+esp_err_t kc868_a16_get_inputs_0_7_raw(uint8_t* data) {
+    if (data == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (discovered_pcf8574_input_addr_for_pins_0_7 == 0) {
+        ESP_LOGE(TAG, "Input expander address for pins 0-7 not initialized. Call kc868_a16_hw_init() first.");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_0_7, data);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read inputs from PCF8574 for pins 0-7 (0x%02x): %s", discovered_pcf8574_input_addr_for_pins_0_7, esp_err_to_name(ret));
+        return ret;
+    }
+    
+    ESP_LOGV(TAG, "Raw data from input expander 0-7 (0x%02X): 0x%02X", discovered_pcf8574_input_addr_for_pins_0_7, *data);
+    return ESP_OK;
+}
+
 void kc868_a16_hw_scan_i2c_bus() {
     if (!kc868_a16_initialized) {
         ESP_LOGW(TAG, "I2C bus scan: KC868-A16 hardware not fully initialized. Attempting basic I2C setup for scan...");
@@ -425,17 +443,17 @@ void kc868_a16_hw_scan_i2c_bus() {
         }
     }
 
-    ESP_LOGI(TAG, "Scanning I2C bus (addresses 0x08 to 0x77)...");
+    ESP_LOGD(TAG, "Scanning I2C bus (addresses 0x08 to 0x77)...");
     uint8_t found_count = 0;
     for (uint8_t i = 0x08; i < 0x78; i++) { // Standard 7-bit address range
         if (check_i2c_device_present(i)) {
-            ESP_LOGI(TAG, "I2C device found at address 0x%02X", i);
+            ESP_LOGD(TAG, "I2C device found at address 0x%02X", i);
             found_count++;
         }
     }
     if (found_count == 0) {
-        ESP_LOGI(TAG, "No I2C devices found on the bus.");
+        ESP_LOGW(TAG, "No I2C devices found on the bus.");
     } else {
-        ESP_LOGI(TAG, "I2C scan complete. Found %d device(s).", found_count);
+        ESP_LOGD(TAG, "I2C scan complete. Found %d device(s).", found_count);
     }
 }
