@@ -6,470 +6,7 @@
 
 const char *HtmlContent::TAG = "HTML";
 
-const char *HtmlContent::HTML_HEADER = R"(
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Antenna Switch Controller</title>
-    <style>
-        :root[data-theme="light"] {
-            --primary-color: #3498db;
-            --secondary-color: #2c3e50;
-            --page-background-color: #ecf0f1;
-            --text-color: #34495e;
-            --border-color: #bdc3c7; /* General borders, e.g., table cell lines */
-            --card-background-color: #ffffff;
-            --input-background-color: #ffffff;
-            --input-border-color: #bdc3c7;
-            --button-default-bg-color: #e0e0e0;
-            --button-default-border-color: #dddddd;
-            --th-text-color: #ffffff;
-            /* Ensure UA-painted controls (checkboxes, number spinners) are light */
-            color-scheme: light;
-        }
-        
-        :root[data-theme="dark"] {
-            --primary-color: #4a9eff;
-            --secondary-color: #a8c7fa;
-            --page-background-color: #121212;
-            --text-color: #e0e0e0;
-            --border-color: #2d2d2d; /* General borders, e.g., table cell lines */
-            --card-background-color: #1e1e1e;
-            --input-background-color: #2d2d2d;
-            --input-border-color: #404040;
-            --button-default-bg-color: #2d2d2d;
-            --button-default-border-color: #404040;
-            --th-text-color: #ffffff;
-            /* Ensure UA-painted controls (checkboxes, number spinners) are dark */
-            color-scheme: dark;
-        }
-        
-        /* Base responsive layout */
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: var(--text-color);
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 15px;
-            background-color: var(--page-background-color);
-        }
-
-        h1, h2 {
-            color: var(--secondary-color);
-            text-align: center;
-            margin-bottom: 30px;
-        }
-
-        /* Responsive status container */
-        .status-container {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .status-box {
-            background-color: var(--card-background-color);
-            border-radius: 10px;
-            padding: 15px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            width: 100%;
-            transition: transform 0.3s ease;
-        }
-
-        .status-box:hover {
-            transform: translateY(-5px);
-        }
-
-        /* Responsive tables */
-        table {
-            width: 100%;
-            display: table;
-            border-collapse: separate;
-            border-spacing: 0;
-            margin-bottom: 20px;
-            border-radius: 10px;
-            overflow-x: auto;
-        }
-
-        th, td {
-            padding: 15px;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        th {
-            font-weight: bold;
-            color: var(--th-text-color);
-            background-color: var(--primary-color);
-        }
-
-        tr:last-child td {
-            border-bottom: none;
-        }
-
-        /* Responsive relay grid */
-        .relay-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-        }
-
-        .relay-button {
-            padding: 12px 8px;
-            border: 1px solid var(--button-default-border-color);
-            border-radius: 8px;
-            background-color: var(--button-default-bg-color);  /* Default state - OFF */
-            color: var(--text-color);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-weight: bold;
-            font-size: 14px;
-        }
-
-        .relay-button.active {
-            background-color: #2ecc71;  /* Selected but not transmitting - green */
-            color: white;
-            border-color: #27ae60;
-        }
-
-        .relay-button.multi-band {
-            background-color: var(--primary-color);
-            color: white;
-            border-color: var(--border-color);
-        }
-
-        .relay-button.multi-band.active {
-            background-color: #2ecc71;  /* Keep active state green */
-        }
-
-        .relay-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-
-        /* Transmitting state should override other states */
-        .relay-button.transmitting,
-        .relay-button.active.transmitting,
-        .relay-button.multi-band.active.transmitting {
-            background-color: #e74c3c !important;  /* Selected and transmitting - red */
-            color: white !important;
-            border-color: #c0392b !important;
-        }
-
-        /* Responsive button container */
-        .button-container {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            justify-content: center;
-        }
-
-        .button, input[type="submit"] {
-            width: 100%;
-            max-width: 300px;
-            margin: 5px 0;
-            display: inline-block;
-            background-color: var(--primary-color);
-            color: white;
-            padding: 12px 24px;
-            border-radius: 25px;
-            text-decoration: none;
-            transition: all 0.3s ease;
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .button:hover, input[type="submit"]:hover {
-            background-color: var(--secondary-color);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-
-        /* Form responsiveness */
-        .config-form {
-            background-color: var(--card-background-color);
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-
-        .form-group {
-            margin-bottom: 15px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: bold;
-            color: var(--secondary-color);
-        }
-
-        input[type="text"], 
-        input[type="number"], 
-        select {
-            width: 100%;
-            padding: 10px;
-            margin: 5px 0;
-            display: inline-block;
-            background-color: var(--input-background-color);
-            color: var(--text-color);
-            border: 1px solid var(--input-border-color);
-            border-radius: 4px;
-            box-sizing: border-box;
-            transition: border-color 0.3s ease;
-        }
-
-        input[type="text"]:focus, 
-        input[type="number"]:focus, 
-        select:focus {
-            border-color: var(--primary-color);
-            outline: none;
-        }
-
-        input[type="checkbox"] {
-            margin-right: 5px;
-        }
-
-        /* Make native controls follow theme colors consistently */
-        input[type="checkbox"],
-        input[type="radio"] {
-            accent-color: var(--primary-color);
-        }
-
-        .relay-groups {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-
-        .relay-group {
-            background-color: var(--card-background-color);
-            border-radius: 8px;
-            padding: 15px;
-        }
-
-        .relay-group h3 {
-            margin: 0 0 15px 0;
-            color: var(--secondary-color);
-            text-align: center;
-        }
-
-        .auto-mode-container {
-            background-color: var(--card-background-color);
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
-            transition: all 0.3s ease;
-        }
-
-        .auto-mode-container h2 {
-            margin-top: 0;
-            color: var(--secondary-color);
-        }
-
-        .auto-mode-container label {
-            display: flex;
-            align-items: center;
-            font-weight: normal;
-            color: var(--text-color);
-        }
-
-        .auto-mode-container input[type="checkbox"] {
-            margin-right: 10px;
-            accent-color: var(--primary-color);
-        }
-
-        /* Media Queries for different screen sizes */
-        @media (min-width: 768px) {
-            body {
-                padding: 20px;
-            }
-
-            .status-container {
-                flex-direction: row;
-            }
-
-            .status-box {
-                width: 48%;
-            }
-
-            .relay-grid {
-                grid-template-columns: repeat(4, 1fr);
-            }
-
-            .button, input[type="submit"] {
-                width: auto;
-            }
-        }
-
-        /* Configuration page specific */
-        .config-form {
-            background-color: var(--card-background-color);
-            color: var(--text-color);
-            border: 1px solid var(--input-border-color);
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-        }
-
-        .config-form table {
-            background-color: var(--card-background-color);
-            color: var(--text-color);
-            border: 1px solid var(--input-border-color);
-            margin: 20px 0;
-            width: 100%;
-            border-radius: 8px;
-        }
-
-        .config-form input[type="text"],
-        .config-form input[type="number"],
-        .config-form select {
-            background-color: var(--input-background-color);
-            color: var(--text-color);
-            border: 1px solid var(--input-border-color);
-        }
-
-        .config-form input[type="checkbox"] {
-            accent-color: var(--primary-color);
-        }
-
-        @media (max-width: 767px) {
-            table th, 
-            table td {
-                display: block;
-                width: 100%;
-                box-sizing: border-box;
-            }
-
-            table tr {
-                margin-bottom: 15px;
-                display: block;
-            }
-
-            table td {
-                border-top: none;
-            }
-
-            .config-form table {
-                display: block;
-                overflow-x: auto;
-            }
-
-            .config-form table th,
-            .config-form table td {
-                min-width: 120px;
-            }
-        }
-
-        /* Touch-friendly improvements */
-        @media (hover: none) {
-            .relay-button {
-                min-height: 44px; /* Minimum touch target size */
-            }
-
-            .button, 
-            input[type="submit"],
-            select {
-                min-height: 44px;
-                touch-action: manipulation;
-            }
-
-            input[type="checkbox"] {
-                min-width: 22px;
-                min-height: 22px;
-            }
-        }
-
-        /* Dark mode styles */
-        [data-theme="dark"] body {
-            background-color: var(--page-background-color);
-        }
-
-        [data-theme="dark"] .status-box,
-        [data-theme="dark"] .relay-group,
-        [data-theme="dark"] .auto-mode-container {
-            background-color: var(--card-background-color);
-        }
-
-        [data-theme="dark"] .config-form {
-            background-color: var(--card-background-color);
-            border-color: var(--input-border-color);
-        }
-
-        [data-theme="dark"] .config-form table {
-            background-color: var(--card-background-color);
-            border-color: var(--input-border-color);
-        }
-
-        [data-theme="dark"] input[type="text"],
-        [data-theme="dark"] input[type="number"],
-        [data-theme="dark"] select {
-            background-color: var(--input-background-color);
-            color: var(--text-color);
-            border-color: var(--input-border-color);
-        }
-
-        [data-theme="dark"] .relay-button {
-            background-color: var(--button-default-bg-color);
-            color: var(--text-color);
-            border-color: var(--button-default-border-color);
-        }
-
-        [data-theme="dark"] .relay-button.active {
-            background-color: #2ecc71;
-            color: white;
-        }
-
-        [data-theme="dark"] .relay-button.multi-band {
-            background-color: #1a5f89;
-            color: white;
-            border-color: #2980b9;
-        }
-
-        [data-theme="dark"] .relay-button.multi-band.active {
-            background-color: #2ecc71;
-            color: white;
-        }
-
-        /* Theme toggle button */
-        .theme-toggle {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 12px 24px;
-            border-radius: 25px;
-            background-color: var(--primary-color);
-            color: white;
-            border: none;
-            cursor: pointer;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            transition: all 0.3s ease;
-            font-size: 16px;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            z-index: 1000;
-        }
-
-        .theme-toggle:hover {
-            background-color: var(--secondary-color);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-    </style>
-</head>
-<body>
-<button class="theme-toggle" onclick='toggleTheme()' type="button">Theme</button>
+const char *HtmlContent::HTML_HEADER = R"(<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"><title>Antenna Switch Controller</title><style>:root[data-theme="light"]{--primary-color:#3498db;--secondary-color:#2c3e50;--page-background-color:#ecf0f1;--text-color:#34495e;--border-color:#bdc3c7;--card-background-color:#fff;--input-background-color:#fff;--input-border-color:#bdc3c7;--button-default-bg-color:#e0e0e0;--button-default-border-color:#ddd;--th-text-color:#fff;color-scheme:light}:root[data-theme="dark"]{--primary-color:#4a9eff;--secondary-color:#a8c7fa;--page-background-color:#121212;--text-color:#e0e0e0;--border-color:#2d2d2d;--card-background-color:#1e1e1e;--input-background-color:#2d2d2d;--input-border-color:#404040;--button-default-bg-color:#2d2d2d;--button-default-border-color:#404040;--th-text-color:#fff;color-scheme:dark}body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;line-height:1.6;color:var(--text-color);max-width:1200px;margin:0 auto;padding:15px;background-color:var(--page-background-color)}h1,h2{color:var(--secondary-color);text-align:center;margin-bottom:30px}.status-container{display:flex;flex-direction:column;gap:20px;margin-bottom:30px}.status-box{background-color:var(--card-background-color);border-radius:10px;padding:15px;box-shadow:0 4px 6px rgba(0,0,0,.1);width:100%;transition:transform .3s ease}.status-box:hover{transform:translateY(-5px)}table{width:100%;border-collapse:separate;border-spacing:0;margin-bottom:20px;border-radius:10px;overflow-x:auto}th,td{padding:15px;text-align:left;border-bottom:1px solid var(--border-color)}th{font-weight:bold;color:var(--th-text-color);background-color:var(--primary-color)}tr:last-child td{border-bottom:none}.relay-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.relay-button{padding:12px 8px;border:1px solid var(--button-default-border-color);border-radius:8px;background-color:var(--button-default-bg-color);color:var(--text-color);cursor:pointer;transition:all .3s ease;font-weight:bold;font-size:14px}.relay-button.active{background-color:#2ecc71;color:white;border-color:#27ae60}.relay-button.multi-band{background-color:var(--primary-color);color:white;border-color:var(--border-color)}.relay-button.multi-band.active{background-color:#2ecc71}.relay-button:hover{transform:translateY(-2px);box-shadow:0 4px 6px rgba(0,0,0,.1)}.relay-button.transmitting,.relay-button.active.transmitting,.relay-button.multi-band.active.transmitting{background-color:#e74c3c!important;color:white!important;border-color:#c0392b!important}.button-container{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}.button,input[type="submit"]{width:100%;max-width:300px;margin:5px 0;display:inline-block;background-color:var(--primary-color);color:white;padding:12px 24px;border-radius:25px;text-decoration:none;transition:all .3s ease;border:none;cursor:pointer;font-size:16px;font-weight:bold;text-transform:uppercase;letter-spacing:1px}.button:hover,input[type="submit"]:hover{background-color:var(--secondary-color);transform:translateY(-2px);box-shadow:0 4px 6px rgba(0,0,0,.1)}.config-form{background-color:var(--card-background-color);padding:15px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,.1);color:var(--text-color);border:1px solid var(--input-border-color);margin-bottom:20px}.form-group{margin-bottom:15px}label{display:block;margin-bottom:8px;font-weight:bold;color:var(--secondary-color)}input[type="text"],input[type="number"],select{width:100%;padding:10px;margin:5px 0;display:inline-block;background-color:var(--input-background-color);color:var(--text-color);border:1px solid var(--input-border-color);border-radius:4px;box-sizing:border-box;transition:border-color .3s ease}input[type="text"]:focus,input[type="number"]:focus,select:focus{border-color:var(--primary-color);outline:none}input[type="checkbox"]{margin-right:5px;accent-color:var(--primary-color)}input[type="radio"]{accent-color:var(--primary-color)}.relay-groups{display:flex;flex-direction:column;gap:20px}.relay-group{background-color:var(--card-background-color);border-radius:8px;padding:15px}.relay-group h3{margin:0 0 15px 0;color:var(--secondary-color);text-align:center}.auto-mode-container{background-color:var(--card-background-color);border-radius:10px;padding:20px;box-shadow:0 4px 6px rgba(0,0,0,.1);margin-bottom:30px;transition:all .3s ease}.auto-mode-container h2{margin-top:0;color:var(--secondary-color)}.auto-mode-container label{display:flex;align-items:center;font-weight:normal;color:var(--text-color)}.auto-mode-container input[type="checkbox"]{margin-right:10px}@media (min-width:768px){body{padding:20px}.status-container{flex-direction:row}.status-box{width:48%}.relay-grid{grid-template-columns:repeat(4,1fr)}.button,input[type="submit"]{width:auto}}.config-form table{background-color:var(--card-background-color);color:var(--text-color);border:1px solid var(--input-border-color);margin:20px 0;width:100%;border-radius:8px}@media (max-width:767px){table th,table td{display:block;width:100%;box-sizing:border-box}table tr{margin-bottom:15px;display:block}table td{border-top:none}.config-form table{display:block;overflow-x:auto}.config-form table th,.config-form table td{min-width:120px}}@media (hover:none){.relay-button{min-height:44px}.button,input[type="submit"],select{min-height:44px;touch-action:manipulation}input[type="checkbox"]{min-width:22px;min-height:22px}}.theme-toggle{position:fixed;top:20px;right:20px;padding:12px 24px;border-radius:25px;background-color:var(--primary-color);color:white;border:none;cursor:pointer;box-shadow:0 2px 5px rgba(0,0,0,.2);transition:all .3s ease;font-size:16px;font-weight:bold;text-transform:uppercase;letter-spacing:1px;z-index:1000}.theme-toggle:hover{background-color:var(--secondary-color);transform:translateY(-2px);box-shadow:0 4px 6px rgba(0,0,0,.1)}[data-theme="dark"] body{background-color:var(--page-background-color)}[data-theme="dark"] .status-box,[data-theme="dark"] .relay-group,[data-theme="dark"] .auto-mode-container{background-color:var(--card-background-color)}[data-theme="dark"] .config-form{background-color:var(--card-background-color);border-color:var(--input-border-color)}[data-theme="dark"] .config-form table{background-color:var(--card-background-color);border-color:var(--input-border-color)}[data-theme="dark"] input[type="text"],[data-theme="dark"] input[type="number"],[data-theme="dark"] select{background-color:var(--input-background-color);color:var(--text-color);border-color:var(--input-border-color)}[data-theme="dark"] .relay-button{background-color:var(--button-default-bg-color);color:var(--text-color);border-color:var(--button-default-border-color)}[data-theme="dark"] .relay-button.active{background-color:#2ecc71;color:white}[data-theme="dark"] .relay-button.multi-band{background-color:#1a5f89;color:white;border-color:#2980b9}[data-theme="dark"] .relay-button.multi-band.active{background-color:#2ecc71;color:white}</style></head><body><button class="theme-toggle" onclick='toggleTheme()' type="button">Theme</button>
 )";
 
 // ReSharper disable once CppUseAuto
@@ -594,333 +131,187 @@ ss << R"(
         <form action='/restart' method='post' style='display:inline' onsubmit='handleRestart(event)'>
             <button type="submit" class="button" style="background-color:#e74c3c">Restart Device</button>
         </form>
-        <script>
-            function handleRestart(event) {
-                if (!confirm('Are you sure you want to restart the device?')) {
-                    event.preventDefault();
-                    return false;
-                }
-                const button = event.target.querySelector('button');
-                button.textContent = 'Restarting...';
-                button.disabled = true;
-
-                setTimeout(() => {
-                    document.body.innerHTML = '<h1 style="text-align:center;margin-top:50px;">Device is restarting...</h1><p style="text-align:center">This page will refresh in 10 seconds.</p>';
-                    setTimeout(() => { window.location.reload(); }, 10000);
-                }, 500);
-
-                return true;
-            }
-        </script>
+<script>function handleRestart(e){if(!confirm('Are you sure you want to restart the device?')){e.preventDefault();return false;}const b=e.target.querySelector('button');b.textContent='Restarting...';b.disabled=true;setTimeout(()=>{document.body.innerHTML='<h1 style="text-align:center;margin-top:50px;">Device is restarting...</h1><p style="text-align:center">This page will refresh in 10 seconds.</p>';setTimeout(()=>{window.location.reload();},10000);},500);return true;}</script>
     </div>
-    <script>
-        // Theme handling
-        function setTheme(theme) {
-            document.documentElement.setAttribute('data-theme', theme);
-            localStorage.setItem('theme', theme);
-        }
+<script>function setTheme(t){document.documentElement.setAttribute('data-theme',t);localStorage.setItem('theme',t);}function toggleTheme(){const c=document.documentElement.getAttribute('data-theme')||'light';setTheme(c==='light'?'dark':'light');}setTheme(localStorage.getItem('theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));
+let isRelayOp=false;const COOLDOWN=250,INTERVAL=2000;async function toggleRelay(r){if(isRelayOp)return;try{isRelayOp=true;const b=document.querySelector(`button[data-relay="${r}"]`);b.disabled=true;const s=!b.classList.contains('active');const res=await fetch('/relay/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({relay:r,state:s})});if(!res.ok){const e=await res.text();console.error('Server error:',e);throw new Error(e);}const result=await res.json();b.classList.toggle('active',result.state);if(result.state){const rb=document.querySelector(`button[data-relay="${r}"]`);if(rb&&rb.textContent.trim()&&rb.textContent.trim()!==`Relay ${r}`){document.getElementById('active-antenna').textContent=rb.textContent.trim();}else{document.getElementById('active-antenna').textContent='Relay '+r;}}fetch('/status').then(res=>res.json()).then(d=>{const aa=d.available_antennas||[];b.classList.toggle('multi-band',aa.filter(a=>a===r).length>1);});updateStatus();await new Promise(res=>setTimeout(res,COOLDOWN));}catch(e){console.error('Error toggling relay:',e);alert('Failed to toggle relay: '+e.message);}finally{document.querySelector(`button[data-relay="${r}"]`).disabled=false;isRelayOp=false;}}
+let statusTO=null;async function updateRelayStatus(){if(statusTO)clearTimeout(statusTO);try{const res=await fetch('/relay/status');const d=await res.json();const states=d.states;for(let i=1;i<=16;i++){const b=document.querySelector(`button[data-relay="${i}"]`);if(b&&!b.disabled){const state=((states>>(i-1))&1)===0;b.classList.toggle('active',state);}}}catch(e){console.error('Error updating relay status:',e);}statusTO=setTimeout(updateRelayStatus,INTERVAL);}async function changeAntenna(n){try{const res=await fetch('/relay/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({relay:parseInt(n),state:true})});if(!res.ok)throw new Error('Failed to change antenna');document.getElementById('active-antenna').textContent='Antenna '+n;updateRelayStatus();}catch(e){console.error('Error changing antenna:',e);alert('Failed to change antenna');}}
 
-        function toggleTheme() {
-            const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
-            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-            setTheme(newTheme);
-        }
-
-        // Initialize theme
-        const savedTheme = localStorage.getItem('theme') || 
-                          (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-        setTheme(savedTheme);
-
-        let isRelayOperationInProgress = false;
-        const RELAY_OPERATION_COOLDOWN = 250; // ms
-        const STATUS_UPDATE_INTERVAL = 2000; // Reduced from 5000 to 2000ms
-
-        async function toggleRelay(relay) {
-            // Prevent multiple rapid clicks
-            if (isRelayOperationInProgress) {
-                //console.log('Operation in progress, please wait...');
-                return;
-            }
-
-            try {
-                isRelayOperationInProgress = true;
-                const button = document.querySelector(`button[data-relay="${relay}"]`);
-                button.disabled = true; // Disable button during operation
-                
-                const newState = !button.classList.contains('active');
-                //console.log(`Setting relay ${relay} to state: ${newState}`);
-                
-                const response = await fetch('/relay/control', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        relay: relay,
-                        state: newState
-                    })
-                });
-                
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error('Server error:', errorText);
-                    throw new Error(errorText);
-                }
-                
-                const result = await response.json();
-                button.classList.toggle('active', result.state);
-                
-                // If the relay was turned on, update the active antenna display
-                if (result.state) {
-                    const relayButton = document.querySelector(`button[data-relay="${relay}"]`);
-                    if (relayButton && relayButton.textContent.trim() && relayButton.textContent.trim() !== `Relay ${relay}`) {
-                        document.getElementById("active-antenna").textContent = relayButton.textContent.trim();
-                    } else {
-                        document.getElementById("active-antenna").textContent = "Relay " + relay;
-                    }
-                }
-
-                // Check if this relay supports multiple bands
-                fetch("/status")
-                    .then(response => response.json())
-                    .then(data => {
-                        const availableAntennas = data.available_antennas || [];
-                        const count = availableAntennas.filter(ant => ant === relay).length;
-                        button.classList.toggle('multi-band', count > 1);
-                    });
-                
-                // Force an immediate status update
-                updateStatus();
-                
-                // Wait for a short period before allowing next operation
-                await new Promise(resolve => setTimeout(resolve, RELAY_OPERATION_COOLDOWN));
-                
-            } catch (error) {
-                console.error('Error toggling relay:', error);
-                alert('Failed to toggle relay: ' + error.message);
-            } finally {
-                const button = document.querySelector(`button[data-relay="${relay}"]`);
-                button.disabled = false; // Re-enable button
-                isRelayOperationInProgress = false;
-            }
-        }
-
-        // Add debouncing to the status updates
-        let statusUpdateTimeout = null;
-        async function updateRelayStatus() {
-            if (statusUpdateTimeout) {
-                clearTimeout(statusUpdateTimeout);
-            }
-            
-            try {
-                const response = await fetch('/relay/status');
-                const data = await response.json();
-                const states = data.states;
-                
-                for (let i = 1; i <= 16; i++) {
-                    const button = document.querySelector(`button[data-relay="${i}"]`);
-                    if (button && !button.disabled) { // Only update if button isn't in middle of operation
-                        // Subtract 1 from i since relay numbers are 1-based but bits are 0-based
-                        // Subtract 1 from i since relay numbers are 1-based but bits are 0-based
-                        const state = ((states >> (i-1)) & 1) === 0;  // Inverted logic for active-low relays
-                        button.classList.toggle('active', state);
-                
-                        // Add debug logging
-                        //console.debug(`Relay ${i} state: ${state ? 'ON' : 'OFF'}`);
-                    }
-                }
-            } catch (error) {
-                console.error('Error updating relay status:', error);
-            }
-            
-            // Schedule next update
-            statusUpdateTimeout = setTimeout(updateRelayStatus, STATUS_UPDATE_INTERVAL);
-        }
-
-        async function changeAntenna(antennaNumber) {
-           try {
-                const response = await fetch('/relay/control', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        relay: parseInt(antennaNumber),
-                        state: true
-                    })
-                });
-                
-                if (!response.ok) {
-                    throw new Error('Failed to change antenna');
-                }
-                
-                // Update the display immediately
-                document.getElementById("active-antenna").textContent = "Antenna " + antennaNumber;
-                
-                // Refresh relay status
-                updateRelayStatus();
-            } catch (error) {
-                console.error('Error changing antenna:', error);
-                alert('Failed to change antenna');
-            }
-        }
-
-        function updateStatus() {
-            fetch("/status")
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error("Network response was not ok");
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    // Convert Hz to MHz and format with 3 decimal places
-                    const freqMHz = (data.frequency / 1000000).toFixed(3);
-                    document.getElementById("current-frequency").textContent = freqMHz + " MHz";
-                    // If antenna is a number, convert to custom name
-                    if (!isNaN(data.antenna.replace("Antenna ", "")) && data.antenna.startsWith("Antenna ")) {
-                        const antennaNum = parseInt(data.antenna.replace("Antenna ", ""));
-                        if (antennaNum > 0 && antennaNum <= 16) {
-                            const relayButton = document.querySelector(`button[data-relay="${antennaNum}"]`);
-                            if (relayButton && relayButton.textContent.trim() && relayButton.textContent.trim() !== `Relay ${antennaNum}`) {
-                                document.getElementById("active-antenna").textContent = relayButton.textContent.trim();
-                            } else {
-                                document.getElementById("active-antenna").textContent = `Relay ${antennaNum}`;
-                            }
-                        } else {
-                            document.getElementById("active-antenna").textContent = data.antenna;
-                        }
-                    } else {
-                        document.getElementById("active-antenna").textContent = data.antenna;
-                    }
-
-                    // Update data source for Radio A
-                    if (data.data_source) {
-                        document.getElementById("data-source").textContent = data.data_source;
-                    } else {
-                        document.getElementById("data-source").textContent = "Unknown";
-                    }
-
-                    // Update Radio B status display if elements exist
-                    const freqBElement = document.getElementById("current-frequency-b");
-                    const antennaBElement = document.getElementById("active-antenna-b");
-
-                    if (freqBElement && antennaBElement) {
-                        if (data.hasOwnProperty('frequency_b') && data.frequency_b > 0) {
-                            const freqBMHz = (data.frequency_b / 1000000).toFixed(3);
-                            freqBElement.textContent = freqBMHz + " MHz";
-                        } else {
-                            freqBElement.textContent = "N/A";
-                        }
-                        if (data.hasOwnProperty('antenna_b')) {
-                            if (!isNaN(data.antenna_b.replace("Antenna ", "")) && data.antenna_b.startsWith("Antenna ")) {
-                                const antennaBNum = parseInt(data.antenna_b.replace("Antenna ", ""));
-                                if (antennaBNum > 0 && antennaBNum <= 16) {
-                                    const relayButton = document.querySelector(`button[data-relay="${antennaBNum}"]`);
-                                    if (relayButton && relayButton.textContent.trim() && relayButton.textContent.trim() !== `Relay ${antennaBNum}`) {
-                                        antennaBElement.textContent = relayButton.textContent.trim();
-                                    } else {
-                                        antennaBElement.textContent = `Relay ${antennaBNum}`;
-                                    }
-                                } else {
-                                    antennaBElement.textContent = data.antenna_b;
-                                }
-                            } else {
-                                antennaBElement.textContent = data.antenna_b;
-                            }
-                        } else {
-                            antennaBElement.textContent = "None";
-                        }
-
-                        // Update data source for Radio B
-                        const dataSourceBElement = document.getElementById("data-source-b");
-                        if (dataSourceBElement) {
-                            if (data.data_source_b) {
-                                dataSourceBElement.textContent = data.data_source_b;
-                            } else {
-                                dataSourceBElement.textContent = "Unknown";
-                            }
-                        }
-                    }
-                    
-                    // Get the active antenna number from the relay states
-                    const buttons = document.querySelectorAll('.relay-button');
-                    let activeAntennaNum = null;
-                    buttons.forEach(button => {
-                        if (button.classList.contains('active')) {
-                            activeAntennaNum = parseInt(button.getAttribute('data-relay'));
-                        }
-                    });
-                    
-                    // Add debug logging
-                    // console.debug("Status update received:", data);
-                    // console.debug("Transmit state:", data.transmitting);
-                    // console.debug("Active antenna:", data.antenna);
-                    // console.debug("Current frequency:", data.frequency);
-            
-                    // Modify button update logic to handle Radio A and B separately
-                    document.querySelectorAll('.relay-button').forEach(button => {
-                        const relayNum = parseInt(button.getAttribute('data-relay'));
-                        
-                        let isTransmittingForThisRelay = false;
-                        let availableAntennasForThisRelayGroup = [];
-                        const RELAYS_PER_RADIO_JS = 8; // Hardcode for JS context
-
-                        if (relayNum <= RELAYS_PER_RADIO_JS) { // Radio A relays (1-8)
-                            isTransmittingForThisRelay = data.transmitting;
-                            availableAntennasForThisRelayGroup = data.available_antennas || [];
-                        } else { // Radio B relays (9-16)
-                            isTransmittingForThisRelay = data.transmitting_b; // Use data.transmitting_b
-                            availableAntennasForThisRelayGroup = data.available_antennas_b || []; // Use data.available_antennas_b
-                        }
-                
-                        const supportsCurrentFreq = availableAntennasForThisRelayGroup.includes(relayNum);
-                
-                        button.classList.remove('multi-band', 'transmitting');
-                
-                        if (button.classList.contains('active')) {
-                            if (isTransmittingForThisRelay) {
-                                button.classList.add('transmitting');
-                                // console.debug(`Adding transmitting class to relay ${relayNum}`);
-                            } else {
-                                // console.debug(`Relay ${relayNum} is active but not transmitting`);
-                            }
-                        } else {
-                            if (supportsCurrentFreq) {
-                                button.classList.add('multi-band');
-                                // console.debug(`Relay ${relayNum} supports current frequency`);
-                            }
-                            // Reset styles (already handled by CSS, but can be explicit if needed)
-                            // button.style.backgroundColor = '';
-                            // button.style.borderColor = '';
-                            // button.style.color = '';
-                        }
-                    });
-                })
-                .catch(error => {
-                    console.error("Error:", error);
-                    document.getElementById("current-frequency").textContent = "Error updating";
-                    document.getElementById("active-antenna").textContent = "Error updating";
-                    document.getElementById("data-source").textContent = "Error updating";
-                    
-                    // Update Radio B error display if elements exist
-                    const freqBElement = document.getElementById("current-frequency-b");
-                    const antennaBElement = document.getElementById("active-antenna-b");
-                    const dataSourceBElement = document.getElementById("data-source-b");
-                    if (freqBElement) freqBElement.textContent = "Error updating";
-                    if (antennaBElement) antennaBElement.textContent = "Error updating";
-                    if (dataSourceBElement) dataSourceBElement.textContent = "Error updating";
-                });
-        }
-
-        // Start the status updates
-        updateStatus();
-        updateRelayStatus();
-        setInterval(updateStatus, STATUS_UPDATE_INTERVAL);
-    </script>
+function updateStatus(){fetch('/status').then(res=>{if(!res.ok)throw new Error('Network error');return res.json();}).then(d=>{const fMHz=(d.frequency/1e6).toFixed(3);document.getElementById('current-frequency').textContent=fMHz+' MHz';function setAntenna(el,ant){if(!isNaN(ant.replace('Antenna ',''))&&ant.startsWith('Antenna ')){const num=parseInt(ant.replace('Antenna ',''));if(num>0&&num<=16){const rb=document.querySelector(`button[data-relay="${num}"]`);if(rb&&rb.textContent.trim()&&rb.textContent.trim()!==`Relay ${num}`){el.textContent=rb.textContent.trim();}else{el.textContent=`Relay ${num}`;}}else{el.textContent=ant;}}else{el.textContent=ant;}}setAntenna(document.getElementById('active-antenna'),d.antenna);document.getElementById('data-source').textContent=d.data_source||'Unknown';const fB=document.getElementById('current-frequency-b'),aB=document.getElementById('active-antenna-b');if(fB&&aB){if(d.hasOwnProperty('frequency_b')&&d.frequency_b>0){const fBMHz=(d.frequency_b/1e6).toFixed(3);fB.textContent=fBMHz+' MHz';}else{fB.textContent='N/A';}if(d.hasOwnProperty('antenna_b')){setAntenna(aB,d.antenna_b);}else{aB.textContent='None';}const dsB=document.getElementById('data-source-b');if(dsB)dsB.textContent=d.data_source_b||'Unknown';}document.querySelectorAll('.relay-button').forEach(b=>{const n=parseInt(b.getAttribute('data-relay'));const isTx=n<=8?d.transmitting:d.transmitting_b;const avail=n<=8?(d.available_antennas||[]):(d.available_antennas_b||[]);const supports=avail.includes(n);b.classList.remove('multi-band','transmitting');if(b.classList.contains('active')){if(isTx)b.classList.add('transmitting');}else{if(supports)b.classList.add('multi-band');}});}).catch(e=>{console.error('Error:',e);['current-frequency','active-antenna','data-source','current-frequency-b','active-antenna-b','data-source-b'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent='Error updating';});});
+updateStatus();updateRelayStatus();setInterval(updateStatus,INTERVAL);</script>
     )";
     ss << HtmlContent::HTML_FOOTER;
     return ss.str();
+}
+
+esp_err_t HtmlContent::generate_root_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr) {
+    esp_err_t ret = ESP_OK;
+
+    // Helper lambda to send a C-string literal as a chunk
+    auto send_cstr_chunk = [&](const char* cstr_chunk) -> esp_err_t {
+        if (cstr_chunk == nullptr || cstr_chunk[0] == '\0') return ESP_OK;
+        const esp_err_t send_ret = httpd_resp_send_chunk(req, cstr_chunk, strlen(cstr_chunk));
+        if (send_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send cstr chunk: %s", esp_err_to_name(send_ret));
+        }
+        return send_ret;
+    };
+
+    // Helper lambda to send a stringstream's content as a chunk
+    auto send_ss_chunk = [&](std::stringstream& stream) -> esp_err_t {
+        const std::string chunk_str = stream.str();
+        stream.str(std::string()); // Clear the stringstream for reuse
+        stream.clear(); // Clear error flags (like eof, fail, bad)
+        if (chunk_str.empty()) return ESP_OK;
+        esp_err_t send_ret = httpd_resp_send_chunk(req, chunk_str.c_str(), chunk_str.length());
+        if (send_ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to send chunk: %s", esp_err_to_name(send_ret));
+        }
+        return send_ret;
+    };
+
+    std::stringstream ss_buffer;
+
+    // Send HTML header
+    ret = send_cstr_chunk(HtmlContent::HTML_HEADER);
+    if (ret != ESP_OK) return ret;
+
+    // Build main content in chunks
+    ss_buffer << "<h1>Antenna Controller</h1>";
+    ss_buffer << "<div class='status-container'>";
+    ss_buffer << "<div class='status-box'>";
+    ss_buffer << "<h2>Current Status (Radio A)</h2>";
+    ss_buffer << "<table>";
+    ss_buffer << "<tr><th>Frequency</th><td id='current-frequency'>Updating...</td></tr>";
+    ss_buffer << "<tr><th>Port</th><td><span id='active-antenna'>Updating...</span></td></tr>";
+    ss_buffer << "<tr><th>Data Source</th><td><span id='data-source'>Updating...</span></td></tr>";
+    ss_buffer << "</table>";
+    ss_buffer << "</div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    // Radio B status box (conditional)
+    if (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A) {
+        ss_buffer << "<div class='status-box'>";
+        ss_buffer << "<h2>Current Status (Radio B)</h2>";
+        ss_buffer << "<table>";
+        ss_buffer << "<tr><th>Frequency</th><td id='current-frequency-b'>Updating...</td></tr>";
+        ss_buffer << "<tr><th>Port</th><td><span id='active-antenna-b'>Updating...</span></td></tr>";
+        ss_buffer << "<tr><th>Data Source</th><td><span id='data-source-b'>Updating...</span></td></tr>";
+        ss_buffer << "</table>";
+        ss_buffer << "</div>";
+        ret = send_ss_chunk(ss_buffer);
+        if (ret != ESP_OK) return ret;
+    }
+
+    // Network information
+    ss_buffer << R"(
+        <div class="status-box">
+            <h2>Network Information</h2>
+            <table>
+                <tr>
+                    <th>IP Address</th>
+                    <td>)" << ip_addr << R"(</td>
+                </tr>
+                <tr>
+                    <th>MAC Address</th>
+                    <td>)" << mac_addr << R"(</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+    )";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    // Relay groups
+    ss_buffer << "<div class='relay-groups'>";
+    ss_buffer << "<div class='relay-group'>";
+    ss_buffer << "<h3>Radio A Relays</h3>";
+    ss_buffer << "<div class='relay-grid'>";
+    
+    for (int i = 0; i < 8; i++) {
+        std::string relay_name;
+        if (strlen(config.relay_names[i]) > 0) {
+            relay_name = config.relay_names[i];
+        } else {
+            relay_name = "Relay " + std::to_string(i + 1);
+        }
+        ss_buffer << "<button class='relay-button' data-relay='" << (i + 1) << "' onclick='toggleRelay(" << (i + 1) << ")'>" << relay_name << "</button>";
+    }
+    ss_buffer << "</div></div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    // Radio B relays (conditional)
+    if (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A) {
+        ss_buffer << "<div class='relay-group'>";
+        ss_buffer << "<h3>Radio B Relays</h3>";
+        ss_buffer << "<div class='relay-grid'>";
+        
+        for (int i = 0; i < 8; i++) {
+            std::string relay_name;
+            if (strlen(config.relay_names[i + 8]) > 0) {
+                relay_name = config.relay_names[i + 8];
+            } else {
+                relay_name = config.relay_names[i]; // Mirror Radio A names
+            }
+            ss_buffer << "<button class='relay-button' data-relay='" << (i + 9) << "' onclick='toggleRelay(" << (i + 9) << ")'>" << relay_name << "</button>";
+        }
+        ss_buffer << "</div></div>";
+        ret = send_ss_chunk(ss_buffer);
+        if (ret != ESP_OK) return ret;
+    }
+
+    // Close relay groups and add buttons
+    ss_buffer << "</div>";
+    ss_buffer << "<div class='button-container'>";
+    ss_buffer << "<a href='/config' class='button'>Edit Configuration</a>";
+    ss_buffer << "<form action='/restart' method='post' style='display:inline' onsubmit='handleRestart(event)'>";
+    ss_buffer << "<button type='submit' class='button' style='background-color:#e74c3c'>Restart Device</button>";
+    ss_buffer << "</form>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    // Send JavaScript in chunks
+    ss_buffer << "<script>function handleRestart(e){if(!confirm('Are you sure you want to restart the device?')){e.preventDefault();return false;}const b=e.target.querySelector('button');b.textContent='Restarting...';b.disabled=true;setTimeout(()=>{document.body.innerHTML='<h1 style=\"text-align:center;margin-top:50px;\">Device is restarting...</h1><p style=\"text-align:center\">This page will refresh in 10 seconds.</p>';setTimeout(()=>{window.location.reload();},10000);},500);return true;}</script>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    ss_buffer << "</div><script>function setTheme(t){document.documentElement.setAttribute('data-theme',t);localStorage.setItem('theme',t);}function toggleTheme(){const c=document.documentElement.getAttribute('data-theme')||'light';setTheme(c==='light'?'dark':'light');}setTheme(localStorage.getItem('theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'));";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    // Continue with relay and status JavaScript
+    ss_buffer << "let isRelayOp=false;const COOLDOWN=250,INTERVAL=2000;async function toggleRelay(r){if(isRelayOp)return;try{isRelayOp=true;const b=document.querySelector(`button[data-relay=\"${r}\"]`);b.disabled=true;const s=!b.classList.contains('active');const res=await fetch('/relay/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({relay:r,state:s})});if(!res.ok){const e=await res.text();console.error('Server error:',e);throw new Error(e);}const result=await res.json();b.classList.toggle('active',result.state);if(result.state){const rb=document.querySelector(`button[data-relay=\"${r}\"]`);if(rb&&rb.textContent.trim()&&rb.textContent.trim()!==`Relay ${r}`){document.getElementById('active-antenna').textContent=rb.textContent.trim();}else{document.getElementById('active-antenna').textContent='Relay '+r;}}fetch('/status').then(res=>res.json()).then(d=>{const aa=d.available_antennas||[];b.classList.toggle('multi-band',aa.filter(a=>a===r).length>1);});updateStatus();await new Promise(res=>setTimeout(res,COOLDOWN));}catch(e){console.error('Error toggling relay:',e);alert('Failed to toggle relay: '+e.message);}finally{document.querySelector(`button[data-relay=\"${r}\"]`).disabled=false;isRelayOp=false;}}";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    ss_buffer << "let statusTO=null;async function updateRelayStatus(){if(statusTO)clearTimeout(statusTO);try{const res=await fetch('/relay/status');const d=await res.json();const states=d.states;for(let i=1;i<=16;i++){const b=document.querySelector(`button[data-relay=\"${i}\"]`);if(b&&!b.disabled){const state=((states>>(i-1))&1)===0;b.classList.toggle('active',state);}}}catch(e){console.error('Error updating relay status:',e);}statusTO=setTimeout(updateRelayStatus,INTERVAL);}async function changeAntenna(n){try{const res=await fetch('/relay/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({relay:parseInt(n),state:true})});if(!res.ok)throw new Error('Failed to change antenna');document.getElementById('active-antenna').textContent='Antenna '+n;updateRelayStatus();}catch(e){console.error('Error changing antenna:',e);alert('Failed to change antenna');}}";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    // Send the large updateStatus function
+    ss_buffer << "function updateStatus(){fetch('/status').then(res=>{if(!res.ok)throw new Error('Network error');return res.json();}).then(d=>{const fMHz=(d.frequency/1e6).toFixed(3);document.getElementById('current-frequency').textContent=fMHz+' MHz';function setAntenna(el,ant){if(!isNaN(ant.replace('Antenna ',''))&&ant.startsWith('Antenna ')){const num=parseInt(ant.replace('Antenna ',''));if(num>0&&num<=16){const rb=document.querySelector(`button[data-relay=\"${num}\"]`);if(rb&&rb.textContent.trim()&&rb.textContent.trim()!==`Relay ${num}`){el.textContent=rb.textContent.trim();}else{el.textContent=`Relay ${num}`;}}else{el.textContent=ant;}}else{el.textContent=ant;}}setAntenna(document.getElementById('active-antenna'),d.antenna);document.getElementById('data-source').textContent=d.data_source||'Unknown';const fB=document.getElementById('current-frequency-b'),aB=document.getElementById('active-antenna-b');if(fB&&aB){if(d.hasOwnProperty('frequency_b')&&d.frequency_b>0){const fBMHz=(d.frequency_b/1e6).toFixed(3);fB.textContent=fBMHz+' MHz';}else{fB.textContent='N/A';}if(d.hasOwnProperty('antenna_b')){setAntenna(aB,d.antenna_b);}else{aB.textContent='None';}const dsB=document.getElementById('data-source-b');if(dsB)dsB.textContent=d.data_source_b||'Unknown';}document.querySelectorAll('.relay-button').forEach(b=>{const n=parseInt(b.getAttribute('data-relay'));const isTx=n<=8?d.transmitting:d.transmitting_b;const avail=n<=8?(d.available_antennas||[]):(d.available_antennas_b||[]);const supports=avail.includes(n);b.classList.remove('multi-band','transmitting');if(b.classList.contains('active')){if(isTx)b.classList.add('transmitting');}else{if(supports)b.classList.add('multi-band');}});}).catch(e=>{console.error('Error:',e);['current-frequency','active-antenna','data-source','current-frequency-b','active-antenna-b','data-source-b'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent='Error updating';});});}";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    // Final initialization
+    ss_buffer << "updateStatus();updateRelayStatus();setInterval(updateStatus,INTERVAL);</script>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
+    // Send HTML footer
+    ret = send_cstr_chunk(HtmlContent::HTML_FOOTER);
+    if (ret != ESP_OK) return ret;
+
+    // Send final empty chunk to signal end
+    ret = httpd_resp_send_chunk(req, nullptr, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send final chunk: %s", esp_err_to_name(ret));
+    }
+    
+    return ret;
 }
 
 esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config) {

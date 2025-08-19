@@ -66,10 +66,8 @@ esp_err_t WebServer::root_get_handler(httpd_req_t *req) {
         strcpy(mac_addr, "Unknown");
     }
 
-    const std::string resp_str = HtmlContent::generate_root_html(ant_config, ip_addr, mac_addr);
-
-    httpd_resp_send(req, resp_str.c_str(), resp_str.length());
-    return ESP_OK;
+    // Use chunked HTML generation to avoid memory issues
+    return HtmlContent::generate_root_html_chunked(req, ant_config, ip_addr, mac_addr);
 }
 
 esp_err_t WebServer::config_get_handler(httpd_req_t *req) {

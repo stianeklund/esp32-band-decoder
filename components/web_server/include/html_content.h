@@ -28,6 +28,7 @@ public:
     static const std::map<std::string_view, BandInfo> band_info;
 
     static std::string generate_root_html(const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr);
+    static esp_err_t generate_root_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr);
     static esp_err_t generate_config_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config);
 
 private:
