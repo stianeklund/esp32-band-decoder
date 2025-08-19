@@ -780,6 +780,145 @@ esp_err_t WebServer::relay_control_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+esp_err_t WebServer::config_export_handler(httpd_req_t *req) {
+    ESP_LOGD(TAG, "Config export request received");
+
+    char *json_config = nullptr;
+    esp_err_t ret = ConfigManager::instance().export_config_to_json(&json_config);
+    
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to export configuration: %s", esp_err_to_name(ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to export configuration");
+        return ESP_FAIL;
+    }
+
+    if (!json_config) {
+        ESP_LOGE(TAG, "Export returned NULL configuration");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to generate configuration");
+        return ESP_FAIL;
+    }
+
+    // Set headers for file download
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"kc868_config.json\"");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+
+    // Send the JSON configuration
+    httpd_resp_sendstr(req, json_config);
+    
+    // Free the allocated JSON string
+    free(json_config);
+    
+    ESP_LOGI(TAG, "Configuration exported successfully");
+    return ESP_OK;
+}
+
+esp_err_t WebServer::config_import_handler(httpd_req_t *req) {
+    ESP_LOGD(TAG, "Config import request received");
+
+    // Get content length and validate
+    const size_t content_len = req->content_len;
+    if (content_len == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No configuration data received");
+        return ESP_FAIL;
+    }
+
+    if (content_len > MAX_POST_SIZE * 4) { // Allow larger size for JSON configs
+        ESP_LOGE(TAG, "Configuration file too large: %zu bytes", content_len);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Configuration file too large");
+        return ESP_FAIL;
+    }
+
+    // Allocate memory for content
+    char *content = (char *)malloc(content_len + 1);
+    if (!content) {
+        ESP_LOGE(TAG, "Failed to allocate memory for config import");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+
+    // Read the configuration data
+    size_t remaining = content_len;
+    size_t offset = 0;
+    
+    while (remaining > 0) {
+        int received = httpd_req_recv(req, content + offset, remaining);
+        if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "Socket timeout during config import");
+                continue;
+            }
+            ESP_LOGE(TAG, "Error receiving config data: %d", received);
+            free(content);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive configuration data");
+            return ESP_FAIL;
+        }
+        remaining -= received;
+        offset += received;
+    }
+    
+    content[content_len] = '\0';
+    ESP_LOGD(TAG, "Received %zu bytes of configuration data", content_len);
+
+    // First validate the configuration without applying it
+    esp_err_t validate_ret = ConfigManager::instance().import_config_from_json(content, true);
+    if (validate_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Configuration validation failed: %s", esp_err_to_name(validate_ret));
+        free(content);
+        
+        cJSON *error_response = cJSON_CreateObject();
+        cJSON_AddStringToObject(error_response, "status", "error");
+        cJSON_AddStringToObject(error_response, "message", "Configuration validation failed");
+        cJSON_AddStringToObject(error_response, "error_code", esp_err_to_name(validate_ret));
+        
+        char *error_json = cJSON_Print(error_response);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, error_json);
+        
+        free(error_json);
+        cJSON_Delete(error_response);
+        return ESP_FAIL;
+    }
+
+    // Apply the configuration
+    esp_err_t import_ret = ConfigManager::instance().import_config_from_json(content, false);
+    free(content);
+    
+    if (import_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to apply imported configuration: %s", esp_err_to_name(import_ret));
+        
+        cJSON *error_response = cJSON_CreateObject();
+        cJSON_AddStringToObject(error_response, "status", "error");
+        cJSON_AddStringToObject(error_response, "message", "Failed to apply configuration");
+        cJSON_AddStringToObject(error_response, "error_code", esp_err_to_name(import_ret));
+        
+        char *error_json = cJSON_Print(error_response);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_sendstr(req, error_json);
+        
+        free(error_json);
+        cJSON_Delete(error_response);
+        return ESP_FAIL;
+    }
+
+    // Send success response
+    cJSON *success_response = cJSON_CreateObject();
+    cJSON_AddStringToObject(success_response, "status", "success");
+    cJSON_AddStringToObject(success_response, "message", "Configuration imported successfully");
+    
+    char *success_json = cJSON_Print(success_response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, success_json);
+    
+    free(success_json);
+    cJSON_Delete(success_response);
+    
+    ESP_LOGI(TAG, "Configuration imported and applied successfully");
+    return ESP_OK;
+}
+
 esp_err_t WebServer::register_uri_handlers() const
 {
     // Register global error handler first
@@ -859,6 +998,20 @@ esp_err_t WebServer::register_uri_handlers() const
         .user_ctx = nullptr
     };
 
+    static constexpr httpd_uri_t config_export = {
+        .uri = "/api/config/export",
+        .method = HTTP_GET,
+        .handler = config_export_handler,
+        .user_ctx = nullptr
+    };
+
+    static constexpr httpd_uri_t config_import = {
+        .uri = "/api/config/import",
+        .method = HTTP_POST,
+        .handler = config_import_handler,
+        .user_ctx = nullptr
+    };
+
     ESP_LOGV(TAG, "Registering URI handlers");
     
     ret = httpd_register_uri_handler(m_server, &root);
@@ -918,6 +1071,18 @@ esp_err_t WebServer::register_uri_handlers() const
     ret = httpd_register_uri_handler(m_server, &relay_control);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register relay control handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = httpd_register_uri_handler(m_server, &config_export);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register config export handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = httpd_register_uri_handler(m_server, &config_import);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register config import handler: %s", esp_err_to_name(ret));
         return ret;
     }
 

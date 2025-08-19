@@ -9,6 +9,8 @@
 #include "freertos/FreeRTOS.h" // For task and semaphore functions
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "cJSON.h"
+#include "esp_timer.h" // For esp_timer_get_time()
 
 static auto TAG = "CONFIG_MANAGER";
 
@@ -960,4 +962,493 @@ void ConfigManager::add_observer(const std::function<void(const antenna_switch_c
     observers_.push_back(observer);
     // Immediately notify the new observer of current config
     observer(*current_config_);
+}
+
+esp_err_t ConfigManager::export_config_to_json(char **json_string) const {
+    if (!json_string) {
+        ESP_LOGE(TAG, "Invalid json_string parameter");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to create JSON root object");
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Add metadata
+    cJSON_AddStringToObject(root, "version", "1.0");
+    
+    // Add timestamp (microseconds since boot converted to seconds)
+    char timestamp[64];
+    uint64_t time_us = esp_timer_get_time();
+    snprintf(timestamp, sizeof(timestamp), "%.3f", time_us / 1000000.0);
+    cJSON_AddStringToObject(root, "timestamp", timestamp);
+
+    // Create config object
+    cJSON *config = cJSON_CreateObject();
+    if (!config) {
+        ESP_LOGE(TAG, "Failed to create config object");
+        cJSON_Delete(root);
+        return ESP_ERR_NO_MEM;
+    }
+
+    // Basic configuration
+    cJSON_AddBoolToObject(config, "auto_mode", current_config_->auto_mode);
+    cJSON_AddBoolToObject(config, "allow_concurrent_data_sources", current_config_->allow_concurrent_data_sources);
+    cJSON_AddNumberToObject(config, "num_bands", current_config_->num_bands);
+    cJSON_AddNumberToObject(config, "num_antenna_ports", current_config_->num_antenna_ports);
+    
+    // Radio operation mode
+    const char *radio_mode_str;
+    switch (current_config_->radio_operation_mode) {
+        case RADIO_OP_MODE_SINGLE_A: radio_mode_str = "SINGLE_A"; break;
+        case RADIO_OP_MODE_ALTERNATING_AB: radio_mode_str = "ALTERNATING_AB"; break;
+        case RADIO_OP_MODE_CONCURRENT_AB: radio_mode_str = "CONCURRENT_AB"; break;
+        default: radio_mode_str = "SINGLE_A"; break;
+    }
+    cJSON_AddStringToObject(config, "radio_operation_mode", radio_mode_str);
+
+    // Bands configuration
+    cJSON *bands = cJSON_CreateObject();
+    cJSON *radio_a_bands = cJSON_CreateArray();
+    cJSON *radio_b_bands = cJSON_CreateArray();
+    
+    for (int i = 0; i < current_config_->num_bands; i++) {
+        // Radio A band
+        cJSON *band_a = cJSON_CreateObject();
+        cJSON_AddStringToObject(band_a, "description", current_config_->bands[0][i].description);
+        cJSON_AddNumberToObject(band_a, "start_freq", current_config_->bands[0][i].start_freq);
+        cJSON_AddNumberToObject(band_a, "end_freq", current_config_->bands[0][i].end_freq);
+        
+        cJSON *antenna_ports_a = cJSON_CreateArray();
+        for (int j = 0; j < MAX_ANTENNA_PORTS; j++) {
+            cJSON_AddItemToArray(antenna_ports_a, cJSON_CreateBool(current_config_->bands[0][i].antenna_ports[j]));
+        }
+        cJSON_AddItemToObject(band_a, "antenna_ports", antenna_ports_a);
+        cJSON_AddItemToArray(radio_a_bands, band_a);
+
+        // Radio B band
+        cJSON *band_b = cJSON_CreateObject();
+        cJSON_AddStringToObject(band_b, "description", current_config_->bands[1][i].description);
+        cJSON_AddNumberToObject(band_b, "start_freq", current_config_->bands[1][i].start_freq);
+        cJSON_AddNumberToObject(band_b, "end_freq", current_config_->bands[1][i].end_freq);
+        
+        cJSON *antenna_ports_b = cJSON_CreateArray();
+        for (int j = 0; j < MAX_ANTENNA_PORTS; j++) {
+            cJSON_AddItemToArray(antenna_ports_b, cJSON_CreateBool(current_config_->bands[1][i].antenna_ports[j]));
+        }
+        cJSON_AddItemToObject(band_b, "antenna_ports", antenna_ports_b);
+        cJSON_AddItemToArray(radio_b_bands, band_b);
+    }
+    
+    cJSON_AddItemToObject(bands, "radio_a", radio_a_bands);
+    cJSON_AddItemToObject(bands, "radio_b", radio_b_bands);
+    cJSON_AddItemToObject(config, "bands", bands);
+
+    // UART configuration
+    cJSON *uart = cJSON_CreateObject();
+    cJSON_AddNumberToObject(uart, "baud_rate", current_config_->uart_baud_rate);
+    cJSON_AddNumberToObject(uart, "parity", current_config_->uart_parity);
+    cJSON_AddNumberToObject(uart, "stop_bits", current_config_->uart_stop_bits);
+    cJSON_AddNumberToObject(uart, "flow_ctrl", current_config_->uart_flow_ctrl);
+    cJSON_AddNumberToObject(uart, "tx_pin", current_config_->uart_tx_pin);
+    cJSON_AddNumberToObject(uart, "rx_pin", current_config_->uart_rx_pin);
+    cJSON_AddItemToObject(config, "uart", uart);
+
+    // PTT configuration
+    cJSON *ptt = cJSON_CreateObject();
+    cJSON_AddNumberToObject(ptt, "input_radio_a", current_config_->ptt_input_radio_a);
+    cJSON_AddBoolToObject(ptt, "input_radio_a_active_high", current_config_->ptt_input_radio_a_active_high);
+    cJSON_AddNumberToObject(ptt, "input_radio_b", current_config_->ptt_input_radio_b);
+    cJSON_AddBoolToObject(ptt, "input_radio_b_active_high", current_config_->ptt_input_radio_b_active_high);
+    cJSON_AddItemToObject(config, "ptt", ptt);
+
+    // MQTT configuration
+    cJSON *mqtt = cJSON_CreateObject();
+    cJSON_AddBoolToObject(mqtt, "enabled", current_config_->mqtt_enabled);
+    cJSON_AddStringToObject(mqtt, "broker", current_config_->mqtt_broker);
+    cJSON_AddNumberToObject(mqtt, "port", current_config_->mqtt_port);
+    cJSON_AddStringToObject(mqtt, "rig_id", current_config_->mqtt_rig_id);
+    cJSON_AddStringToObject(mqtt, "username", current_config_->mqtt_username);
+    cJSON_AddStringToObject(mqtt, "password", current_config_->mqtt_password);
+    cJSON_AddStringToObject(mqtt, "client_id", current_config_->mqtt_client_id);
+    cJSON_AddStringToObject(mqtt, "topic", current_config_->mqtt_topic);
+    cJSON_AddItemToObject(config, "mqtt", mqtt);
+
+    // Interlock configuration
+    cJSON *interlock = cJSON_CreateObject();
+    cJSON_AddBoolToObject(interlock, "auto_resolves_conflict", current_config_->interlock_auto_resolves_conflict);
+    cJSON_AddBoolToObject(interlock, "auto_restore_on_conflict_resolution", current_config_->auto_restore_on_conflict_resolution);
+    cJSON_AddNumberToObject(interlock, "radio_restore_delay_ms", current_config_->radio_restore_delay_ms);
+    cJSON_AddItemToObject(config, "interlock", interlock);
+
+    // Relay names
+    cJSON *relay_names = cJSON_CreateArray();
+    for (int i = 0; i < 16; i++) {
+        cJSON_AddItemToArray(relay_names, cJSON_CreateString(current_config_->relay_names[i]));
+    }
+    cJSON_AddItemToObject(config, "relay_names", relay_names);
+
+    // Last used antenna
+    cJSON *last_used_antenna = cJSON_CreateObject();
+    cJSON *radio_a_last = cJSON_CreateArray();
+    cJSON *radio_b_last = cJSON_CreateArray();
+    
+    for (int i = 0; i < MAX_BANDS; i++) {
+        cJSON_AddItemToArray(radio_a_last, cJSON_CreateNumber(current_config_->last_used_antenna[0][i]));
+        cJSON_AddItemToArray(radio_b_last, cJSON_CreateNumber(current_config_->last_used_antenna[1][i]));
+    }
+    cJSON_AddItemToObject(last_used_antenna, "radio_a", radio_a_last);
+    cJSON_AddItemToObject(last_used_antenna, "radio_b", radio_b_last);
+    cJSON_AddItemToObject(config, "last_used_antenna", last_used_antenna);
+
+    // Add config to root
+    cJSON_AddItemToObject(root, "config", config);
+
+    // Generate JSON string
+    *json_string = cJSON_Print(root);
+    cJSON_Delete(root);
+
+    if (!*json_string) {
+        ESP_LOGE(TAG, "Failed to generate JSON string");
+        return ESP_ERR_NO_MEM;
+    }
+
+    ESP_LOGD(TAG, "Configuration exported to JSON successfully");
+    return ESP_OK;
+}
+
+esp_err_t ConfigManager::import_config_from_json(const char *json_string, bool validate_only) {
+    if (!json_string) {
+        ESP_LOGE(TAG, "Invalid json_string parameter");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *root = cJSON_Parse(json_string);
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to parse JSON: invalid format");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Check version compatibility
+    cJSON *version = cJSON_GetObjectItem(root, "version");
+    if (!cJSON_IsString(version)) {
+        ESP_LOGE(TAG, "Missing or invalid version field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (strcmp(version->valuestring, "1.0") != 0) {
+        ESP_LOGW(TAG, "Version mismatch: expected 1.0, got %s. Proceeding with caution.", version->valuestring);
+    }
+
+    // Get config object
+    cJSON *config = cJSON_GetObjectItem(root, "config");
+    if (!cJSON_IsObject(config)) {
+        ESP_LOGE(TAG, "Missing or invalid config object");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Create temporary config structure for validation
+    antenna_switch_config_t temp_config = {};
+
+    // Parse and validate basic configuration
+    cJSON *auto_mode = cJSON_GetObjectItem(config, "auto_mode");
+    if (cJSON_IsBool(auto_mode)) {
+        temp_config.auto_mode = cJSON_IsTrue(auto_mode);
+    } else {
+        ESP_LOGE(TAG, "Invalid auto_mode field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *allow_concurrent = cJSON_GetObjectItem(config, "allow_concurrent_data_sources");
+    if (cJSON_IsBool(allow_concurrent)) {
+        temp_config.allow_concurrent_data_sources = cJSON_IsTrue(allow_concurrent);
+    } else {
+        ESP_LOGE(TAG, "Invalid allow_concurrent_data_sources field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *num_bands = cJSON_GetObjectItem(config, "num_bands");
+    if (cJSON_IsNumber(num_bands) && num_bands->valueint > 0 && num_bands->valueint <= MAX_BANDS) {
+        temp_config.num_bands = num_bands->valueint;
+    } else {
+        ESP_LOGE(TAG, "Invalid num_bands field: must be between 1 and %d", MAX_BANDS);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *num_antenna_ports = cJSON_GetObjectItem(config, "num_antenna_ports");
+    if (cJSON_IsNumber(num_antenna_ports) && num_antenna_ports->valueint > 0 && num_antenna_ports->valueint <= MAX_ANTENNA_PORTS) {
+        temp_config.num_antenna_ports = num_antenna_ports->valueint;
+    } else {
+        ESP_LOGE(TAG, "Invalid num_antenna_ports field: must be between 1 and %d", MAX_ANTENNA_PORTS);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Parse radio operation mode
+    cJSON *radio_op_mode = cJSON_GetObjectItem(config, "radio_operation_mode");
+    if (cJSON_IsString(radio_op_mode)) {
+        if (strcmp(radio_op_mode->valuestring, "SINGLE_A") == 0) {
+            temp_config.radio_operation_mode = RADIO_OP_MODE_SINGLE_A;
+        } else if (strcmp(radio_op_mode->valuestring, "ALTERNATING_AB") == 0) {
+            temp_config.radio_operation_mode = RADIO_OP_MODE_ALTERNATING_AB;
+        } else if (strcmp(radio_op_mode->valuestring, "CONCURRENT_AB") == 0) {
+            temp_config.radio_operation_mode = RADIO_OP_MODE_CONCURRENT_AB;
+        } else {
+            ESP_LOGE(TAG, "Invalid radio_operation_mode: %s", radio_op_mode->valuestring);
+            cJSON_Delete(root);
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else {
+        ESP_LOGE(TAG, "Invalid radio_operation_mode field");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Parse bands configuration
+    cJSON *bands = cJSON_GetObjectItem(config, "bands");
+    if (cJSON_IsObject(bands)) {
+        cJSON *radio_a_bands = cJSON_GetObjectItem(bands, "radio_a");
+        cJSON *radio_b_bands = cJSON_GetObjectItem(bands, "radio_b");
+        
+        if (!cJSON_IsArray(radio_a_bands) || !cJSON_IsArray(radio_b_bands)) {
+            ESP_LOGE(TAG, "Invalid bands configuration");
+            cJSON_Delete(root);
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        int expected_bands = temp_config.num_bands;
+        if (cJSON_GetArraySize(radio_a_bands) != expected_bands || cJSON_GetArraySize(radio_b_bands) != expected_bands) {
+            ESP_LOGE(TAG, "Band array size mismatch: expected %d bands", expected_bands);
+            cJSON_Delete(root);
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        // Parse each band
+        for (int i = 0; i < expected_bands; i++) {
+            cJSON *band_a = cJSON_GetArrayItem(radio_a_bands, i);
+            cJSON *band_b = cJSON_GetArrayItem(radio_b_bands, i);
+
+            if (!cJSON_IsObject(band_a) || !cJSON_IsObject(band_b)) {
+                ESP_LOGE(TAG, "Invalid band object at index %d", i);
+                cJSON_Delete(root);
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            // Parse Radio A band
+            cJSON *desc_a = cJSON_GetObjectItem(band_a, "description");
+            cJSON *start_freq_a = cJSON_GetObjectItem(band_a, "start_freq");
+            cJSON *end_freq_a = cJSON_GetObjectItem(band_a, "end_freq");
+            cJSON *antenna_ports_a = cJSON_GetObjectItem(band_a, "antenna_ports");
+
+            if (!cJSON_IsString(desc_a) || !cJSON_IsNumber(start_freq_a) || !cJSON_IsNumber(end_freq_a) || !cJSON_IsArray(antenna_ports_a)) {
+                ESP_LOGE(TAG, "Invalid Radio A band %d configuration", i);
+                cJSON_Delete(root);
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            strncpy(temp_config.bands[0][i].description, desc_a->valuestring, sizeof(temp_config.bands[0][i].description) - 1);
+            temp_config.bands[0][i].description[sizeof(temp_config.bands[0][i].description) - 1] = '\0';
+            temp_config.bands[0][i].start_freq = start_freq_a->valueint;
+            temp_config.bands[0][i].end_freq = end_freq_a->valueint;
+
+            if (cJSON_GetArraySize(antenna_ports_a) != MAX_ANTENNA_PORTS) {
+                ESP_LOGE(TAG, "Invalid antenna_ports array size for Radio A band %d", i);
+                cJSON_Delete(root);
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            for (int j = 0; j < MAX_ANTENNA_PORTS; j++) {
+                cJSON *port = cJSON_GetArrayItem(antenna_ports_a, j);
+                if (!cJSON_IsBool(port)) {
+                    ESP_LOGE(TAG, "Invalid antenna port %d for Radio A band %d", j, i);
+                    cJSON_Delete(root);
+                    return ESP_ERR_INVALID_ARG;
+                }
+                temp_config.bands[0][i].antenna_ports[j] = cJSON_IsTrue(port);
+            }
+
+            // Parse Radio B band (similar logic)
+            cJSON *desc_b = cJSON_GetObjectItem(band_b, "description");
+            cJSON *start_freq_b = cJSON_GetObjectItem(band_b, "start_freq");
+            cJSON *end_freq_b = cJSON_GetObjectItem(band_b, "end_freq");
+            cJSON *antenna_ports_b = cJSON_GetObjectItem(band_b, "antenna_ports");
+
+            if (!cJSON_IsString(desc_b) || !cJSON_IsNumber(start_freq_b) || !cJSON_IsNumber(end_freq_b) || !cJSON_IsArray(antenna_ports_b)) {
+                ESP_LOGE(TAG, "Invalid Radio B band %d configuration", i);
+                cJSON_Delete(root);
+                return ESP_ERR_INVALID_ARG;
+            }
+
+            strncpy(temp_config.bands[1][i].description, desc_b->valuestring, sizeof(temp_config.bands[1][i].description) - 1);
+            temp_config.bands[1][i].description[sizeof(temp_config.bands[1][i].description) - 1] = '\0';
+            temp_config.bands[1][i].start_freq = start_freq_b->valueint;
+            temp_config.bands[1][i].end_freq = end_freq_b->valueint;
+
+            for (int j = 0; j < MAX_ANTENNA_PORTS; j++) {
+                cJSON *port = cJSON_GetArrayItem(antenna_ports_b, j);
+                if (!cJSON_IsBool(port)) {
+                    ESP_LOGE(TAG, "Invalid antenna port %d for Radio B band %d", j, i);
+                    cJSON_Delete(root);
+                    return ESP_ERR_INVALID_ARG;
+                }
+                temp_config.bands[1][i].antenna_ports[j] = cJSON_IsTrue(port);
+            }
+        }
+    } else {
+        ESP_LOGE(TAG, "Missing or invalid bands configuration");
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Parse UART configuration
+    cJSON *uart = cJSON_GetObjectItem(config, "uart");
+    if (cJSON_IsObject(uart)) {
+        cJSON *baud_rate = cJSON_GetObjectItem(uart, "baud_rate");
+        cJSON *parity = cJSON_GetObjectItem(uart, "parity");
+        cJSON *stop_bits = cJSON_GetObjectItem(uart, "stop_bits");
+        cJSON *flow_ctrl = cJSON_GetObjectItem(uart, "flow_ctrl");
+        cJSON *tx_pin = cJSON_GetObjectItem(uart, "tx_pin");
+        cJSON *rx_pin = cJSON_GetObjectItem(uart, "rx_pin");
+
+        if (!cJSON_IsNumber(baud_rate) || !cJSON_IsNumber(parity) || !cJSON_IsNumber(stop_bits) ||
+            !cJSON_IsNumber(flow_ctrl) || !cJSON_IsNumber(tx_pin) || !cJSON_IsNumber(rx_pin)) {
+            ESP_LOGE(TAG, "Invalid UART configuration");
+            cJSON_Delete(root);
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        temp_config.uart_baud_rate = baud_rate->valueint;
+        temp_config.uart_parity = parity->valueint;
+        temp_config.uart_stop_bits = stop_bits->valueint;
+        temp_config.uart_flow_ctrl = flow_ctrl->valueint;
+        temp_config.uart_tx_pin = tx_pin->valueint;
+        temp_config.uart_rx_pin = rx_pin->valueint;
+    }
+
+    // Parse PTT configuration
+    cJSON *ptt = cJSON_GetObjectItem(config, "ptt");
+    if (cJSON_IsObject(ptt)) {
+        cJSON *input_radio_a = cJSON_GetObjectItem(ptt, "input_radio_a");
+        cJSON *input_radio_a_active_high = cJSON_GetObjectItem(ptt, "input_radio_a_active_high");
+        cJSON *input_radio_b = cJSON_GetObjectItem(ptt, "input_radio_b");
+        cJSON *input_radio_b_active_high = cJSON_GetObjectItem(ptt, "input_radio_b_active_high");
+
+        if (cJSON_IsNumber(input_radio_a)) temp_config.ptt_input_radio_a = input_radio_a->valueint;
+        if (cJSON_IsBool(input_radio_a_active_high)) temp_config.ptt_input_radio_a_active_high = cJSON_IsTrue(input_radio_a_active_high);
+        if (cJSON_IsNumber(input_radio_b)) temp_config.ptt_input_radio_b = input_radio_b->valueint;
+        if (cJSON_IsBool(input_radio_b_active_high)) temp_config.ptt_input_radio_b_active_high = cJSON_IsTrue(input_radio_b_active_high);
+    }
+
+    // Parse MQTT configuration
+    cJSON *mqtt = cJSON_GetObjectItem(config, "mqtt");
+    if (cJSON_IsObject(mqtt)) {
+        cJSON *enabled = cJSON_GetObjectItem(mqtt, "enabled");
+        cJSON *broker = cJSON_GetObjectItem(mqtt, "broker");
+        cJSON *port = cJSON_GetObjectItem(mqtt, "port");
+        cJSON *rig_id = cJSON_GetObjectItem(mqtt, "rig_id");
+        cJSON *username = cJSON_GetObjectItem(mqtt, "username");
+        cJSON *password = cJSON_GetObjectItem(mqtt, "password");
+        cJSON *client_id = cJSON_GetObjectItem(mqtt, "client_id");
+        cJSON *topic = cJSON_GetObjectItem(mqtt, "topic");
+
+        if (cJSON_IsBool(enabled)) temp_config.mqtt_enabled = cJSON_IsTrue(enabled);
+        if (cJSON_IsString(broker)) {
+            strncpy(temp_config.mqtt_broker, broker->valuestring, sizeof(temp_config.mqtt_broker) - 1);
+            temp_config.mqtt_broker[sizeof(temp_config.mqtt_broker) - 1] = '\0';
+        }
+        if (cJSON_IsNumber(port)) temp_config.mqtt_port = port->valueint;
+        if (cJSON_IsString(rig_id)) {
+            strncpy(temp_config.mqtt_rig_id, rig_id->valuestring, sizeof(temp_config.mqtt_rig_id) - 1);
+            temp_config.mqtt_rig_id[sizeof(temp_config.mqtt_rig_id) - 1] = '\0';
+        }
+        if (cJSON_IsString(username)) {
+            strncpy(temp_config.mqtt_username, username->valuestring, sizeof(temp_config.mqtt_username) - 1);
+            temp_config.mqtt_username[sizeof(temp_config.mqtt_username) - 1] = '\0';
+        }
+        if (cJSON_IsString(password)) {
+            strncpy(temp_config.mqtt_password, password->valuestring, sizeof(temp_config.mqtt_password) - 1);
+            temp_config.mqtt_password[sizeof(temp_config.mqtt_password) - 1] = '\0';
+        }
+        if (cJSON_IsString(client_id)) {
+            strncpy(temp_config.mqtt_client_id, client_id->valuestring, sizeof(temp_config.mqtt_client_id) - 1);
+            temp_config.mqtt_client_id[sizeof(temp_config.mqtt_client_id) - 1] = '\0';
+        }
+        if (cJSON_IsString(topic)) {
+            strncpy(temp_config.mqtt_topic, topic->valuestring, sizeof(temp_config.mqtt_topic) - 1);
+            temp_config.mqtt_topic[sizeof(temp_config.mqtt_topic) - 1] = '\0';
+        }
+    }
+
+    // Parse interlock configuration
+    cJSON *interlock = cJSON_GetObjectItem(config, "interlock");
+    if (cJSON_IsObject(interlock)) {
+        cJSON *auto_resolves = cJSON_GetObjectItem(interlock, "auto_resolves_conflict");
+        cJSON *auto_restore = cJSON_GetObjectItem(interlock, "auto_restore_on_conflict_resolution");
+        cJSON *restore_delay = cJSON_GetObjectItem(interlock, "radio_restore_delay_ms");
+
+        if (cJSON_IsBool(auto_resolves)) temp_config.interlock_auto_resolves_conflict = cJSON_IsTrue(auto_resolves);
+        if (cJSON_IsBool(auto_restore)) temp_config.auto_restore_on_conflict_resolution = cJSON_IsTrue(auto_restore);
+        if (cJSON_IsNumber(restore_delay)) temp_config.radio_restore_delay_ms = restore_delay->valueint;
+    }
+
+    // Parse relay names
+    cJSON *relay_names = cJSON_GetObjectItem(config, "relay_names");
+    if (cJSON_IsArray(relay_names) && cJSON_GetArraySize(relay_names) == 16) {
+        for (int i = 0; i < 16; i++) {
+            cJSON *name = cJSON_GetArrayItem(relay_names, i);
+            if (cJSON_IsString(name)) {
+                strncpy(temp_config.relay_names[i], name->valuestring, sizeof(temp_config.relay_names[i]) - 1);
+                temp_config.relay_names[i][sizeof(temp_config.relay_names[i]) - 1] = '\0';
+            }
+        }
+    }
+
+    // Parse last used antenna
+    cJSON *last_used_antenna = cJSON_GetObjectItem(config, "last_used_antenna");
+    if (cJSON_IsObject(last_used_antenna)) {
+        cJSON *radio_a_last = cJSON_GetObjectItem(last_used_antenna, "radio_a");
+        cJSON *radio_b_last = cJSON_GetObjectItem(last_used_antenna, "radio_b");
+
+        if (cJSON_IsArray(radio_a_last) && cJSON_GetArraySize(radio_a_last) == MAX_BANDS) {
+            for (int i = 0; i < MAX_BANDS; i++) {
+                cJSON *antenna = cJSON_GetArrayItem(radio_a_last, i);
+                if (cJSON_IsNumber(antenna)) {
+                    temp_config.last_used_antenna[0][i] = antenna->valueint;
+                }
+            }
+        }
+
+        if (cJSON_IsArray(radio_b_last) && cJSON_GetArraySize(radio_b_last) == MAX_BANDS) {
+            for (int i = 0; i < MAX_BANDS; i++) {
+                cJSON *antenna = cJSON_GetArrayItem(radio_b_last, i);
+                if (cJSON_IsNumber(antenna)) {
+                    temp_config.last_used_antenna[1][i] = antenna->valueint;
+                }
+            }
+        }
+    }
+
+    cJSON_Delete(root);
+
+    if (validate_only) {
+        ESP_LOGI(TAG, "Configuration validation successful");
+        return ESP_OK;
+    }
+
+    // Apply the configuration
+    esp_err_t ret = update_config(temp_config);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Configuration imported successfully");
+    } else {
+        ESP_LOGE(TAG, "Failed to apply imported configuration: %s", esp_err_to_name(ret));
+    }
+
+    return ret;
 }

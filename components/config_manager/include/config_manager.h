@@ -74,6 +74,22 @@ public:
      */
     esp_err_t flush_pending_save(TickType_t xTicksToWait);
 
+    // Configuration export/import functionality
+    /**
+     * @brief Export current configuration to JSON string
+     * @param json_string Pointer to store the allocated JSON string (must be freed by caller)
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t export_config_to_json(char **json_string) const;
+
+    /**
+     * @brief Import configuration from JSON string and apply it
+     * @param json_string JSON string containing the configuration
+     * @param validate_only If true, only validate without applying changes
+     * @return ESP_OK on success, error code on failure
+     */
+    esp_err_t import_config_from_json(const char *json_string, bool validate_only = false);
+
     // Destructor to clean up current_config_
     ~ConfigManager();
 };

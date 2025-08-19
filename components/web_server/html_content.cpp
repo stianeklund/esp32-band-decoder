@@ -1609,13 +1609,79 @@ for (const auto &[fst, snd] : HtmlContent::band_info) {
     document.querySelector('input[name="auto_restore_on_conflict_resolution"]').addEventListener('change', toggleRadioBPortVisibility); // Add listener
     
     toggleRadioBPortVisibility(); // Initial call
+
+    // Handle configuration file import
+    async function handleConfigImport(input) {
+        if (!input.files || input.files.length === 0) {
+            return;
+        }
+
+        const file = input.files[0];
+        if (!file.name.toLowerCase().endsWith('.json')) {
+            alert('Please select a valid JSON configuration file.');
+            return;
+        }
+
+        if (!confirm('Are you sure you want to import this configuration? This will overwrite your current settings.')) {
+            input.value = ''; // Clear the file input
+            return;
+        }
+
+        try {
+            const formData = new FormData();
+            formData.append('config', file);
+
+            const submitButton = document.querySelector('input[type="submit"]');
+            const originalValue = submitButton.value;
+            submitButton.value = 'Importing...';
+            submitButton.disabled = true;
+
+            const response = await fetch('/api/config/import', {
+                method: 'POST',
+                body: file
+            });
+
+            const result = await response.json();
+            
+            if (response.ok && result.status === 'success') {
+                alert('Configuration imported successfully! The page will reload to show the new settings.');
+                window.location.reload();
+            } else {
+                const errorMessage = result.message || 'Failed to import configuration';
+                const errorCode = result.error_code || '';
+                alert(`Error: ${errorMessage}${errorCode ? ' (' + errorCode + ')' : ''}`);
+            }
+        } catch (error) {
+            console.error('Error importing configuration:', error);
+            alert('Failed to import configuration. Please check the file format and try again.');
+        } finally {
+            // Reset the submit button
+            const submitButton = document.querySelector('input[type="submit"]');
+            if (submitButton) {
+                submitButton.value = originalValue || 'Update Configuration';
+                submitButton.disabled = false;
+            }
+            input.value = ''; // Clear the file input
+        }
+    }
     </script>)";
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
 
     ss_buffer << "<div class='button-container' style='margin: 20px 0;'>";
     ss_buffer << "<a href='/' class='button'>Back to Home</a>";
-    ss_buffer << "<form action='/reset-config' method='post' style='display: inline;'>";
+    
+    // Export configuration button
+    ss_buffer << "<a href='/api/config/export' download='kc868_config.json' class='button' style='background-color: #3498db; color: white; margin-left: 10px;'>Export Configuration</a>";
+    
+    // Import configuration section
+    ss_buffer << "<div style='display: inline-block; margin-left: 10px;'>";
+    ss_buffer << "<input type='file' id='configFileInput' accept='.json' style='display: none;' onchange='handleConfigImport(this)'>";
+    ss_buffer << "<button onclick='document.getElementById(\"configFileInput\").click()' class='button' style='background-color: #2ecc71; color: white;'>Import Configuration</button>";
+    ss_buffer << "</div>";
+    
+    // Reset configuration button
+    ss_buffer << "<form action='/reset-config' method='post' style='display: inline; margin-left: 10px;'>";
     ss_buffer << "<input type='submit' value='Reset Configuration' class='button' style='background-color: #e74c3c; color: white;' onclick='return confirm(\"Are you sure you want to reset the configuration?\");'>";
     ss_buffer << "</form>";
     ss_buffer << "</div>";
