@@ -298,7 +298,16 @@ void AntennaSwitch::on_cat_tx_a_state_change(const bool active) {
 
 
 bool AntennaSwitch::is_radio_a_transmitting_effective() const {
-    return hw_ptt_a_active_.load(std::memory_order_relaxed) || cat_tx_a_active_.load(std::memory_order_relaxed);
+    const bool hw_ptt = hw_ptt_a_active_.load(std::memory_order_relaxed);
+    const bool cat_tx = cat_tx_a_active_.load(std::memory_order_relaxed);
+    const bool result = hw_ptt || cat_tx;
+    
+    // Add debugging for stuck TX state issues
+    if (result) {
+        ESP_LOGW(TAG, "Radio A transmitting effective: hw_ptt=%d, cat_tx=%d", hw_ptt, cat_tx);
+    }
+    
+    return result;
 }
 
 bool AntennaSwitch::is_radio_b_transmitting_effective() const {

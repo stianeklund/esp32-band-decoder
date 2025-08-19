@@ -548,14 +548,15 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
     const bool tx_state_changed = new_tx_state != transmitting; // Compare new with current member state
     const std::string old_mode = current_mode;                   // Capture current mode before update
 
+    ESP_LOGD(TAG, "IF command parsing: freq=%lu, new_tx_state=%d, current_tx_state=%d, tx_changed=%d", 
+             frequency, new_tx_state, transmitting, tx_state_changed);
+
     // Update internal states
-    transmitting = new_tx_state;
     current_mode = new_mode_str;
 
-
     if (tx_state_changed) {
-        ESP_LOGV(TAG, "Radio %s (IF command)", transmitting ? "started transmitting" : "stopped transmitting");
-        // The call to set_transmitting will handle notifying AntennaSwitch
+        ESP_LOGD(TAG, "Radio %s (IF command)", new_tx_state ? "started transmitting" : "stopped transmitting");
+        // The call to set_transmitting will handle updating transmitting member AND notifying AntennaSwitch
         set_transmitting(new_tx_state);
     }
     // If only frequency changed, but TX state did not, we still need to inform AntennaSwitch
@@ -599,11 +600,15 @@ esp_err_t CatParser::process_fa_command(const std::string_view command) {
 
 void CatParser::set_transmitting(const bool new_state) {
     if (transmitting != new_state) { // 'transmitting' is the member bool of CatParser
-        ESP_LOGD(TAG, "CatParser internal transmit state changing to: %s", new_state ? "ON" : "OFF");
+        ESP_LOGD(TAG, "CatParser internal transmit state changing from %s to %s", 
+                 transmitting ? "ON" : "OFF", new_state ? "ON" : "OFF");
         transmitting = new_state; // Update CatParser's own state
 
         // Notify AntennaSwitch about this change for Radio A
+        ESP_LOGD(TAG, "Notifying AntennaSwitch of CAT TX state change to: %s", new_state ? "ON" : "OFF");
         AntennaSwitch::instance().on_cat_tx_a_state_change(new_state);
+    } else {
+        ESP_LOGV(TAG, "CatParser transmit state unchanged at: %s", new_state ? "ON" : "OFF");
     }
 }
 
