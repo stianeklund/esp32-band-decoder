@@ -26,6 +26,8 @@ const char *HtmlContent::HTML_HEADER = R"(
             --button-default-bg-color: #e0e0e0;
             --button-default-border-color: #dddddd;
             --th-text-color: #ffffff;
+            /* Ensure UA-painted controls (checkboxes, number spinners) are light */
+            color-scheme: light;
         }
         
         :root[data-theme="dark"] {
@@ -40,11 +42,10 @@ const char *HtmlContent::HTML_HEADER = R"(
             --button-default-bg-color: #2d2d2d;
             --button-default-border-color: #404040;
             --th-text-color: #ffffff;
+            /* Ensure UA-painted controls (checkboxes, number spinners) are dark */
+            color-scheme: dark;
         }
         
-        :root {
-            color-scheme: light dark;
-        }
         /* Base responsive layout */
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -235,6 +236,12 @@ const char *HtmlContent::HTML_HEADER = R"(
 
         input[type="checkbox"] {
             margin-right: 5px;
+        }
+
+        /* Make native controls follow theme colors consistently */
+        input[type="checkbox"],
+        input[type="radio"] {
+            accent-color: var(--primary-color);
         }
 
         .relay-groups {
