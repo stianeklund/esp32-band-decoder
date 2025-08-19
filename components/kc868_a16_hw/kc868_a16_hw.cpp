@@ -313,9 +313,6 @@ esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
         ESP_LOGE(TAG, "set_all_outputs: Failed to write to ADDR_1 (0x%02X): %s", PCF8574_OUTPUT_ADDR_1, esp_err_to_name(ret));
         return ret;
     }
-
-    vTaskDelay(pdMS_TO_TICKS(1)); // Add 1ms delay between accessing the two expanders
-
     ret = write_pcf8574(PCF8574_OUTPUT_ADDR_2, high_byte);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "set_all_outputs: Failed to write to ADDR_2 (0x%02X): %s", PCF8574_OUTPUT_ADDR_2, esp_err_to_name(ret));
