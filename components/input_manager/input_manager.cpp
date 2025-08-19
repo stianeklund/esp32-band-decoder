@@ -1,5 +1,6 @@
 #include "input_manager.h"
 #include "antenna_switch.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "kc868_a16_hw.h"
 
@@ -8,7 +9,7 @@ static auto TAG = "InputManager";
 // Helper function to determine the logical state of a PTT input
 // and report the physical state of the PCF8574 pin for logging.
 static bool determine_ptt_logical_state(
-    const int configured_pin_index,             // The configured input pin number (0-15)
+    const int configured_pin_index,             // The configured input pin (0-15)
     const bool configured_terminal_active_high, // True if the PTT signal is active high at the terminal
     const uint16_t all_inputs_mask,             // The raw mask from kc868_a16_get_all_inputs()
     bool* out_pcf8574_pin_physically_low        // Output: true if the PCF8574 pin for this input is physically low
@@ -71,12 +72,8 @@ esp_err_t InputManager::init() {
 
     // Initialize the underlying KC868-A16 hardware (I2C, etc.)
     // This is now safe to call even if RelayController also calls it.
-    esp_err_t ret = kc868_a16_hw_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize KC868-A16 hardware: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    
+    ESP_RETURN_ON_ERROR(kc868_a16_hw_init(), TAG, "Failed to initialize KC868-A16 hardware");
+
     // Note: PCF8574 inputs typically don't need specific configuration beyond the I2C bus being up.
     // The pins on PCF8574 are quasi-bidirectional and default to high-impedance inputs when read.
 
@@ -90,12 +87,13 @@ esp_err_t InputManager::init() {
         &ptt_poll_task_handle_
     );
 
+
     if (task_created != pdPASS) {
         ESP_LOGE(TAG, "Failed to create PTT polling task");
         // ptt_poll_task_handle_ will be nullptr, task won't run.
         return ESP_FAIL; 
     }
-    ESP_LOGI(TAG, "PTT polling task created and started."); // Changed from ESP_LOGD to ESP_LOGI
+    ESP_LOGI(TAG, "PTT polling task created and started.");
 
     initialized_ = true;
     ESP_LOGI(TAG, "InputManager initialized successfully.");
@@ -142,7 +140,106 @@ void InputManager::ptt_poll_task_trampoline(void* arg) {
     manager->ptt_poll_task();
 }
 
-// The actual PTT polling task implementation
+constexpr int kMaxMonitoredPin = 7;
+
+void InputManager::handle_ptt_line(
+    const int config_pin,
+    const bool active_high,
+    bool& last_state,
+    const char* label,
+    const uint16_t inputs_mask,
+    const std::function<void(bool)>& on_state_change) {
+
+    if (config_pin < 0)
+        return;
+
+    if (config_pin <= kMaxMonitoredPin) {
+
+        bool pin_physically_low;
+        const bool logically_active = determine_ptt_logical_state(config_pin, active_high, inputs_mask,
+                                                            &pin_physically_low);
+
+        if (logically_active != last_state) {
+            ESP_LOGI(TAG, "Transmit state changed via PTT input line to: %s", logically_active ? "true" : "false");
+
+            ESP_LOGV(
+                TAG,
+                "PTT %s (Input Pin %d) logical state CHANGED to: %s. (PCF8574 pin was %s, Configured terminal active: %s)",
+                label, config_pin,
+                logically_active ? "ACTIVE" : "INACTIVE",
+                pin_physically_low ? "LOW" : "HIGH",
+                active_high ? "HIGH" : "LOW");
+
+            on_state_change(logically_active);
+            last_state = logically_active;
+        }
+    }
+    else {
+        if (last_state) {
+            ESP_LOGW(TAG, "PTT %s (Input Pin %d) is configured for an unmonitored range (>=8). Forcing INACTIVE.",
+                     label, config_pin);
+            on_state_change(false);
+            last_state = false;
+        }
+    }
+}
+
+void InputManager::handle_ptt_read_error() {
+    if (ptt_a_last_hw_state_) {
+        AntennaSwitch::instance().on_hw_ptt_a_state_change(false);
+        ptt_a_last_hw_state_ = false;
+        ESP_LOGW(TAG, "PTT A forced INACTIVE due to read error.");
+    }
+    if (ptt_b_last_hw_state_) {
+        AntennaSwitch::instance().on_hw_ptt_b_state_change(false);
+        ptt_b_last_hw_state_ = false;
+        ESP_LOGW(TAG, "PTT B forced INACTIVE due to read error.");
+    }
+}
+
+void InputManager::ptt_poll_task() {
+    uint16_t current_inputs_mask = 0;
+
+    for (;;) {
+        if (!initialized_) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        refresh_active_ptt_config();
+
+        uint8_t ptt_inputs_raw_0_7;
+
+        if (const esp_err_t ret = kc868_a16_get_inputs_0_7_raw(&ptt_inputs_raw_0_7); ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to read inputs (0-7) in PTT poll task: %s", esp_err_to_name(ret));
+            handle_ptt_read_error();
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
+
+        current_inputs_mask = static_cast<uint16_t>(ptt_inputs_raw_0_7);
+
+        handle_ptt_line(
+            ptt_input_radio_a_config_,
+            ptt_input_radio_a_active_high_config_,
+            ptt_a_last_hw_state_,
+            "A",
+            current_inputs_mask, [](const bool state) { AntennaSwitch::instance().on_hw_ptt_a_state_change(state); }
+        );
+
+        handle_ptt_line(
+            ptt_input_radio_b_config_,
+            ptt_input_radio_b_active_high_config_,
+            ptt_b_last_hw_state_,
+            "B",
+            current_inputs_mask, [](const bool state) { AntennaSwitch::instance().on_hw_ptt_b_state_change(state); }
+        );
+
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
+/*// The actual PTT polling task implementation
 void InputManager::ptt_poll_task() {
     uint16_t current_inputs_mask = 0; // Will store the state of pins 0-7
 
@@ -234,4 +331,4 @@ void InputManager::ptt_poll_task() {
 
         vTaskDelay(pdMS_TO_TICKS(5));
     }
-}
+}*/

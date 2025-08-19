@@ -47,6 +47,9 @@ private:
     ~InputManager() = default;
 
     static void ptt_poll_task_trampoline(void *arg);
+    void handle_ptt_line(int config_pin, bool active_high, bool& last_state, const char* label,
+                         uint16_t inputs_mask, const std::function<void(bool)>& on_state_change);
+    void handle_ptt_read_error();
     void ptt_poll_task();
 
     static InputManager* instance_;
