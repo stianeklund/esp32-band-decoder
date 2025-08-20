@@ -5,6 +5,12 @@
 #include "esp_err.h"
 #include "cat_parser.h"
 #include "config_manager.h"
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
+#include "lwip/err.h"
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
 
 // Ensure TAG is defined for logging
 static const char *TAG = "MQTTClient";
@@ -86,6 +92,119 @@ esp_err_t MQTTClient::init() {
     return ESP_OK;
 }
 
+bool MQTTClient::check_broker_connectivity() const {
+    const auto &config = get_cached_config();
+    if (!config.mqtt_enabled) {
+        return false;
+    }
+
+    // Parse broker address to extract hostname and port
+    const char* broker_uri = config.mqtt_broker;
+    char hostname[128] = {0};
+    int port = config.mqtt_port;
+
+    // Extract hostname from URI (handle mqtt:// or tcp:// prefixes)
+    const char* host_start = broker_uri;
+    if (strncmp(broker_uri, "mqtt://", 7) == 0) {
+        host_start = broker_uri + 7;
+    } else if (strncmp(broker_uri, "tcp://", 6) == 0) {
+        host_start = broker_uri + 6;
+    }
+
+    // Copy hostname (up to : or end of string)
+    const char* port_start = strchr(host_start, ':');
+    size_t hostname_len;
+    if (port_start) {
+        hostname_len = port_start - host_start;
+        // Extract port number after :
+        port = atoi(port_start + 1);
+    } else {
+        hostname_len = strlen(host_start);
+        // Use default MQTT port if not specified and we have a prefix
+        if (port == 0) {
+            port = 1883;
+        }
+    }
+    
+    if (hostname_len >= sizeof(hostname)) {
+        ESP_LOGE(TAG, "Hostname too long in broker URI: %s", broker_uri);
+        return false;
+    }
+    
+    strncpy(hostname, host_start, hostname_len);
+    hostname[hostname_len] = '\0';
+
+    ESP_LOGD(TAG, "Checking connectivity to %s:%d", hostname, port);
+
+    // Create socket
+    int sock = lwip_socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        ESP_LOGW(TAG, "Failed to create socket for connectivity check");
+        return false;
+    }
+
+    // Set socket to non-blocking mode for timeout control
+    int flags = lwip_fcntl(sock, F_GETFL, 0);
+    if (lwip_fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0) {
+        ESP_LOGW(TAG, "Failed to set socket to non-blocking mode");
+        lwip_close(sock);
+        return false;
+    }
+
+    // Resolve hostname
+    struct hostent *host_entry = lwip_gethostbyname(hostname);
+    if (!host_entry) {
+        ESP_LOGD(TAG, "DNS resolution failed for %s", hostname);
+        lwip_close(sock);
+        return false;
+    }
+
+    // Setup address structure
+    struct sockaddr_in dest_addr;
+    memset(&dest_addr, 0, sizeof(dest_addr));
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(port);
+    memcpy(&dest_addr.sin_addr, host_entry->h_addr, host_entry->h_length);
+
+    // Attempt connection
+    int result = lwip_connect(sock, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+    bool is_connected = false;
+
+    if (result == 0) {
+        // Connected immediately
+        is_connected = true;
+    } else if (errno == EINPROGRESS) {
+        // Connection in progress, wait for completion with timeout
+        fd_set write_set;
+        struct timeval timeout;
+        
+        FD_ZERO(&write_set);
+        FD_SET(sock, &write_set);
+        timeout.tv_sec = 2;  // 2 second timeout
+        timeout.tv_usec = 0;
+        
+        result = lwip_select(sock + 1, NULL, &write_set, NULL, &timeout);
+        if (result > 0) {
+            // Check if connection actually succeeded
+            int error = 0;
+            socklen_t len = sizeof(error);
+            if (lwip_getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len) == 0 && error == 0) {
+                is_connected = true;
+            }
+        }
+    }
+
+    lwip_close(sock);
+
+    if (is_connected) {
+        ESP_LOGD(TAG, "Connectivity check passed for %s:%d", hostname, port);
+    } else {
+        ESP_LOGD(TAG, "Connectivity check failed for %s:%d", hostname, port);
+    }
+
+    return is_connected;
+}
+
 esp_err_t MQTTClient::connect() const {
     if (const auto &config = get_cached_config(); !config.mqtt_enabled) {
         ESP_LOGI(TAG, "MQTT is disabled in configuration. Not attempting to connect.");
@@ -100,7 +219,13 @@ esp_err_t MQTTClient::connect() const {
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "Attempting to start MQTT client (connect to broker)...");
+    // Perform connectivity check before attempting MQTT connection
+    if (!check_broker_connectivity()) {
+        ESP_LOGW(TAG, "Broker connectivity check failed, skipping MQTT connection attempt");
+        return ESP_ERR_NOT_FOUND; // Broker not reachable
+    }
+
+    ESP_LOGI(TAG, "Broker connectivity confirmed, attempting MQTT connection...");
     if (const esp_err_t err = esp_mqtt_client_start(client_); err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start MQTT client: %s", esp_err_to_name(err));
         return err;

@@ -936,6 +936,136 @@ esp_err_t WebServer::config_import_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+esp_err_t WebServer::relay_names_handler(httpd_req_t *req) {
+    ESP_LOGD(TAG, "Relay names request received");
+
+    antenna_switch_config_t config;
+    esp_err_t ret = AntennaSwitch::instance().get_config(&config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get configuration: %s", esp_err_to_name(ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to get configuration");
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to create JSON object");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+
+    // Add relay names (1-16)
+    for (int i = 0; i < 16; i++) {
+        char relay_key[4];
+        snprintf(relay_key, sizeof(relay_key), "%d", i + 1);
+        
+        const char* relay_name;
+        if (config.relay_names[i][0] != '\0') {
+            relay_name = config.relay_names[i];
+        } else {
+            static char default_name[16];
+            snprintf(default_name, sizeof(default_name), "Relay %d", i + 1);
+            relay_name = default_name;
+        }
+        
+        cJSON_AddStringToObject(root, relay_key, relay_name);
+    }
+
+    char *json_string = cJSON_Print(root);
+    if (!json_string) {
+        ESP_LOGE(TAG, "Failed to generate JSON string");
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to generate response");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_string);
+
+    free(json_string);
+    cJSON_Delete(root);
+    
+    ESP_LOGD(TAG, "Relay names sent successfully");
+    return ESP_OK;
+}
+
+esp_err_t WebServer::config_basic_handler(httpd_req_t *req) {
+    ESP_LOGD(TAG, "Basic config request received");
+
+    antenna_switch_config_t config;
+    esp_err_t ret = AntennaSwitch::instance().get_config(&config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get configuration: %s", esp_err_to_name(ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to get configuration");
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to create JSON object");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+
+    // Add basic configuration fields
+    cJSON_AddBoolToObject(root, "auto_mode", config.auto_mode);
+    cJSON_AddNumberToObject(root, "num_bands", config.num_bands);
+    cJSON_AddNumberToObject(root, "num_antenna_ports", config.num_antenna_ports);
+    cJSON_AddBoolToObject(root, "mqtt_enabled", config.mqtt_enabled);
+
+    // Add radio operation mode
+    const char* radio_mode_str;
+    switch (config.radio_operation_mode) {
+        case RADIO_OP_MODE_SINGLE_A:
+            radio_mode_str = "SINGLE_A";
+            break;
+        case RADIO_OP_MODE_ALTERNATING_AB:
+            radio_mode_str = "ALTERNATING_AB";
+            break;
+        case RADIO_OP_MODE_CONCURRENT_AB:
+            radio_mode_str = "CONCURRENT_AB";
+            break;
+        default:
+            radio_mode_str = "SINGLE_A";
+            break;
+    }
+    cJSON_AddStringToObject(root, "radio_operation_mode", radio_mode_str);
+
+    // Add relay names array
+    cJSON *relay_names_array = cJSON_CreateArray();
+    if (relay_names_array) {
+        for (int i = 0; i < 16; i++) {
+            const char* relay_name;
+            if (config.relay_names[i][0] != '\0') {
+                relay_name = config.relay_names[i];
+            } else {
+                static char default_name[16];
+                snprintf(default_name, sizeof(default_name), "Relay %d", i + 1);
+                relay_name = default_name;
+            }
+            cJSON_AddItemToArray(relay_names_array, cJSON_CreateString(relay_name));
+        }
+        cJSON_AddItemToObject(root, "relay_names", relay_names_array);
+    }
+
+    char *json_string = cJSON_Print(root);
+    if (!json_string) {
+        ESP_LOGE(TAG, "Failed to generate JSON string");
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to generate response");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_string);
+
+    free(json_string);
+    cJSON_Delete(root);
+    
+    ESP_LOGD(TAG, "Basic config sent successfully");
+    return ESP_OK;
+}
+
 esp_err_t WebServer::register_uri_handlers() const
 {
     // Register global error handler first
@@ -1029,6 +1159,20 @@ esp_err_t WebServer::register_uri_handlers() const
         .user_ctx = nullptr
     };
 
+    static constexpr httpd_uri_t relay_names = {
+        .uri = "/api/relay/names",
+        .method = HTTP_GET,
+        .handler = relay_names_handler,
+        .user_ctx = nullptr
+    };
+
+    static constexpr httpd_uri_t config_basic = {
+        .uri = "/api/config/basic",
+        .method = HTTP_GET,
+        .handler = config_basic_handler,
+        .user_ctx = nullptr
+    };
+
     ESP_LOGV(TAG, "Registering URI handlers");
     
     ret = httpd_register_uri_handler(m_server, &root);
@@ -1103,6 +1247,18 @@ esp_err_t WebServer::register_uri_handlers() const
         return ret;
     }
 
+    ret = httpd_register_uri_handler(m_server, &relay_names);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register relay names handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = httpd_register_uri_handler(m_server, &config_basic);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register config basic handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
     return ESP_OK;
 }
 
@@ -1112,7 +1268,7 @@ esp_err_t WebServer::init() {
     m_config = HTTPD_DEFAULT_CONFIG();
     m_config.stack_size = 8192;
     m_config.task_priority = tskIDLE_PRIORITY+5;
-    m_config.max_uri_handlers = 12;
+    m_config.max_uri_handlers = 14;
     m_config.max_resp_headers = 4;
     m_config.lru_purge_enable = true;    // Enable LRU purging for large requests
     m_config.recv_wait_timeout = 5;
