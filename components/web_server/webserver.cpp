@@ -1173,6 +1173,16 @@ esp_err_t WebServer::register_uri_handlers() const
         .user_ctx = nullptr
     };
 
+    static constexpr httpd_uri_t favicon = {
+        .uri = "/favicon.ico",
+        .method = HTTP_GET,
+        .handler = [](httpd_req_t *req) -> esp_err_t {
+            httpd_resp_set_status(req, "204 No Content");
+            return httpd_resp_send(req, nullptr, 0);
+        },
+        .user_ctx = nullptr
+    };
+
     ESP_LOGV(TAG, "Registering URI handlers");
     
     ret = httpd_register_uri_handler(m_server, &root);
@@ -1259,6 +1269,12 @@ esp_err_t WebServer::register_uri_handlers() const
         return ret;
     }
 
+    ret = httpd_register_uri_handler(m_server, &favicon);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register favicon handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
     return ESP_OK;
 }
 
@@ -1268,7 +1284,7 @@ esp_err_t WebServer::init() {
     m_config = HTTPD_DEFAULT_CONFIG();
     m_config.stack_size = 8192;
     m_config.task_priority = tskIDLE_PRIORITY+5;
-    m_config.max_uri_handlers = 14;
+    m_config.max_uri_handlers = 15;
     m_config.max_resp_headers = 4;
     m_config.lru_purge_enable = true;    // Enable LRU purging for large requests
     m_config.recv_wait_timeout = 5;
@@ -1297,10 +1313,16 @@ esp_err_t WebServer::start() {
             return ret;
         }
 
-        // URI handlers and error handlers are now registered via a separate call 
-        // to register_uri_handlers() from main.cpp before calling start().
+        // Register URI handlers immediately after starting server
+        ret = register_uri_handlers();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to register URI handlers: %s", esp_err_to_name(ret));
+            httpd_stop(m_server);
+            m_server = nullptr;
+            return ret;
+        }
 
-        ESP_LOGI(TAG, "Server daemon started successfully. URI Handlers should be registered separately.");
+        ESP_LOGI(TAG, "Server daemon started successfully with all URI handlers registered.");
     }
     return ESP_OK;
 }

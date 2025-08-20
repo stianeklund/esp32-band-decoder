@@ -171,21 +171,13 @@ extern "C" [[noreturn]] void app_main(void) {
             if (ret == ESP_OK) ret = ESP_FAIL; // Keep track of first error
         }
         else {
-            ESP_LOGI(TAG, "Starting WebServer and registering core handlers...");
+            ESP_LOGI(TAG, "Starting WebServer with URI handlers...");
             if (WebServer::instance().start() != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to start WebServer or register core handlers");
+                ESP_LOGE(TAG, "Failed to start WebServer with URI handlers");
                 if (ret == ESP_OK) ret = ESP_FAIL;
             }
             else {
-                ESP_LOGI(TAG, "Registering WebServer URI handlers...");
-                if (WebServer::instance().register_uri_handlers() != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to register WebServer URI handlers");
-                    if (ret == ESP_OK) ret = ESP_FAIL;
-                    WebServer::instance().stop(); // Stop the server if handlers fail
-                }
-                else {
-                    ESP_LOGI(TAG, "WebServer started and all handlers registered successfully.");
-                }
+                ESP_LOGI(TAG, "WebServer started successfully with all URI handlers registered.");
             }
         }
     }
