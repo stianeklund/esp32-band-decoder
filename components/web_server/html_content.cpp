@@ -2,6 +2,8 @@
 
 #include <cstring>
 #include <sstream>
+#include <vector>
+#include <algorithm>
 #include <esp_log.h>
 
 const char *HtmlContent::TAG = "HTML";
@@ -30,6 +32,19 @@ const std::map<std::string_view, HtmlContent::BandInfo> HtmlContent::band_info =
     // {"2m", {"2m", 144000000, 148000000}},
     // {"70cm", {"70cm", 420000000, 450000000}}
 };
+
+// Helper function to get bands sorted by frequency (high to low)
+std::vector<std::pair<std::string_view, HtmlContent::BandInfo>> HtmlContent::get_bands_by_frequency() {
+    std::vector<std::pair<std::string_view, BandInfo>> sorted_bands(band_info.begin(), band_info.end());
+    
+    // Sort by start frequency, high to low
+    std::sort(sorted_bands.begin(), sorted_bands.end(), 
+        [](const auto& a, const auto& b) {
+            return a.second.start_freq > b.second.start_freq;
+        });
+    
+    return sorted_bands;
+}
 
 std::string HtmlContent::generate_root_html(const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr) {
     std::stringstream ss;
@@ -465,8 +480,9 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
             }
         }
 
-        // Generate options with correct selection
-        for (const auto &[band_name_key, band_val]: HtmlContent::band_info) { // Renamed band_info to band_val
+        // Generate options with correct selection, sorted by frequency (high to low)
+        auto sorted_bands = HtmlContent::get_bands_by_frequency();
+        for (const auto &[band_name_key, band_val]: sorted_bands) {
             ss_buffer << "<option value='" << band_name_key << "' "
                << (band_name_key == selected_band ? "selected" : "")
                << ">" << band_val.name << "</option>";

@@ -4,6 +4,7 @@
 #include <map>
 #include <string>
 #include <string_view> // Ensure string_view is included
+#include <vector>
 #include "antenna_switch.h"
 #include "esp_http_server.h" // Required for httpd_req_t
 
@@ -30,6 +31,9 @@ public:
     static std::string generate_root_html(const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr);
     static esp_err_t generate_root_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config, const char *ip_addr, const char *mac_addr);
     static esp_err_t generate_config_html_chunked(httpd_req_t *req, const antenna_switch_config_t &config);
+    
+    // Helper function to get bands sorted by frequency (high to low)
+    static std::vector<std::pair<std::string_view, BandInfo>> get_bands_by_frequency();
 
 private:
     HtmlContent() = default; // Private constructor to prevent instantiation

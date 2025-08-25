@@ -175,14 +175,15 @@ esp_err_t ConfigManager::init() { // Made non-const
     ESP_LOGI(TAG, "Initializing configuration manager");
 
     // Define these outside the loops to ensure they are not on the stack repeatedly.
+    // Sorted by frequency: HIGH to LOW (6m -> 160m)
     static const uint32_t default_start_init[10] = {
-        1800000, 3500000, 7000000, 10100000, 14000000, 18068000, 21000000, 24890000, 28000000, 50000000
+        50000000, 28000000, 24890000, 21000000, 18068000, 14000000, 10100000, 7000000, 3500000, 1800000
     };
     static const uint32_t default_end_init[10] = {
-        2000000, 4000000, 7300000, 10150000, 14350000, 18168000, 21450000, 24990000, 29700000, 54000000
+        54000000, 29700000, 24990000, 21450000, 18168000, 14350000, 10150000, 7300000, 4000000, 2000000
     };
     static const char* default_band_names_init[10] = {
-        "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
+        "6m", "10m", "12m", "15m", "17m", "20m", "30m", "40m", "80m", "160m"
     };
 
     // Try to load from NVS
@@ -244,15 +245,25 @@ esp_err_t ConfigManager::init() { // Made non-const
                     "Relay %d", i + 1);
         }
 
-        // Set default bands for both radios
+        // Set default bands for both radios (sorted by frequency: high to low)
         for (auto & band : current_config_->bands) {
-            for (int i = 0; i < 10; ++i) { // This loop is fixed to 10
+            for (int i = 0; i < current_config_->num_bands && i < 10; ++i) {
                 strncpy(band[i].description, default_band_names_init[i], sizeof(band[i].description)-1);
                 band[i].description[sizeof(band[i].description)-1] = '\0';
                 band[i].start_freq = default_start_init[i];
                 band[i].end_freq = default_end_init[i];
                 for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
                     band[i].antenna_ports[j] = (j == 0); // Only first port enabled by default
+                }
+            }
+            // Initialize any remaining bands beyond the predefined ones
+            for (int i = 10; i < MAX_BANDS; ++i) {
+                snprintf(band[i].description, sizeof(band[i].description), "Band %d", i + 1);
+                band[i].description[sizeof(band[i].description)-1] = '\0';
+                band[i].start_freq = 0;
+                band[i].end_freq = 0;
+                for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
+                    band[i].antenna_ports[j] = false;
                 }
             }
         }
@@ -338,26 +349,26 @@ esp_err_t ConfigManager::reset_to_defaults() {
         defaultConfig.relay_names[i][sizeof(defaultConfig.relay_names[i])-1] = '\0';
     }
 
+    // Sorted by frequency: HIGH to LOW (6m -> 160m)
     static const uint32_t default_start_init[10] = {
-        1800000, 3500000, 7000000, 10100000, 14000000, 18068000, 21000000, 24890000, 28000000, 50000000
+        50000000, 28000000, 24890000, 21000000, 18068000, 14000000, 10100000, 7000000, 3500000, 1800000
     };
     static const uint32_t default_end_init[10] = {
-        2000000, 4000000, 7300000, 10150000, 14350000, 18168000, 21450000, 24990000, 29700000, 54000000
+        54000000, 29700000, 24990000, 21450000, 18168000, 14350000, 10150000, 7300000, 4000000, 2000000
     };
     static const char* default_band_names_init[10] = {
-        "160m", "80m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
+        "6m", "10m", "12m", "15m", "17m", "20m", "30m", "40m", "80m", "160m"
     };
 
+    // Set default bands for both radios (sorted by frequency: high to low)
     for (auto & band_radio_set : defaultConfig.bands) { // Iterate over Radio A and Radio B bands
-        for (int i = 0; i < 10; ++i) { // Initialize the first 10 bands with specific defaults
-            if (i < MAX_BANDS) { // Ensure we don't write out of bounds for the actual bands array
-                strncpy(band_radio_set[i].description, default_band_names_init[i], sizeof(band_radio_set[i].description)-1);
-                band_radio_set[i].description[sizeof(band_radio_set[i].description)-1] = '\0';
-                band_radio_set[i].start_freq = default_start_init[i];
-                band_radio_set[i].end_freq = default_end_init[i];
-                for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
-                    band_radio_set[i].antenna_ports[j] = (j == 0); // Only first port enabled by default
-                }
+        for (int i = 0; i < defaultConfig.num_bands && i < 10; ++i) { // Initialize bands with specific defaults
+            strncpy(band_radio_set[i].description, default_band_names_init[i], sizeof(band_radio_set[i].description)-1);
+            band_radio_set[i].description[sizeof(band_radio_set[i].description)-1] = '\0';
+            band_radio_set[i].start_freq = default_start_init[i];
+            band_radio_set[i].end_freq = default_end_init[i];
+            for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
+                band_radio_set[i].antenna_ports[j] = (j == 0); // Only first port enabled by default
             }
         }
         // Initialize any remaining bands (if MAX_BANDS > 10) to a generic state
