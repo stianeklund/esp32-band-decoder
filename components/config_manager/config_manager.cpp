@@ -253,7 +253,7 @@ esp_err_t ConfigManager::init() { // Made non-const
                 band[i].start_freq = default_start_init[i];
                 band[i].end_freq = default_end_init[i];
                 for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
-                    band[i].antenna_ports[j] = (j == 0); // Only first port enabled by default
+                    band[i].antenna_ports[j] = false; // No ports enabled by default
                 }
             }
             // Initialize any remaining bands beyond the predefined ones
@@ -368,7 +368,7 @@ esp_err_t ConfigManager::reset_to_defaults() {
             band_radio_set[i].start_freq = default_start_init[i];
             band_radio_set[i].end_freq = default_end_init[i];
             for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
-                band_radio_set[i].antenna_ports[j] = (j == 0); // Only first port enabled by default
+                band_radio_set[i].antenna_ports[j] = false; // No ports enabled by default
             }
         }
         // Initialize any remaining bands (if MAX_BANDS > 10) to a generic state
