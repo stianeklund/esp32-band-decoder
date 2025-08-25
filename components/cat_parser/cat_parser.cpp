@@ -1,6 +1,7 @@
 #include "include/cat_parser.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -17,7 +18,8 @@
 CatParser::CatParser()
     : uart2_queue(nullptr),
       shutdown_requested(false),
-      last_serial_data_time(std::chrono::steady_clock::now()) {
+      last_serial_data_time(std::chrono::steady_clock::now() - std::chrono::seconds(SERIAL_DATA_TIMEOUT_S + 1)),
+      last_valid_command_time(std::chrono::steady_clock::now() - std::chrono::seconds(SERIAL_DATA_TIMEOUT_S + 1)) {
 
     // Initialize command handlers
     command_handlers = {
@@ -297,6 +299,10 @@ esp_err_t CatParser::dispatch_one_command(std::string_view command_view) {
                 ESP_LOGW(TAG, "Command handler for '%.*s' returned error %s",
                          static_cast<int>(command_view.substr(0,2).length()), command_view.substr(0,2).data(),
                          esp_err_to_name(ret));
+            } else {
+                // Update timestamp for successful command parsing
+                last_valid_command_time = std::chrono::steady_clock::now();
+                ESP_LOGV(TAG, "Successfully processed command: %.*s", static_cast<int>(command_view.length()), command_view.data());
             }
             return ret; // Return the handler's result
         }
@@ -368,6 +374,20 @@ esp_err_t CatParser::process_ai_command(const std::string_view command_payload) 
         case '0': // Auto Information OFF
             radio_provides_auto_updates_ = false;
             ESP_LOGI(TAG, "Kenwood AI Set: Radio Auto Information OFF. CAT polling will be required for updates.");
+            
+            // Check if we should automatically enable AI2 mode
+            {
+                const antenna_switch_config_t& config = AntennaSwitch::instance().get_config_ref();
+                if (config.auto_mode && config.ai_mode) {
+                    ESP_LOGI(TAG, "AI mode enabled in config, automatically sending AI2 to enable auto information");
+                    esp_err_t send_err = send_to_radio("AI2;");
+                    if (send_err == ESP_OK) {
+                        ESP_LOGI(TAG, "Successfully sent AI2 command to radio");
+                    } else {
+                        ESP_LOGW(TAG, "Failed to send AI2 command: %s", esp_err_to_name(send_err));
+                    }
+                }
+            }
             break;
         case '2': // Auto Information ON
         case '4': // Auto Information ON
@@ -651,4 +671,147 @@ void CatParser::clear_serial_data() {
     last_serial_data_time = std::chrono::steady_clock::now() - 
         std::chrono::seconds(SERIAL_DATA_TIMEOUT_S + 1);
     MQTTClient::instance().set_has_serial_data(false);
+}
+
+esp_err_t CatParser::send_to_radio(const char* command) {
+    if (!command || strlen(command) == 0) {
+        ESP_LOGE(TAG, "Invalid command to send to radio");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (uart2_queue == nullptr) {
+        ESP_LOGE(TAG, "UART not initialized, cannot send command to radio");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    size_t command_len = strlen(command);
+    ESP_LOGD(TAG, "Sending command to radio: %s", command);
+
+    int bytes_written = uart_write_bytes(UART_NUM_2, command, command_len);
+    if (bytes_written < 0) {
+        ESP_LOGE(TAG, "Failed to write to UART: %d", bytes_written);
+        return ESP_FAIL;
+    }
+
+    if ((size_t)bytes_written != command_len) {
+        ESP_LOGW(TAG, "Partial write to UART: %d of %d bytes", bytes_written, command_len);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Flush the UART to ensure command is sent immediately
+    esp_err_t flush_err = uart_wait_tx_done(UART_NUM_2, pdMS_TO_TICKS(100));
+    if (flush_err != ESP_OK) {
+        ESP_LOGW(TAG, "UART flush timeout: %s", esp_err_to_name(flush_err));
+    }
+
+    ESP_LOGV(TAG, "Successfully sent %d bytes to radio", bytes_written);
+    return ESP_OK;
+}
+
+esp_err_t CatParser::probe_and_configure_ai_mode() {
+    // Get current configuration to check if ai_mode is enabled
+    const antenna_switch_config_t& config = AntennaSwitch::instance().get_config_ref();
+    
+    // Only proceed if both auto_mode and ai_mode are enabled
+    if (!config.auto_mode || !config.ai_mode) {
+        ESP_LOGI(TAG, "AI mode probing skipped: auto_mode=%s, ai_mode=%s",
+                 config.auto_mode ? "enabled" : "disabled",
+                 config.ai_mode ? "enabled" : "disabled");
+        return ESP_OK;
+    }
+
+    ESP_LOGI(TAG, "Starting AI mode probe and configuration");
+
+    // Check if we've successfully parsed valid CAT commands recently - if so, AI is likely already enabled
+    auto now = std::chrono::steady_clock::now();
+    auto time_since_last_valid_command = std::chrono::duration_cast<std::chrono::seconds>(
+        now - last_valid_command_time).count();
+    auto time_since_last_data = std::chrono::duration_cast<std::chrono::seconds>(
+        now - last_serial_data_time).count();
+    
+    if (time_since_last_valid_command < SERIAL_DATA_TIMEOUT_S) {
+        ESP_LOGI(TAG, "Already parsing valid CAT commands, AI mode likely enabled");
+        ESP_LOGI(TAG, "Current radio state: freq=%lu Hz (%.3f MHz), mode='%s', transmitting=%s, split=%s",
+                 current_frequency, current_frequency / 1000000.0, current_mode.data(),
+                 transmitting ? "YES" : "NO", split_on ? "ON" : "OFF");
+        ESP_LOGI(TAG, "Time since last valid command: %lld seconds, last raw data: %lld seconds (threshold: %d seconds)", 
+                 time_since_last_valid_command, time_since_last_data, SERIAL_DATA_TIMEOUT_S);
+        radio_provides_auto_updates_ = true;
+        return ESP_OK;
+    }
+
+    // No recent valid CAT commands received, query the radio's AI status
+    ESP_LOGI(TAG, "No recent valid CAT commands (last valid: %lld sec, last raw: %lld sec), querying radio AI status", 
+             time_since_last_valid_command, time_since_last_data);
+    
+    constexpr int MAX_RETRIES = 10;
+    constexpr int RETRY_DELAY_MS = 1000;
+    
+    for (int retry = 0; retry < MAX_RETRIES; retry++) {
+        esp_err_t send_err = send_to_radio("AI;");
+        if (send_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to send AI query (attempt %d/%d): %s", 
+                     retry + 1, MAX_RETRIES, esp_err_to_name(send_err));
+            if (retry < MAX_RETRIES - 1) {
+                int delay_ms = RETRY_DELAY_MS * (retry + 1);
+                ESP_LOGD(TAG, "Delaying %d ms before next AI query attempt", delay_ms);
+                
+                // Break long delays into smaller chunks to avoid watchdog timeout
+                const int chunk_ms = 500; // 500ms chunks
+                int remaining_ms = delay_ms;
+                while (remaining_ms > 0) {
+                    int this_delay = std::min(remaining_ms, chunk_ms);
+                    vTaskDelay(pdMS_TO_TICKS(this_delay));
+                    
+                    // Only reset watchdog if current task is subscribed
+                    if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+                        esp_task_wdt_reset();
+                    }
+                    remaining_ms -= this_delay;
+                }
+            }
+            continue;
+        }
+
+        // Wait for response (the response will be handled by the normal command processing)
+        vTaskDelay(pdMS_TO_TICKS(500));
+        
+        // Check if we got a response by seeing if radio_provides_auto_updates_ was updated
+        // or if we started receiving data
+        auto time_since_query = std::chrono::steady_clock::now();
+        auto query_time_diff = std::chrono::duration_cast<std::chrono::milliseconds>(
+            time_since_query - now).count();
+            
+        if (query_time_diff > 100) {  // Give some time for response
+            auto new_time_since_data = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - last_serial_data_time).count();
+            
+            if (new_time_since_data < SERIAL_DATA_TIMEOUT_S) {
+                ESP_LOGI(TAG, "AI query successful, radio is responding");
+                break;
+            }
+        }
+        
+        if (retry < MAX_RETRIES - 1) {
+            int delay_ms = RETRY_DELAY_MS * (retry + 1);
+            ESP_LOGW(TAG, "No response to AI query, retrying in %d ms", delay_ms);
+            
+            // Break long delays into smaller chunks to avoid watchdog timeout
+            const int chunk_ms = 500; // 500ms chunks
+            int remaining_ms = delay_ms;
+            while (remaining_ms > 0) {
+                int this_delay = std::min(remaining_ms, chunk_ms);
+                vTaskDelay(pdMS_TO_TICKS(this_delay));
+                
+                // Only reset watchdog if current task is subscribed
+                if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+                    esp_task_wdt_reset();
+                }
+                remaining_ms -= this_delay;
+            }
+        }
+    }
+
+    ESP_LOGI(TAG, "AI mode probe completed");
+    return ESP_OK;
 }

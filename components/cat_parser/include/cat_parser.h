@@ -42,6 +42,10 @@ public:
 
     void handle_frequency_update(uint32_t frequency);
 
+    // Send commands to the radio via UART
+    esp_err_t send_to_radio(const char* command);
+    esp_err_t probe_and_configure_ai_mode();
+
     // Legacy C-style interface for backward compatibility
     static CatParser &instance();
 
@@ -88,6 +92,7 @@ private:
     std::atomic<bool> shutdown_requested;
     static constexpr int SERIAL_DATA_TIMEOUT_S = 5;  // 5 second timeout
     std::chrono::steady_clock::time_point last_serial_data_time;
+    std::chrono::steady_clock::time_point last_valid_command_time;  // Track when we last parsed a valid CAT command
     bool radio_provides_auto_updates_{false}; // True if Kenwood AI (Auto Information) from the radio is ON
 };
 

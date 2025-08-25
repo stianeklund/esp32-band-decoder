@@ -42,6 +42,7 @@ typedef struct band_config {
 // Struct for the base configuration data stored in the "config_base" NVS blob
 typedef struct {
     bool auto_mode;
+    bool ai_mode;                       // Enable Auto Information (AI2) mode
     bool allow_concurrent_data_sources; // This field is part of the base config
     uint8_t num_bands;                  // Actual number of bands used, up to MAX_BANDS
     uint8_t num_antenna_ports;          // Actual number of antenna ports used, up to MAX_ANTENNA_PORTS
@@ -52,6 +53,7 @@ typedef struct {
 typedef struct antenna_switch_config {
     // Fields managed by base_nvs_config_data_t for NVS persistence
     bool auto_mode;
+    bool ai_mode;                       // Enable Auto Information (AI2) mode
     bool allow_concurrent_data_sources; 
     uint8_t num_bands;
     uint8_t num_antenna_ports;

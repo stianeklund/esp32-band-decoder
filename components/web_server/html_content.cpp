@@ -424,6 +424,11 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<input type='checkbox' name='auto_mode' " << (config.auto_mode ? "checked" : "") << ">";
     ss_buffer << " Enable Automatic band selection";
     ss_buffer << "</label>";
+    ss_buffer << "<br>";
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='ai_mode' " << (config.ai_mode ? "checked" : "") << ">";
+    ss_buffer << " Enable Auto Information (AI2)";
+    ss_buffer << "</label>";
     ss_buffer << "</div>";
 
     ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
@@ -722,6 +727,7 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
         // Convert form data to JSON structure
         const config = {
             auto_mode: formData.get('auto_mode') === 'on',
+            ai_mode: formData.get('ai_mode') === 'on',
             allow_concurrent_data_sources: formData.get('allow_concurrent_data_sources') === 'on',
             radio_operation_mode: formData.get('radio_operation_mode'),
             interlock_auto_resolves_conflict: formData.get('interlock_auto_resolves_conflict') === 'on',

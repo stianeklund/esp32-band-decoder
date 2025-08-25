@@ -160,6 +160,11 @@ extern "C" [[noreturn]] void app_main(void) {
         goto error_handler;
     }
 
+    // Reset watchdog after potentially long initialization
+    if (esp_task_wdt_reset() != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to reset watchdog after initialization");
+    }
+
     g_relay_controller = relay_controller;
     ESP_LOGI(TAG, "Antenna Switch Controller initialized successfully");
 

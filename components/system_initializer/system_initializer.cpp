@@ -103,6 +103,15 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
     // Initialize CAT parser
     ESP_RETURN_ON_ERROR(InputManager::instance().init(), TAG, "Failed to initialize input manager");
     ESP_RETURN_ON_ERROR(cat_parser_init(), TAG, "Failed to initialize CAT parser");
+    
+    // Probe and configure AI mode if enabled
+    ESP_LOGI(TAG, "Probing AI mode configuration...");
+    if (esp_err_t ai_probe_ret = CatParser::instance().probe_and_configure_ai_mode(); ai_probe_ret != ESP_OK) {
+        ESP_LOGW(TAG, "AI mode probing failed: %s", esp_err_to_name(ai_probe_ret));
+        // Continue initialization as AI mode is optional
+    } else {
+        ESP_LOGI(TAG, "AI mode probe completed successfully.");
+    }
 
     // Initialize MQTT client configuration (this does not connect yet).
     // The MQTTClient::init() method itself handles the case where MQTT might be disabled
@@ -140,6 +149,15 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
             constexpr int IP_CHECK_INTERVAL_MS = 500;
             vTaskDelay(pdMS_TO_TICKS(IP_CHECK_INTERVAL_MS));
             waited_ms += IP_CHECK_INTERVAL_MS;
+            
+            // Feed the watchdog during this potentially long wait
+            if (const esp_err_t wdt_status = esp_task_wdt_status(xTaskGetCurrentTaskHandle());
+                wdt_status == ESP_OK) {
+                esp_task_wdt_reset();
+            }
+            else if (wdt_status == ESP_ERR_NOT_FOUND) {
+                ESP_LOGW(TAG, "Main task not subscribed to WDT during network wait!");
+            }
             
             if (waited_ms % 2000 == 0) { // Log every 2 seconds
                 ESP_LOGI(TAG, "Waiting to confirm network connectivity.. %d/%d ms",
@@ -187,6 +205,9 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
             // No further action needed here for MQTT if IP is not obtained.
         }
     }
+
+    // Yield to other tasks before returning
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     return ESP_OK;
 }

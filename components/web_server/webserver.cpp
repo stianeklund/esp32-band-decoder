@@ -341,6 +341,9 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     const cJSON *auto_mode = cJSON_GetObjectItem(root, "auto_mode");
     new_config.auto_mode = cJSON_IsTrue(auto_mode);
 
+    const cJSON *ai_mode = cJSON_GetObjectItem(root, "ai_mode");
+    new_config.ai_mode = cJSON_IsTrue(ai_mode);
+
     const cJSON *allow_concurrent_data_sources= cJSON_GetObjectItem(root, "allow_concurrent_data_sources");
     new_config.allow_concurrent_data_sources = cJSON_IsTrue(allow_concurrent_data_sources);
 
@@ -672,6 +675,15 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     err = cat_parser_update_config();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to update CAT parser configuration: %s", esp_err_to_name(err));
+    }
+
+    // Trigger AI mode probing if ai_mode is enabled
+    if (new_config.auto_mode && new_config.ai_mode) {
+        ESP_LOGI(TAG, "AI mode enabled in new configuration, triggering probe");
+        esp_err_t ai_probe_ret = CatParser::instance().probe_and_configure_ai_mode();
+        if (ai_probe_ret != ESP_OK) {
+            ESP_LOGW(TAG, "AI mode probing failed after config update: %s", esp_err_to_name(ai_probe_ret));
+        }
     }
 
     // Use chunked sending for the success response

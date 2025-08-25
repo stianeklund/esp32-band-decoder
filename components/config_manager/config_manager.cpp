@@ -195,6 +195,7 @@ esp_err_t ConfigManager::init() { // Made non-const
         // Set default configuration
         current_config_->num_bands = 8;
         current_config_->auto_mode = true;
+        current_config_->ai_mode = false;
         current_config_->num_antenna_ports = 6;
         current_config_->uart_baud_rate = 57600;
         current_config_->uart_parity = UART_PARITY_DISABLE;
@@ -294,6 +295,7 @@ esp_err_t ConfigManager::reset_to_defaults() {
     // This logic is largely copied from the init() method's default section.
     defaultConfig.num_bands = 8;
     defaultConfig.auto_mode = true;
+    defaultConfig.ai_mode = false;
     defaultConfig.num_antenna_ports = 6;
     defaultConfig.uart_baud_rate = 57600;
     defaultConfig.uart_parity = UART_PARITY_DISABLE;
@@ -434,6 +436,7 @@ esp_err_t ConfigManager::save_to_nvs() const {
     // Prepare and save the base configuration data
     base_nvs_config_data_t base_data_to_save;
     base_data_to_save.auto_mode = current_config_->auto_mode;
+    base_data_to_save.ai_mode = current_config_->ai_mode;
     base_data_to_save.allow_concurrent_data_sources = current_config_->allow_concurrent_data_sources;
     base_data_to_save.num_bands = current_config_->num_bands;
     base_data_to_save.num_antenna_ports = current_config_->num_antenna_ports;
@@ -651,6 +654,7 @@ esp_err_t ConfigManager::load_from_nvs() const {
         if (base_data_size == sizeof(base_nvs_config_data_t)) {
             // Populate current_config_ from loaded_base_data
             current_config_->auto_mode = loaded_base_data.auto_mode;
+            current_config_->ai_mode = loaded_base_data.ai_mode;
             current_config_->allow_concurrent_data_sources = loaded_base_data.allow_concurrent_data_sources;
             current_config_->num_bands = loaded_base_data.num_bands;
             current_config_->num_antenna_ports = loaded_base_data.num_antenna_ports;
@@ -995,6 +999,7 @@ esp_err_t ConfigManager::export_config_to_json(char **json_string) const {
 
     // Basic configuration
     cJSON_AddBoolToObject(config, "auto_mode", current_config_->auto_mode);
+    cJSON_AddBoolToObject(config, "ai_mode", current_config_->ai_mode);
     cJSON_AddBoolToObject(config, "allow_concurrent_data_sources", current_config_->allow_concurrent_data_sources);
     cJSON_AddNumberToObject(config, "num_bands", current_config_->num_bands);
     cJSON_AddNumberToObject(config, "num_antenna_ports", current_config_->num_antenna_ports);
@@ -1162,6 +1167,14 @@ esp_err_t ConfigManager::import_config_from_json(const char *json_string, bool v
         ESP_LOGE(TAG, "Invalid auto_mode field");
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *ai_mode = cJSON_GetObjectItem(config, "ai_mode");
+    if (cJSON_IsBool(ai_mode)) {
+        temp_config.ai_mode = cJSON_IsTrue(ai_mode);
+    } else {
+        ESP_LOGW(TAG, "ai_mode field not found or invalid, defaulting to false");
+        temp_config.ai_mode = false;
     }
 
     cJSON *allow_concurrent = cJSON_GetObjectItem(config, "allow_concurrent_data_sources");
