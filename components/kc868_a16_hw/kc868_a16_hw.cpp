@@ -16,8 +16,8 @@ static uint8_t discovered_pcf8574_input_addr_for_pins_0_7 = 0;
 static uint8_t discovered_pcf8574_input_addr_for_pins_8_15 = 0;
 
 static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
-    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGW(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for write_pcf8574 to 0x%02X (attempt 1) after 100ms", pcTaskGetName(NULL), addr);
+    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+        ESP_LOGW(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for write_pcf8574 to 0x%02X (attempt 1) after 10ms", pcTaskGetName(NULL), addr);
         return ESP_ERR_TIMEOUT;
     }
 
@@ -26,7 +26,7 @@ static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_write_byte(cmd, data, true);
     i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(25));
+    esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(10));
     i2c_cmd_link_delete(cmd);
 
     xSemaphoreGive(i2c_bus_mutex_);
@@ -35,8 +35,8 @@ static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
         ESP_LOGW(TAG, "write_pcf8574 to 0x%02X timed out on 1st attempt. Retrying after 10ms delay...", addr);
         vTaskDelay(pdMS_TO_TICKS(10));
 
-        if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-            ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for write_pcf8574 to 0x%02X (attempt 2) after 100ms", pcTaskGetName(NULL), addr);
+        if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+            ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for write_pcf8574 to 0x%02X (attempt 2) after 10ms", pcTaskGetName(NULL), addr);
             return ESP_ERR_TIMEOUT;
         }
 
@@ -45,7 +45,7 @@ static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
         i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
         i2c_master_write_byte(cmd, data, true);
         i2c_master_stop(cmd);
-        ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(25));
+        ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(10));
         i2c_cmd_link_delete(cmd);
 
         xSemaphoreGive(i2c_bus_mutex_);
@@ -67,8 +67,8 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for read_pcf8574 from 0x%02X (attempt 1) after 100ms", pcTaskGetName(NULL), addr);
+    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+        ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for read_pcf8574 from 0x%02X (attempt 1) after 10ms", pcTaskGetName(NULL), addr);
         return ESP_ERR_TIMEOUT;
     }
 
@@ -77,7 +77,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_READ, true);
     i2c_master_read_byte(cmd, data, I2C_MASTER_NACK);
     i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(25));
+    esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(10));
     i2c_cmd_link_delete(cmd);
     
     xSemaphoreGive(i2c_bus_mutex_); // Release mutex IMMEDIATELY after the I2C operation
@@ -88,8 +88,8 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
         vTaskDelay(pdMS_TO_TICKS(10)); // Delay is OUTSIDE the mutex protection
 
         // --- Attempt 2 ---
-        if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-            ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for read_pcf8574 from 0x%02X (attempt 2) after 100ms", pcTaskGetName(NULL), addr);
+        if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+            ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for read_pcf8574 from 0x%02X (attempt 2) after 10ms", pcTaskGetName(NULL), addr);
             // Return the original error or a new one indicating mutex failure on retry
             return ESP_ERR_TIMEOUT; 
         }
@@ -99,7 +99,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
         i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_READ, true);
         i2c_master_read_byte(cmd, data, I2C_MASTER_NACK);
         i2c_master_stop(cmd);
-        ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(25)); // Original timeout
+        ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(10)); // Original timeout
         i2c_cmd_link_delete(cmd);
 
         xSemaphoreGive(i2c_bus_mutex_); // Release mutex IMMEDIATELY after the I2C operation
@@ -120,7 +120,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
 
 // Helper function to check if an I2C device is present at a given address
 static bool check_i2c_device_present(const uint8_t addr) {
-    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) { // Increased timeout
+    if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) { // Longer timeout for initialization
         ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for check_i2c_device_present for 0x%02X after 100ms", pcTaskGetName(NULL), addr);
         return false; // Cannot check, assume not present or error
     }
@@ -130,7 +130,7 @@ static bool check_i2c_device_present(const uint8_t addr) {
     i2c_master_start(cmd_test);
     i2c_master_write_byte(cmd_test, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_stop(cmd_test);
-    esp_err_t test_ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd_test, pdMS_TO_TICKS(25));
+    esp_err_t test_ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd_test, pdMS_TO_TICKS(25)); // Moderate timeout for device detection
     i2c_cmd_link_delete(cmd_test);
 
     xSemaphoreGive(i2c_bus_mutex_);
@@ -182,6 +182,9 @@ esp_err_t kc868_a16_hw_init() {
             return ret;
         }
     }
+
+    // Allow I2C bus and PCF8574 devices to settle after power-on
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     // Verify Input PCF8574 expanders at their fixed/expected addresses
     ESP_LOGD(TAG, "Verifying Input PCF8574 expanders...");

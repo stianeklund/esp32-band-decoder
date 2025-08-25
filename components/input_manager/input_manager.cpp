@@ -71,21 +71,22 @@ esp_err_t InputManager::init() {
     // esp_log_level_set(TAG, ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Initializing InputManager...");
 
-    // Initialize the underlying KC868-A16 hardware (I2C, etc.)
-    // This is now safe to call even if RelayController also calls it.
-    ESP_RETURN_ON_ERROR(kc868_a16_hw_init(), TAG, "Failed to initialize KC868-A16 hardware");
+    // I2C initialization will be handled by the PTT task on CPU1
+    // This ensures the I2C driver interrupts are bound to CPU1
 
     // Note: PCF8574 inputs typically don't need specific configuration beyond the I2C bus being up.
     // The pins on PCF8574 are quasi-bidirectional and default to high-impedance inputs when read.
 
-    // Create and start the PTT polling task
-    const BaseType_t task_created = xTaskCreate(
+    // Create and start the PTT polling task pinned to CPU1
+    // This prevents CPU0 starvation of the main task which causes Task WDT timeouts
+    const BaseType_t task_created = xTaskCreatePinnedToCore(
         ptt_poll_task_trampoline,
         "ptt_poll_task",
         4096,
         this,
-        configMAX_PRIORITIES - 3, // Increased priority
-        &ptt_poll_task_handle_
+        configMAX_PRIORITIES - 3, // High priority for fast PTT detection
+        &ptt_poll_task_handle_,
+        1  // Pin to CPU1 (main task runs on CPU0)
     );
 
 
@@ -199,7 +200,27 @@ void InputManager::handle_ptt_read_error() {
 }
 
 void InputManager::ptt_poll_task() {
+    // Initialize KC868-A16 hardware on CPU1 to bind I2C interrupts to this CPU
+    ESP_LOGI(TAG, "Initializing KC868-A16 hardware on CPU1 for I2C interrupt affinity");
+    if (const esp_err_t ret = kc868_a16_hw_init(); ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize KC868-A16 hardware on CPU1: %s", esp_err_to_name(ret));
+        // Continue anyway, hardware might be initialized from another task
+    } else {
+        ESP_LOGI(TAG, "KC868-A16 hardware successfully initialized on CPU1");
+    }
+    
     uint16_t current_inputs_mask = 0;
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = pdMS_TO_TICKS(5) > 0 ? pdMS_TO_TICKS(5) : 1; // Ensure at least 1 tick
+    ESP_LOGI(TAG, "PTT polling frequency: %lu ticks (configTICK_RATE_HZ=%d, 5ms=%lu ticks)", 
+             xFrequency, configTICK_RATE_HZ, pdMS_TO_TICKS(5));
+    
+    // Subscribe to Task WDT for monitoring
+    if (esp_task_wdt_add(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+        ESP_LOGD(TAG, "PTT polling task subscribed to Task WDT");
+    } else {
+        ESP_LOGW(TAG, "Failed to subscribe PTT polling task to Task WDT");
+    }
 
     for (;;) {
         if (!initialized_) {
@@ -242,12 +263,12 @@ void InputManager::ptt_poll_task() {
             current_inputs_mask, [](const bool state) { AntennaSwitch::instance().on_hw_ptt_b_state_change(state); }
         );
 
-        // Feed watchdog periodically
+        // Feed watchdog periodically for PTT task
         if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
             esp_task_wdt_reset();
         }
         
-        vTaskDelay(pdMS_TO_TICKS(5)); // Keep 5ms for fast PTT detection
+        vTaskDelayUntil(&xLastWakeTime, xFrequency); // Consistent 5ms intervals
     }
 }
 

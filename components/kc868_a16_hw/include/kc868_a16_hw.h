@@ -21,7 +21,7 @@
 // I2C configuration
 #define I2C_MASTER_SCL_IO GPIO_NUM_5        // SCL pin
 #define I2C_MASTER_SDA_IO GPIO_NUM_4        // SDA pin
-// #define I2C_MASTER_FREQ_HZ 100000   // 100 kHz
+// #define I2C_MASTER_FREQ_HZ 100000   // 100 kHz - PCF8574 spec limit
 #define I2C_MASTER_FREQ_HZ 400000   // 400 kHz (the PCF8574 can only do 100 kHz.. overclocking seems  to work OK)
 #define I2C_MASTER_NUM I2C_NUM_0    // I2C port number
 

@@ -4,6 +4,8 @@
 #include <memory>
 #include <vector>
 #include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 // Project C++ headers
 #include "webserver.h"
