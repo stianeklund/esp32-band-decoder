@@ -191,8 +191,9 @@ extern "C" [[noreturn]] void app_main(void) {
     }
 
     // Main loop
-    uint32_t loop_count = 0;
-    while (true) {
+    {
+        uint32_t loop_count = 0;
+        while (true) {
         // Feed the watchdog
         if (const esp_err_t wdt_status = esp_task_wdt_status(xTaskGetCurrentTaskHandle()); wdt_status == ESP_OK) {
             esp_task_wdt_reset();
@@ -272,6 +273,7 @@ extern "C" [[noreturn]] void app_main(void) {
             esp_restart(); // Restart to apply new state cleanly
         }
         vTaskDelay(pdMS_TO_TICKS(1000)); // Check connection status periodically
+        }
     }
     // Note: The above loop is infinite. app_main will remain here until WiFi connects and system restarts.
 
