@@ -109,7 +109,64 @@ Currently, no authentication is required for API access.
 - Only one antenna per radio can be active at a time
 - Setting a relay to active will automatically deactivate other relays for the same radio
 
-### 3. Configuration Management
+### 3. High-Level Antenna Switching
+
+#### POST `/api/antenna/switch`
+**Description:** Switch to the next or previous valid antenna for the current frequency  
+**Content-Type:** `application/json`
+
+**Request Body:**
+```json
+{
+  "radio": "A",
+  "action": "next"
+}
+```
+
+**Request Fields:**
+- `radio`: Radio identifier ("A" or "B")
+- `action`: Switch direction ("next" or "previous")
+
+**Response Example:**
+```json
+{
+  "status": "success",
+  "radio": "A",
+  "frequency": 14205000,
+  "frequency_mhz": 14.205,
+  "band": "20m",
+  "previous_antenna": 3,
+  "new_antenna": 5,
+  "available_antennas": [1, 3, 5, 7]
+}
+```
+
+**Response Fields:**
+- `status`: Operation result ("success" or "error")
+- `radio`: Radio that was switched
+- `frequency`: Current frequency in Hz
+- `frequency_mhz`: Current frequency in MHz for convenience
+- `band`: Band name (e.g., "20m", "40m") 
+- `previous_antenna`: Previously active antenna number
+- `new_antenna`: Newly selected antenna number
+- `available_antennas`: Array of all available antennas for current frequency
+
+**Error Response Example:**
+```json
+{
+  "status": "error",
+  "message": "No antennas available for current frequency"
+}
+```
+
+**Notes:**
+- Only switches between antennas that are valid for the current operating frequency
+- Automatically wraps around (after last antenna, goes to first)
+- Requires a valid frequency from CAT data or manual input
+- Respects band configuration and antenna port assignments
+- Works with both single and dual-radio configurations
+
+### 4. Configuration Management
 
 #### GET `/config`
 **Description:** Configuration interface page  
@@ -191,7 +248,7 @@ Currently, no authentication is required for API access.
 }
 ```
 
-### 4. System Control
+### 5. System Control
 
 #### POST `/toggle-auto-mode`
 **Description:** Toggle automatic antenna switching mode  
@@ -299,7 +356,7 @@ print(f"Current frequency: {status['frequency']/1000000:.3f} MHz")
 print(f"Active antenna: {status['antenna']}")
 ```
 
-### Python Example - Switch Antenna
+### Python Example - Switch Antenna (Low-level)
 ```python
 import requests
 
@@ -308,6 +365,19 @@ payload = {'relay': 3, 'state': True}
 response = requests.post('http://192.168.1.100/relay/control', json=payload)
 result = response.json()
 print(f"Relay 3 state: {result['state']}")
+```
+
+### Python Example - Switch Antenna (High-level)
+```python
+import requests
+
+# Switch to next antenna for Radio A
+payload = {'radio': 'A', 'action': 'next'}
+response = requests.post('http://192.168.1.100/api/antenna/switch', json=payload)
+result = response.json()
+print(f"Switched from antenna {result['previous_antenna']} to {result['new_antenna']}")
+print(f"Frequency: {result['frequency_mhz']:.3f} MHz ({result['band']})")
+print(f"Available antennas: {result['available_antennas']}")
 ```
 
 ### cURL Example - Get Relay Status
@@ -320,6 +390,13 @@ curl -X GET http://192.168.1.100/relay/status
 curl -X POST http://192.168.1.100/relay/control \
   -H "Content-Type: application/json" \
   -d '{"relay": 5, "state": true}'
+```
+
+### cURL Example - Switch Antenna
+```bash
+curl -X POST http://192.168.1.100/api/antenna/switch \
+  -H "Content-Type: application/json" \
+  -d '{"radio": "A", "action": "next"}'
 ```
 
 ## Notes

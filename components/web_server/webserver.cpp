@@ -853,6 +853,192 @@ esp_err_t WebServer::relay_control_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+esp_err_t WebServer::antenna_switch_handler(httpd_req_t *req) {
+    ESP_LOGD(TAG, "Antenna switch request received");
+
+    char buf[64];
+    int ret = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    if (ret <= 0) {
+        ESP_LOGE(TAG, "Failed to receive antenna switch request");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to receive request");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to parse JSON");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    const cJSON *radio_json = cJSON_GetObjectItem(root, "radio");
+    const cJSON *action_json = cJSON_GetObjectItem(root, "action");
+
+    if (!cJSON_IsString(radio_json) || !cJSON_IsString(action_json)) {
+        ESP_LOGE(TAG, "Invalid radio or action in request");
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or invalid radio/action");
+        return ESP_FAIL;
+    }
+
+    const char *radio_str = radio_json->valuestring;
+    const char *action_str = action_json->valuestring;
+
+    // Validate radio parameter
+    RadioID radio_id;
+    if (strcmp(radio_str, "A") == 0) {
+        radio_id = RadioID::A;
+    } else if (strcmp(radio_str, "B") == 0) {
+        radio_id = RadioID::B;
+    } else {
+        ESP_LOGE(TAG, "Invalid radio: %s", radio_str);
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid radio (must be 'A' or 'B')");
+        return ESP_FAIL;
+    }
+
+    // Validate action parameter
+    bool next_antenna;
+    if (strcmp(action_str, "next") == 0) {
+        next_antenna = true;
+    } else if (strcmp(action_str, "previous") == 0) {
+        next_antenna = false;
+    } else {
+        ESP_LOGE(TAG, "Invalid action: %s", action_str);
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid action (must be 'next' or 'previous')");
+        return ESP_FAIL;
+    }
+
+    cJSON_Delete(root);
+
+    // Get current configuration and frequency
+    antenna_switch_config_t config;
+    esp_err_t config_ret = AntennaSwitch::instance().get_config(&config);
+    if (config_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get configuration: %s", esp_err_to_name(config_ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to get configuration");
+        return ESP_FAIL;
+    }
+
+    // Get current frequency based on radio
+    uint32_t current_freq = 0;
+    if (radio_id == RadioID::A) {
+        current_freq = CatParser::instance().get_frequency();
+    }
+    // TODO: Add Radio B frequency support when implemented
+
+    if (current_freq == 0) {
+        ESP_LOGW(TAG, "No frequency available for radio %s", radio_str);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No frequency available for specified radio");
+        return ESP_FAIL;
+    }
+
+    // Find available antennas for current frequency (reuse logic from status handler)
+    std::vector<int> available_antennas;
+    const char* band_name = "Unknown";
+    
+    for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
+        const auto &band_cfg = config.bands[static_cast<int>(radio_id)][band_idx];
+        if (current_freq >= band_cfg.start_freq && current_freq <= band_cfg.end_freq) {
+            band_name = band_cfg.description;
+            
+            // Find available antenna ports for this band
+            const int max_ports = (radio_id == RadioID::A) ? RelayController::RELAYS_PER_RADIO : RelayController::RELAYS_PER_RADIO;
+            const int port_offset = (radio_id == RadioID::A) ? 0 : RelayController::RELAYS_PER_RADIO;
+            
+            for (int port_idx = 0; port_idx < max_ports; port_idx++) {
+                if (port_idx < MAX_ANTENNA_PORTS && band_cfg.antenna_ports[port_idx]) {
+                    available_antennas.push_back(port_offset + port_idx + 1); // Convert to relay number
+                }
+            }
+            break;
+        }
+    }
+
+    if (available_antennas.empty()) {
+        ESP_LOGW(TAG, "No antennas available for frequency %lu Hz", current_freq);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No antennas available for current frequency");
+        return ESP_FAIL;
+    }
+
+    // Find currently active antenna
+    const int current_active = AntennaSwitch::instance().get_active_relay_for_radio(radio_id);
+    int current_index = -1;
+    
+    // Find the index of current antenna in available list
+    for (size_t i = 0; i < available_antennas.size(); i++) {
+        if (available_antennas[i] == current_active) {
+            current_index = static_cast<int>(i);
+            break;
+        }
+    }
+
+    // Calculate next antenna index with wraparound
+    int new_index;
+    if (current_index == -1) {
+        // Current antenna not in available list, use first available
+        new_index = 0;
+    } else {
+        if (next_antenna) {
+            new_index = (current_index + 1) % static_cast<int>(available_antennas.size());
+        } else {
+            new_index = (current_index - 1 + static_cast<int>(available_antennas.size())) % static_cast<int>(available_antennas.size());
+        }
+    }
+
+    const int new_antenna = available_antennas[new_index];
+
+    // Switch to the new antenna
+    esp_err_t switch_ret = AntennaSwitch::instance().set_relay(new_antenna, true);
+    if (switch_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to switch to antenna %d: %s", new_antenna, esp_err_to_name(switch_ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to switch antenna");
+        return ESP_FAIL;
+    }
+
+    // Prepare response
+    cJSON *response = cJSON_CreateObject();
+    if (!response) {
+        ESP_LOGE(TAG, "Failed to create response JSON");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+        return ESP_FAIL;
+    }
+
+    cJSON_AddStringToObject(response, "status", "success");
+    cJSON_AddStringToObject(response, "radio", radio_str);
+    cJSON_AddNumberToObject(response, "frequency", current_freq);
+    cJSON_AddNumberToObject(response, "frequency_mhz", current_freq / 1000000.0);
+    cJSON_AddStringToObject(response, "band", band_name);
+    cJSON_AddNumberToObject(response, "previous_antenna", current_active);
+    cJSON_AddNumberToObject(response, "new_antenna", new_antenna);
+    
+    // Add available antennas array
+    cJSON *antennas_array = cJSON_CreateArray();
+    for (int antenna : available_antennas) {
+        cJSON_AddItemToArray(antennas_array, cJSON_CreateNumber(antenna));
+    }
+    cJSON_AddItemToObject(response, "available_antennas", antennas_array);
+
+    char *json_string = cJSON_Print(response);
+    if (!json_string) {
+        ESP_LOGE(TAG, "Failed to generate JSON string");
+        cJSON_Delete(response);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to generate response");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_string);
+
+    free(json_string);
+    cJSON_Delete(response);
+    
+    ESP_LOGI(TAG, "Antenna switched successfully: Radio %s from %d to %d", radio_str, current_active, new_antenna);
+    return ESP_OK;
+}
+
 esp_err_t WebServer::config_export_handler(httpd_req_t *req) {
     ESP_LOGD(TAG, "Config export request received");
 
@@ -1201,6 +1387,13 @@ esp_err_t WebServer::register_uri_handlers() const
         .user_ctx = nullptr
     };
 
+    static constexpr httpd_uri_t antenna_switch = {
+        .uri = "/api/antenna/switch",
+        .method = HTTP_POST,
+        .handler = antenna_switch_handler,
+        .user_ctx = nullptr
+    };
+
     static constexpr httpd_uri_t config_export = {
         .uri = "/api/config/export",
         .method = HTTP_GET,
@@ -1298,6 +1491,12 @@ esp_err_t WebServer::register_uri_handlers() const
     ret = httpd_register_uri_handler(m_server, &relay_control);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register relay control handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = httpd_register_uri_handler(m_server, &antenna_switch);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register antenna switch handler: %s", esp_err_to_name(ret));
         return ret;
     }
 
