@@ -26,6 +26,42 @@ static const char* TAG = "WEBSERVER";
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 
+// Helper function to safely send HTTP response, checking if client is still connected
+static esp_err_t safe_httpd_resp_send(httpd_req_t *req, const char *buf, ssize_t buf_len) {
+    int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd < 0) {
+        ESP_LOGD(TAG, "Invalid socket file descriptor");
+        return ESP_FAIL;
+    }
+    
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    if (getpeername(sockfd, (struct sockaddr*)&client_addr, &addr_len) != 0) {
+        ESP_LOGD(TAG, "Client disconnected, skipping response");
+        return ESP_FAIL;
+    }
+    
+    return httpd_resp_send(req, buf, buf_len);
+}
+
+// Helper function to safely send HTTP error response
+static esp_err_t safe_httpd_resp_send_err(httpd_req_t *req, httpd_err_code_t error, const char *msg) {
+    int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd < 0) {
+        ESP_LOGD(TAG, "Invalid socket file descriptor");
+        return ESP_FAIL;
+    }
+    
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    if (getpeername(sockfd, (struct sockaddr*)&client_addr, &addr_len) != 0) {
+        ESP_LOGD(TAG, "Client disconnected, skipping error response");
+        return ESP_FAIL;
+    }
+    
+    return httpd_resp_send_err(req, error, msg);
+}
+
 // Singleton instance
 WebServer& WebServer::instance() {
     static WebServer instance;
@@ -38,9 +74,15 @@ WebServer::WebServer() : m_server(nullptr), m_config() {
 
 esp_err_t WebServer::error_handler(httpd_req_t *req, httpd_err_code_t err) {
     ESP_LOGW(TAG, "HTTP Error %d occurred", err);
-    httpd_resp_send_err(req, err, "Something went wrong");
+    
+    // Use safe error response function
+    safe_httpd_resp_send_err(req, err, "Something went wrong");
+    
     // Ensure connection is closed
-    httpd_sess_trigger_close(req->handle, httpd_req_to_sockfd(req));
+    int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd >= 0) {
+        httpd_sess_trigger_close(req->handle, sockfd);
+    }
     return ESP_FAIL;
 }
 

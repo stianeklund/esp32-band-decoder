@@ -186,6 +186,7 @@ extern "C" [[noreturn]] void app_main(void) {
     }
 
     // Main loop
+    uint32_t loop_count = 0;
     while (true) {
         // Feed the watchdog
         if (const esp_err_t wdt_status = esp_task_wdt_status(xTaskGetCurrentTaskHandle()); wdt_status == ESP_OK) {
@@ -195,6 +196,19 @@ extern "C" [[noreturn]] void app_main(void) {
             ESP_LOGW(TAG, "Task not subscribed to WDT, attempting to resubscribe.");
             if (esp_task_wdt_add(xTaskGetCurrentTaskHandle()) != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to add task to WDT.");
+            }
+        }
+        
+        // Periodic memory health checks every ~5 minutes (600 * 500ms)
+        if (++loop_count % 600 == 0) {
+            size_t free_heap = esp_get_free_heap_size();
+            size_t min_free_heap = esp_get_minimum_free_heap_size();
+            ESP_LOGI(TAG, "Memory status - Free: %u bytes, Min free ever: %u bytes", 
+                     free_heap, min_free_heap);
+            
+            // Log warning if free memory is getting low
+            if (free_heap < 32768) { // Less than 32KB
+                ESP_LOGW(TAG, "Low memory warning: only %u bytes free", free_heap);
             }
         }
 

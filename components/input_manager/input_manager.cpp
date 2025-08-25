@@ -2,6 +2,7 @@
 #include "antenna_switch.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "kc868_a16_hw.h"
 
 static auto TAG = "InputManager";
@@ -213,7 +214,13 @@ void InputManager::ptt_poll_task() {
         if (const esp_err_t ret = kc868_a16_get_inputs_0_7_raw(&ptt_inputs_raw_0_7); ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to read inputs (0-7) in PTT poll task: %s", esp_err_to_name(ret));
             handle_ptt_read_error();
-            vTaskDelay(pdMS_TO_TICKS(5));
+            
+            // Feed watchdog before error delay
+            if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+                esp_task_wdt_reset();
+            }
+            
+            vTaskDelay(pdMS_TO_TICKS(50)); // Moderate delay on error, but don't slow PTT too much
             continue;
         }
 
@@ -235,7 +242,12 @@ void InputManager::ptt_poll_task() {
             current_inputs_mask, [](const bool state) { AntennaSwitch::instance().on_hw_ptt_b_state_change(state); }
         );
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        // Feed watchdog periodically
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            esp_task_wdt_reset();
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(5)); // Keep 5ms for fast PTT detection
     }
 }
 

@@ -1,13 +1,15 @@
 #include "wifi_manager.hpp"
-#include "lwip/ip4_addr.h"
-#include "webserver.h"
-#include "esp_wifi.h"
+
+#include <algorithm>
 #include "esp_event.h"
 #include "esp_log.h"
-#include "freertos/event_groups.h"
-#include "esp_timer.h"
 #include "esp_smartconfig.h"
+#include "esp_timer.h"
+#include "esp_wifi.h"
 #include "nvs.h"
+#include "webserver.h"
+#include "freertos/event_groups.h"
+#include "lwip/ip4_addr.h"
 
 #include <cstring>
 #include <esp_task_wdt.h>
@@ -235,7 +237,15 @@ void WifiManager::event_handler(void* arg, const esp_event_base_t event_base,
             default:
                 ESP_LOGI(TAG, "STA_DISCONNECTED: Normal disconnect or unexpected.");
                 instance.m_using_saved_credentials = false; // No longer relying on (potentially failed) saved/previous credentials
+                
+                // Add exponential backoff for reconnection attempts
+                static int reconnect_attempts = 0;
+                int backoff_delay = (1 <<  std::ranges::min(reconnect_attempts, 6)) * 1000; // Max ~64 seconds
+                ESP_LOGI(TAG, "Reconnecting in %d ms (attempt %d)", backoff_delay, reconnect_attempts + 1);
+                
+                vTaskDelay(pdMS_TO_TICKS(backoff_delay));
                 esp_wifi_connect(); // Attempt to reconnect (will trigger STA_START for SmartConfig)
+                reconnect_attempts++;
                 break;
         }
     }
@@ -261,6 +271,10 @@ void WifiManager::event_handler(void* arg, const esp_event_base_t event_base,
         }
         // Whether from SmartConfig, saved creds, or manual reconfig, if we got an IP, we are using "valid" (though maybe just temporary for SC) credentials.
         instance.m_using_saved_credentials = true;
+        
+        // Reset reconnect attempts counter on successful connection
+        static int reconnect_attempts = 0;
+        reconnect_attempts = 0;
 
 
         // Add a small delay to ensure connection status propagates
@@ -425,9 +439,13 @@ esp_err_t WifiManager::init() {
 
     // Initialize WiFi with default config
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    // Increase buffer numbers for stability
-    cfg.static_rx_buf_num = 16;
-    cfg.static_tx_buf_num = 16;
+    // Reduce buffer numbers to save memory and improve stability
+    cfg.static_rx_buf_num = 8;
+    cfg.static_tx_buf_num = 8;
+    cfg.dynamic_rx_buf_num = 16;
+    cfg.dynamic_tx_buf_num = 16;
+    cfg.ampdu_rx_enable = 0; // Disable AMPDU RX to fix Block ACK issues
+    cfg.ampdu_tx_enable = 0; // Disable AMPDU TX to fix Block ACK issues
 
     ret = esp_wifi_init(&cfg);
     if (ret != ESP_OK) {
@@ -484,6 +502,14 @@ esp_err_t WifiManager::init() {
         return ret;
     }
 
+    // Set power save mode to NONE for better stability
+    ret = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set power save mode: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "WiFi power save disabled for better stability");
+    }
+
     // Add delay after starting WiFi
     vTaskDelay(pdMS_TO_TICKS(200));
 
@@ -502,6 +528,12 @@ esp_err_t WifiManager::init() {
         }
         // If ret == ESP_OK, connection with saved credentials was successfully initiated.
     #endif
+    // Start WiFi health check task
+    xTaskCreate([](void* pvParameter) {
+        WifiManager* manager = static_cast<WifiManager*>(pvParameter);
+        manager->wifi_health_check_task();
+    }, "wifi_health", 2048, this, 2, nullptr);
+    
     return ESP_OK; // Init itself is OK, connection is asynchronous.
 }
 
@@ -645,4 +677,42 @@ esp_err_t WifiManager::clear_credentials() {
     }
 
     return err;
+}
+
+void WifiManager::wifi_health_check_task() {
+    ESP_LOGI(TAG, "WiFi health check task started");
+    uint32_t consecutive_failures = 0;
+    
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(30000)); // Check every 30 seconds
+        
+        // Check if we should be connected but aren't
+        if (m_using_saved_credentials && !m_wifi_connected) {
+            consecutive_failures++;
+            ESP_LOGW(TAG, "WiFi health check failed (%lu consecutive failures)", consecutive_failures);
+            
+            // If we've failed for 3 consecutive checks (1.5 minutes), try to reconnect
+            if (consecutive_failures >= 3) {
+                ESP_LOGI(TAG, "Attempting WiFi reconnection due to health check failure");
+                esp_wifi_disconnect();
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                esp_wifi_connect();
+                consecutive_failures = 0; // Reset counter after reconnection attempt
+            }
+        } else if (m_wifi_connected) {
+            if (consecutive_failures > 0) {
+                ESP_LOGI(TAG, "WiFi connection restored after %lu failures", consecutive_failures);
+                consecutive_failures = 0;
+            }
+        }
+        
+        // Periodic connection status log (every 5 minutes = 10 * 30s)
+        static uint32_t status_log_counter = 0;
+        if (++status_log_counter >= 10) {
+            ESP_LOGI(TAG, "WiFi status: %s, IP obtained: %s", 
+                     m_wifi_connected ? "Connected" : "Disconnected",
+                     m_ip_obtained ? "Yes" : "No");
+            status_log_counter = 0;
+        }
+    }
 }

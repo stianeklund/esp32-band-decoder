@@ -61,6 +61,7 @@ private:
                             int32_t event_id, void* event_data);
     esp_err_t try_connect_with_saved_credentials();
     static void smartconfig_task(void* parm);
+    void wifi_health_check_task();
     
     // Credential management
     static esp_err_t save_credentials(const char* ssid, const char* password);
