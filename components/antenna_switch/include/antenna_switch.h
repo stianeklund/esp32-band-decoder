@@ -136,6 +136,9 @@ public:
     // Direct Radio B control (non-band selection)
     esp_err_t set_relay_radio_b(int relay_id, bool state);
 
+    // Get active relay for a specific radio
+    int get_active_relay_for_radio(RadioID radio) const;
+
 private:
     AntennaSwitch();
     ~AntennaSwitch();
@@ -152,9 +155,6 @@ private:
     mutable int pre_tx_active_relay_radio_b_ = 0; // Stores active relay for B if A starts TX
     int auto_resolved_conflict_prev_a_relay_ = 0; // Stores Radio A's relay if turned off by B due to auto-resolved port conflict
     int auto_resolved_conflict_prev_b_relay_ = 0; // Stores Radio B's relay if turned off by A due to auto-resolved port conflict
-
-
-    int get_active_relay_for_radio(RadioID radio) const;
 
     esp_err_t update_last_used_antenna_preference(int activated_relay_id, RadioID radio_of_activated_relay, int band_idx_for_preference);
 

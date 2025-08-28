@@ -1524,11 +1524,12 @@ esp_err_t WebServer::register_uri_handlers() const
         return ret;
     }
 
-    ret = httpd_register_uri_handler(m_server, &favicon);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to register favicon handler: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    // Favicon handler removed to stay within ESP-IDF handler limit
+    // ret = httpd_register_uri_handler(m_server, &favicon);
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(TAG, "Failed to register favicon handler: %s", esp_err_to_name(ret));
+    //     return ret;
+    // }
 
     return ESP_OK;
 }
