@@ -175,13 +175,8 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
     const uint32_t current_freq = cat_parser_get_frequency();
     const bool is_transmitting = cat_parser_get_transmit();
 
-    // Get current antenna configuration
-    antenna_switch_config_t config;
-    if (const esp_err_t ret = AntennaSwitch::instance().get_config(&config); ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get configuration: %s", esp_err_to_name(ret));
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to get configuration");
-        return ESP_FAIL;
-    }
+    // Use cached configuration for better performance
+    const auto& config = AntennaSwitch::instance().get_config_ref();
 
     // Modify Radio A's active antenna determination
     uint16_t relay_states = RelayController::instance().get_relay_states();
@@ -913,14 +908,8 @@ esp_err_t WebServer::antenna_switch_handler(httpd_req_t *req) {
 
     cJSON_Delete(root);
 
-    // Get current configuration and frequency
-    antenna_switch_config_t config;
-    esp_err_t config_ret = AntennaSwitch::instance().get_config(&config);
-    if (config_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get configuration: %s", esp_err_to_name(config_ret));
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to get configuration");
-        return ESP_FAIL;
-    }
+    // Use cached configuration for better performance
+    const auto& config = AntennaSwitch::instance().get_config_ref();
 
     // Get current frequency based on radio
     uint32_t current_freq = 0;
@@ -929,31 +918,34 @@ esp_err_t WebServer::antenna_switch_handler(httpd_req_t *req) {
     }
     // TODO: Add Radio B frequency support when implemented
 
+    // Early exit optimization for zero frequency
     if (current_freq == 0) {
         ESP_LOGW(TAG, "No frequency available for radio %s", radio_str);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No frequency available for specified radio");
         return ESP_FAIL;
     }
 
-    // Find available antennas for current frequency (reuse logic from status handler)
+    // Pre-allocate vector to avoid reallocations
     std::vector<int> available_antennas;
+    available_antennas.reserve(MAX_ANTENNA_PORTS);
     const char* band_name = "Unknown";
     
+    // Optimized band search with early termination
+    const int radio_idx = static_cast<int>(radio_id);
+    const int port_offset = (radio_id == RadioID::A) ? 0 : RelayController::RELAYS_PER_RADIO;
+    
     for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
-        const auto &band_cfg = config.bands[static_cast<int>(radio_id)][band_idx];
+        const auto &band_cfg = config.bands[radio_idx][band_idx];
         if (current_freq >= band_cfg.start_freq && current_freq <= band_cfg.end_freq) {
             band_name = band_cfg.description;
             
-            // Find available antenna ports for this band
-            const int max_ports = (radio_id == RadioID::A) ? RelayController::RELAYS_PER_RADIO : RelayController::RELAYS_PER_RADIO;
-            const int port_offset = (radio_id == RadioID::A) ? 0 : RelayController::RELAYS_PER_RADIO;
-            
-            for (int port_idx = 0; port_idx < max_ports; port_idx++) {
-                if (port_idx < MAX_ANTENNA_PORTS && band_cfg.antenna_ports[port_idx]) {
-                    available_antennas.push_back(port_offset + port_idx + 1); // Convert to relay number
+            // Optimized port collection
+            for (int port_idx = 0; port_idx < RelayController::RELAYS_PER_RADIO && port_idx < MAX_ANTENNA_PORTS; port_idx++) {
+                if (band_cfg.antenna_ports[port_idx]) {
+                    available_antennas.emplace_back(port_offset + port_idx + 1);
                 }
             }
-            break;
+            break; // Early exit once band is found
         }
     }
 
@@ -963,7 +955,7 @@ esp_err_t WebServer::antenna_switch_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    // Find currently active antenna
+    // Find currently active antenna (cached for performance)
     const int current_active = AntennaSwitch::instance().get_active_relay_for_radio(radio_id);
     int current_index = -1;
     
@@ -998,42 +990,72 @@ esp_err_t WebServer::antenna_switch_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    // Prepare response
-    cJSON *response = cJSON_CreateObject();
-    if (!response) {
-        ESP_LOGE(TAG, "Failed to create response JSON");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
-        return ESP_FAIL;
-    }
-
-    cJSON_AddStringToObject(response, "status", "success");
-    cJSON_AddStringToObject(response, "radio", radio_str);
-    cJSON_AddNumberToObject(response, "frequency", current_freq);
-    cJSON_AddNumberToObject(response, "frequency_mhz", current_freq / 1000000.0);
-    cJSON_AddStringToObject(response, "band", band_name);
-    cJSON_AddNumberToObject(response, "previous_antenna", current_active);
-    cJSON_AddNumberToObject(response, "new_antenna", new_antenna);
-    
-    // Add available antennas array
-    cJSON *antennas_array = cJSON_CreateArray();
-    for (int antenna : available_antennas) {
-        cJSON_AddItemToArray(antennas_array, cJSON_CreateNumber(antenna));
-    }
-    cJSON_AddItemToObject(response, "available_antennas", antennas_array);
-
-    char *json_string = cJSON_Print(response);
-    if (!json_string) {
-        ESP_LOGE(TAG, "Failed to generate JSON string");
-        cJSON_Delete(response);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to generate response");
-        return ESP_FAIL;
-    }
-
+    // Optimized JSON response generation
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json_string);
-
-    free(json_string);
-    cJSON_Delete(response);
+    
+    // Use stack-based buffer for small JSON responses to avoid malloc overhead
+    static constexpr size_t RESPONSE_BUFFER_SIZE = 512;
+    char response_buffer[RESPONSE_BUFFER_SIZE];
+    
+    // Build JSON response directly into buffer
+    int written = snprintf(response_buffer, RESPONSE_BUFFER_SIZE,
+        "{"
+        "\"status\":\"success\","
+        "\"radio\":\"%s\","
+        "\"frequency\":%lu,"
+        "\"frequency_mhz\":%.3f,"
+        "\"band\":\"%s\","
+        "\"previous_antenna\":%d,"
+        "\"new_antenna\":%d,"
+        "\"available_antennas\":[",
+        radio_str, current_freq, current_freq / 1000000.0, 
+        band_name, current_active, new_antenna);
+    
+    // Add available antennas efficiently
+    bool first = true;
+    for (int antenna : available_antennas) {
+        if (written >= static_cast<int>(RESPONSE_BUFFER_SIZE - 20)) break; // Safety check
+        if (!first) {
+            written += snprintf(response_buffer + written, RESPONSE_BUFFER_SIZE - written, ",");
+        }
+        written += snprintf(response_buffer + written, RESPONSE_BUFFER_SIZE - written, "%d", antenna);
+        first = false;
+    }
+    
+    if (written < static_cast<int>(RESPONSE_BUFFER_SIZE - 2)) {
+        snprintf(response_buffer + written, RESPONSE_BUFFER_SIZE - written, "]}");
+        httpd_resp_sendstr(req, response_buffer);
+    } else {
+        // Fallback to cJSON for very large responses
+        cJSON *response = cJSON_CreateObject();
+        if (!response) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Memory allocation failed");
+            return ESP_FAIL;
+        }
+        
+        cJSON_AddStringToObject(response, "status", "success");
+        cJSON_AddStringToObject(response, "radio", radio_str);
+        cJSON_AddNumberToObject(response, "frequency", current_freq);
+        cJSON_AddNumberToObject(response, "frequency_mhz", current_freq / 1000000.0);
+        cJSON_AddStringToObject(response, "band", band_name);
+        cJSON_AddNumberToObject(response, "previous_antenna", current_active);
+        cJSON_AddNumberToObject(response, "new_antenna", new_antenna);
+        
+        cJSON *antennas_array = cJSON_CreateArray();
+        for (int antenna : available_antennas) {
+            cJSON_AddItemToArray(antennas_array, cJSON_CreateNumber(antenna));
+        }
+        cJSON_AddItemToObject(response, "available_antennas", antennas_array);
+        
+        char *json_string = cJSON_Print(response);
+        if (json_string) {
+            httpd_resp_sendstr(req, json_string);
+            free(json_string);
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to generate response");
+        }
+        cJSON_Delete(response);
+    }
     
     ESP_LOGI(TAG, "Antenna switched successfully: Radio %s from %d to %d", radio_str, current_active, new_antenna);
     return ESP_OK;
