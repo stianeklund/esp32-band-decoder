@@ -43,6 +43,12 @@ public:
      * @return true if running, false otherwise
      */
     bool is_running() const;
+
+    /**
+     * Get the HTTP server handle for WebSocket integration
+     * @return HTTP server handle or nullptr if not initialized
+     */
+    httpd_handle_t get_server_handle() const;
     // HTTP request handlers
     static esp_err_t error_handler(httpd_req_t *req, httpd_err_code_t err);
     static esp_err_t root_get_handler(httpd_req_t *req);

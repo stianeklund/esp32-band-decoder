@@ -1,4 +1,5 @@
 #include "include/cat_parser.h"
+#include "websocket_server.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_task_wdt.h"
@@ -350,6 +351,7 @@ esp_err_t CatParser::handle_frequency_change(const uint32_t frequency) {
     // Update cached values
     current_frequency = frequency;
     current_band_index = new_band_index;
+    
     return ESP_OK;
 }
 
@@ -624,6 +626,11 @@ void CatParser::set_transmitting(const bool new_state) {
         // Notify AntennaSwitch about this change for Radio A
         ESP_LOGD(TAG, "Notifying AntennaSwitch of CAT TX state change to: %s", new_state ? "ON" : "OFF");
         AntennaSwitch::instance().on_cat_tx_a_state_change(new_state);
+        
+        // Broadcast transmit state change to WebSocket clients
+        if (websocket_server_is_running()) {
+            WebSocketServer::instance().broadcast_transmit_state_change(new_state);
+        }
     } else {
         ESP_LOGV(TAG, "CatParser transmit state unchanged at: %s", new_state ? "ON" : "OFF");
     }

@@ -15,6 +15,7 @@
 #include "serial_cli.h"
 #include "system_initializer.h"
 #include "webserver.h"
+#include "websocket_server.h"
 #include "wifi_manager.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -183,6 +184,34 @@ extern "C" [[noreturn]] void app_main(void) {
             }
             else {
                 ESP_LOGI(TAG, "WebServer started successfully with all URI handlers registered.");
+                
+                // Check if WebSocket is enabled in configuration
+                const auto& config = AntennaSwitch::instance().get_config_ref();
+                if (config.websocket_enabled) {
+                    // Initialize and start WebSocket server
+                    ESP_LOGI(TAG, "WebSocket enabled - Initializing WebSocket server...");
+                    if (websocket_server_init() != ESP_OK) {
+                        ESP_LOGE(TAG, "Failed to initialize WebSocket server");
+                        if (ret == ESP_OK) ret = ESP_FAIL;
+                    } else {
+                        // Register WebSocket with HTTP server
+                        httpd_handle_t http_server = WebServer::instance().get_server_handle();
+                        if (websocket_server_register_with_http(http_server) != ESP_OK) {
+                            ESP_LOGE(TAG, "Failed to register WebSocket with HTTP server");
+                            if (ret == ESP_OK) ret = ESP_FAIL;
+                        } else {
+                            // Start WebSocket server
+                            if (websocket_server_start() != ESP_OK) {
+                                ESP_LOGE(TAG, "Failed to start WebSocket server");
+                                if (ret == ESP_OK) ret = ESP_FAIL;
+                            } else {
+                                ESP_LOGI(TAG, "WebSocket server started successfully at ws://device-ip/ws");
+                            }
+                        }
+                    }
+                } else {
+                    ESP_LOGI(TAG, "WebSocket disabled in configuration - skipping WebSocket server initialization");
+                }
             }
         }
     }

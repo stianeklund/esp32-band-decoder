@@ -44,6 +44,7 @@ typedef struct {
     bool auto_mode;
     bool ai_mode;                       // Enable Auto Information (AI2) mode
     bool allow_concurrent_data_sources; // This field is part of the base config
+    bool websocket_enabled;             // Enable/disable WebSocket server
     uint8_t num_bands;                  // Actual number of bands used, up to MAX_BANDS
     uint8_t num_antenna_ports;          // Actual number of antenna ports used, up to MAX_ANTENNA_PORTS
     radio_operation_mode_t radio_operation_mode; 
@@ -79,6 +80,7 @@ typedef struct antenna_switch_config {
 
     bool mqtt_enabled;
     // bool allow_concurrent_data_sources; // This is now part of the block above, managed by base_nvs_config_data_t
+    bool websocket_enabled;                // Enable/disable WebSocket server
     bool interlock_auto_resolves_conflict; // Renamed from interlock_enabled
     bool auto_restore_on_conflict_resolution; // New setting
     char mqtt_broker[64];

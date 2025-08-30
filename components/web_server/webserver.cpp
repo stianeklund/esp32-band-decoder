@@ -489,6 +489,10 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     const cJSON *mqtt_enabled = cJSON_GetObjectItem(root, "mqtt_enabled");
     new_config.mqtt_enabled = cJSON_IsTrue(mqtt_enabled);
 
+    // Parse WebSocket settings
+    const cJSON *websocket_enabled = cJSON_GetObjectItem(root, "websocket_enabled");
+    new_config.websocket_enabled = cJSON_IsTrue(websocket_enabled);
+
     const cJSON *mqtt_broker = cJSON_GetObjectItem(root, "mqtt_broker");
     if (cJSON_IsString(mqtt_broker)) {
         strncpy(new_config.mqtt_broker, mqtt_broker->valuestring, sizeof(new_config.mqtt_broker) - 1);
@@ -1276,6 +1280,7 @@ esp_err_t WebServer::config_basic_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "num_bands", config.num_bands);
     cJSON_AddNumberToObject(root, "num_antenna_ports", config.num_antenna_ports);
     cJSON_AddBoolToObject(root, "mqtt_enabled", config.mqtt_enabled);
+    cJSON_AddBoolToObject(root, "websocket_enabled", config.websocket_enabled);
 
     // Add radio operation mode
     const char* radio_mode_str;
@@ -1562,13 +1567,13 @@ esp_err_t WebServer::init() {
     m_config = HTTPD_DEFAULT_CONFIG();
     m_config.stack_size = 8192;
     m_config.task_priority = tskIDLE_PRIORITY+5;
-    m_config.max_uri_handlers = 15;
-    m_config.max_resp_headers = 4;
+    m_config.max_uri_handlers = 20;
+    m_config.max_resp_headers = 8;       // Increase for WebSocket handshake headers
     m_config.lru_purge_enable = true;    // Enable LRU purging for large requests
-    m_config.recv_wait_timeout = 5;
+    m_config.recv_wait_timeout = 10;     // Longer timeout for WebSocket handshake
     m_config.uri_match_fn = httpd_uri_match_wildcard;
-    m_config.keep_alive_enable = false;
-    m_config.max_open_sockets = 3;
+    m_config.keep_alive_enable = true;   // Enable for WebSocket persistent connections
+    m_config.max_open_sockets = 5;       // More sockets for WebSocket connections
 
     return ESP_OK;
 }
@@ -1622,6 +1627,10 @@ esp_err_t WebServer::restart() {
 
 bool WebServer::is_running() const {
     return m_server != nullptr;
+}
+
+httpd_handle_t WebServer::get_server_handle() const {
+    return m_server;
 }
 
 // Legacy C-style function wrappers for backwards compatibility

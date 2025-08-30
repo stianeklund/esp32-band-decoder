@@ -209,7 +209,10 @@ esp_err_t ConfigManager::init() { // Made non-const
         current_config_->allow_concurrent_data_sources = true;  // First come first serve
 
         // MQTT defaults
-        current_config_->mqtt_enabled = false;  // default to enabled
+        current_config_->mqtt_enabled = false;  // default to disabled
+        
+        // WebSocket defaults
+        current_config_->websocket_enabled = false;  // default to disabled for safety
         current_config_->mqtt_port = 1883;     // default MQTT port
         strncpy(current_config_->mqtt_broker, "mqtt://localhost", sizeof(current_config_->mqtt_broker));
         strncpy(current_config_->mqtt_rig_id, "rig1", sizeof(current_config_->mqtt_rig_id));
@@ -316,6 +319,7 @@ esp_err_t ConfigManager::reset_to_defaults() {
     defaultConfig.uart_tx_pin = GPIO_NUM_33; // HT2
     defaultConfig.allow_concurrent_data_sources = true;
     defaultConfig.mqtt_enabled = false;
+    defaultConfig.websocket_enabled = false; // Default to disabled for safety
     defaultConfig.mqtt_port = 1883;
     strncpy(defaultConfig.mqtt_broker, "mqtt://localhost", sizeof(defaultConfig.mqtt_broker) - 1);
     defaultConfig.mqtt_broker[sizeof(defaultConfig.mqtt_broker) - 1] = '\0';
@@ -449,6 +453,7 @@ esp_err_t ConfigManager::save_to_nvs() const {
     base_data_to_save.auto_mode = current_config_->auto_mode;
     base_data_to_save.ai_mode = current_config_->ai_mode;
     base_data_to_save.allow_concurrent_data_sources = current_config_->allow_concurrent_data_sources;
+    base_data_to_save.websocket_enabled = current_config_->websocket_enabled;
     base_data_to_save.num_bands = current_config_->num_bands;
     base_data_to_save.num_antenna_ports = current_config_->num_antenna_ports;
     base_data_to_save.radio_operation_mode = current_config_->radio_operation_mode;
@@ -667,6 +672,7 @@ esp_err_t ConfigManager::load_from_nvs() const {
             current_config_->auto_mode = loaded_base_data.auto_mode;
             current_config_->ai_mode = loaded_base_data.ai_mode;
             current_config_->allow_concurrent_data_sources = loaded_base_data.allow_concurrent_data_sources;
+            current_config_->websocket_enabled = loaded_base_data.websocket_enabled;
             current_config_->num_bands = loaded_base_data.num_bands;
             current_config_->num_antenna_ports = loaded_base_data.num_antenna_ports;
             current_config_->radio_operation_mode = loaded_base_data.radio_operation_mode;
@@ -877,6 +883,7 @@ esp_err_t ConfigManager::load_from_nvs() const {
     if (mqtt_err == ESP_OK) current_config_->mqtt_enabled = static_cast<bool>(mqtt_enabled_val);
     else if (mqtt_err == ESP_ERR_NVS_NOT_FOUND) ESP_LOGW(TAG, "mqtt_enabled not found, using default."); // Default is true from init
     else ESP_LOGE(TAG, "Error loading mqtt_enabled: %s", esp_err_to_name(mqtt_err));
+
 
     size_t len;
     len = sizeof(current_config_->mqtt_broker);
@@ -1091,6 +1098,11 @@ esp_err_t ConfigManager::export_config_to_json(char **json_string) const {
     cJSON_AddStringToObject(mqtt, "client_id", current_config_->mqtt_client_id);
     cJSON_AddStringToObject(mqtt, "topic", current_config_->mqtt_topic);
     cJSON_AddItemToObject(config, "mqtt", mqtt);
+
+    // WebSocket configuration
+    cJSON *websocket = cJSON_CreateObject();
+    cJSON_AddBoolToObject(websocket, "enabled", current_config_->websocket_enabled);
+    cJSON_AddItemToObject(config, "websocket", websocket);
 
     // Interlock configuration
     cJSON *interlock = cJSON_CreateObject();
@@ -1408,6 +1420,13 @@ esp_err_t ConfigManager::import_config_from_json(const char *json_string, bool v
             strncpy(temp_config.mqtt_topic, topic->valuestring, sizeof(temp_config.mqtt_topic) - 1);
             temp_config.mqtt_topic[sizeof(temp_config.mqtt_topic) - 1] = '\0';
         }
+    }
+
+    // Parse WebSocket configuration
+    cJSON *websocket = cJSON_GetObjectItem(config, "websocket");
+    if (cJSON_IsObject(websocket)) {
+        cJSON *enabled = cJSON_GetObjectItem(websocket, "enabled");
+        if (cJSON_IsBool(enabled)) temp_config.websocket_enabled = cJSON_IsTrue(enabled);
     }
 
     // Parse interlock configuration

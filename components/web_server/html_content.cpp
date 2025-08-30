@@ -708,6 +708,20 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
 
+    // WebSocket Configuration
+    ss_buffer << "<h3>WebSocket</h3>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='websocket_enabled' " << (config.websocket_enabled ? "checked" : "") << ">";
+    ss_buffer << " Enable WebSocket Server";
+    ss_buffer << "</label>";
+    ss_buffer << "<div class='form-description' style='margin-left: 20px; font-size: 0.9em; color: #666;'>";
+    ss_buffer << "Enables real-time WebSocket API at ws://device-ip/ws for status updates and control.";
+    ss_buffer << "</div>";
+    ss_buffer << "</div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
     ss_buffer << "<div class='button-container' style='margin: 20px 0;'>";
     ss_buffer << "<input type='submit' value='Update Configuration' class='button'>";
     ss_buffer << "</div>";
@@ -764,6 +778,7 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
             ptt_input_radio_b_active_high: formData.get('ptt_input_radio_b_active_high') === 'true',
 
             mqtt_enabled: formData.get('mqtt_enabled') === 'on',
+            websocket_enabled: formData.get('websocket_enabled') === 'on',
             mqtt_broker: formData.get('mqtt_broker'),
             mqtt_port: parseInt(formData.get('mqtt_port')),
             mqtt_rig_id: formData.get('mqtt_rig_id'),

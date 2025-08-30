@@ -1,5 +1,6 @@
 #include "relay_controller.h"
 #include "antenna_switch.h"
+#include "websocket_server.h"
 #include "config_manager.h"
 #include "my_mqtt_client.h"
 #include "cat_parser.h"
@@ -133,6 +134,11 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
         }
         // Note: The underlying kc868_a16_set_all_outputs updates its own comprehensive 'output_state' cache.
         // The relay_states_ map here is RelayController's higher-level view.
+        
+        // Broadcast relay state change to WebSocket clients
+        if (websocket_server_is_running()) {
+            WebSocketServer::instance().broadcast_relay_state_change(relay_id, state);
+        }
     }
     ESP_LOGD(TAG, "PROF: set_relay (total) took %lld us", esp_timer_get_time() - set_relay_func_begin_time);
     return ret;
@@ -344,6 +350,11 @@ esp_err_t RelayController::execute_relay_change(const int relay_id, const int ba
         // Update the generic currently_selected_relay_ if Radio A is involved, primarily for single-radio context or backward compatibility views
         if (radio == RadioID::A) {
             currently_selected_relay_ = state ? relay_id : 0; // if turning off, and it was this relay, set to 0
+        }
+        
+        // Broadcast relay state change to WebSocket clients
+        if (websocket_server_is_running()) {
+            WebSocketServer::instance().broadcast_relay_state_change(relay_id, state);
         }
     } else {
         ESP_LOGE(TAG, "Failed to set all outputs with mask 0x%04X. Error: %s", hw_mask, esp_err_to_name(ret));
