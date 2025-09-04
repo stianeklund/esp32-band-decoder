@@ -9,6 +9,7 @@
 #include "cat_parser.h"
 #include "config_cache.h"
 #include "esp_timer.h"
+#include "websocket_server.h"
 
 static auto TAG = "ANTENNA_SWITCH";
 
@@ -1262,6 +1263,14 @@ esp_err_t AntennaSwitch::set_relay_for_antenna(const int relay_id, const int ban
         {
             ESP_LOGE(TAG, "Error updating antenna preference for relay %d, radio %c, band %d: %s. Relay operation itself was successful.",
                      relay_id, (radio == RadioID::A ? 'A' : 'B'), band_number, esp_err_to_name(pref_err));
+        }
+
+        // Broadcast status update for band/frequency changes (not manual relay control)
+        // band_number >= 0 indicates this was triggered by a frequency/band change
+        if (band_number >= 0 && websocket_server_is_running()) {
+            WebSocketServer::instance().broadcast_status_update();
+            ESP_LOGD(TAG, "Broadcasted status update for band change: relay %d, radio %c, band %d",
+                     relay_id, (radio == RadioID::A ? 'A' : 'B'), band_number);
         }
 
         // Logic for immediate restoration if the current activation resolves a conflict for the *other* radio.
