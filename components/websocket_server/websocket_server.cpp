@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_http_server.h"
+#include "esp_random.h"
 #include "cJSON.h"
 #include <algorithm>
 #include <cstring>
@@ -333,6 +334,8 @@ esp_err_t WebSocketServer::websocket_handler(httpd_req_t *req) {
             auto client = server->find_client(sockfd);
             if (client) {
                 client->last_activity = esp_timer_get_time() / 1000; // Convert to milliseconds
+                client->missed_pong_count = 0;  // Reset missed pong counter
+                client->awaiting_pong = false;  // No longer waiting for pong
                 ESP_LOGD(TAG, "Updated last_activity for client fd=%d after pong", sockfd);
             }
             xSemaphoreGive(server->m_clients_mutex);
@@ -927,16 +930,45 @@ esp_err_t WebSocketServer::cleanup_inactive_clients() {
     while (it != m_clients.end()) {
         WebSocketClient* client = it->get();
         
-        // Check if client has been inactive for too long
-        if (current_time - client->last_activity > WS_CLIENT_TIMEOUT_MS) {
-            ESP_LOGW(TAG, "Removing inactive WebSocket client fd=%d", client->sockfd);
+        // Check if client should be disconnected based on missed PONGs
+        if (client->missed_pong_count >= WS_MAX_MISSED_PONGS) {
+            ESP_LOGW(TAG, "Removing WebSocket client fd=%d after %d missed PONGs", 
+                     client->sockfd, client->missed_pong_count);
             it = m_clients.erase(it);
             removed_count++;
-        } else {
-            // Send ping to check if client is still alive
-            send_ping_to_client(client->sockfd);
-            ++it;
+            continue;
         }
+        
+        // Fallback: check if client has been inactive for too long (wall-clock timeout)
+        if (current_time - client->last_activity > WS_CLIENT_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "Removing inactive WebSocket client fd=%d (fallback timeout)", client->sockfd);
+            it = m_clients.erase(it);
+            removed_count++;
+            continue;
+        }
+        
+        // Send ping with jitter if it's time and we're not already awaiting a pong
+        uint32_t ping_interval_with_jitter = WS_KEEPALIVE_INTERVAL_MS + 
+            (esp_random() % (2 * WS_PING_JITTER_MS)) - WS_PING_JITTER_MS;
+            
+        if (!client->awaiting_pong && 
+            (current_time - client->last_ping_sent > ping_interval_with_jitter)) {
+            
+            esp_err_t ret = send_ping_to_client(client->sockfd);
+            if (ret == ESP_OK) {
+                client->last_ping_sent = current_time;
+                client->awaiting_pong = true;
+            }
+        } else if (client->awaiting_pong && 
+                  (current_time - client->last_ping_sent > WS_KEEPALIVE_INTERVAL_MS)) {
+            // We sent a ping but haven't received pong within ping interval
+            client->missed_pong_count++;
+            client->awaiting_pong = false;  // Reset for next ping cycle
+            ESP_LOGD(TAG, "Client fd=%d missed pong (count: %d)", 
+                     client->sockfd, client->missed_pong_count);
+        }
+        
+        ++it;
     }
     
     xSemaphoreGive(m_clients_mutex);

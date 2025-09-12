@@ -51,10 +51,14 @@ private:
     struct WebSocketClient {
         int sockfd;
         ws_client_subscriptions_t subscriptions;
-        uint64_t last_activity;
+        uint64_t last_activity;          // Only inbound activity (messages, PONGs)
+        uint64_t last_ping_sent;         // Track when we sent last ping
+        uint8_t missed_pong_count;       // Count consecutive missed PONGs
         bool is_active;
+        bool awaiting_pong;              // Flag: waiting for PONG response
         
-        WebSocketClient(int fd) : sockfd(fd), last_activity(0), is_active(true) {
+        WebSocketClient(int fd) : sockfd(fd), last_activity(0), last_ping_sent(0), 
+                                 missed_pong_count(0), is_active(true), awaiting_pong(false) {
             // Default subscriptions - all enabled
             subscriptions.status_updates = true;
             subscriptions.relay_state_changes = true;

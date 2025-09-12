@@ -42,8 +42,12 @@ typedef enum {
 #define WS_MAX_CLIENTS 5
 #define WS_MAX_REQUEST_ID_LEN 32
 #define WS_MAX_ACTION_LEN 32
-#define WS_KEEPALIVE_INTERVAL_MS 30000
-#define WS_CLIENT_TIMEOUT_MS 60000
+
+// Keepalive and timeout configuration
+#define WS_KEEPALIVE_INTERVAL_MS    30000   // 30s ping interval
+#define WS_CLIENT_TIMEOUT_MS       180000   // 3 minutes fallback timeout (6× ping attempts)
+#define WS_MAX_MISSED_PONGS             3   // Disconnect after 3 consecutive missed PONGs
+#define WS_PING_JITTER_MS           5000   // ±5s jitter to avoid client alignment
 
 
 // WebSocket message structure (used for parsing)
