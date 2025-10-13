@@ -776,7 +776,7 @@ esp_err_t WebSocketServer::send_to_client(int sockfd, const char* message) {
         esp_err_t ret = httpd_ws_send_frame_async(m_http_server, sockfd, &ws_pkt);
         if (ret != ESP_OK) {
             ESP_LOGW(TAG, "Failed to send WebSocket message to fd=%d: %s", sockfd, esp_err_to_name(ret));
-            remove_client(sockfd);
+            // Don't call remove_client() here - let caller handle cleanup to avoid deadlock
         }
         return ret;
     } else {
@@ -800,10 +800,10 @@ esp_err_t WebSocketServer::send_to_client(int sockfd, const char* message) {
             
             esp_err_t ret = httpd_ws_send_frame_async(m_http_server, sockfd, &ws_pkt);
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to send WebSocket fragment %zu/%zu to fd=%d: %s", 
-                         offset/MAX_FRAME_SIZE + 1, (message_len + MAX_FRAME_SIZE - 1)/MAX_FRAME_SIZE, 
+                ESP_LOGE(TAG, "Failed to send WebSocket fragment %zu/%zu to fd=%d: %s",
+                         offset/MAX_FRAME_SIZE + 1, (message_len + MAX_FRAME_SIZE - 1)/MAX_FRAME_SIZE,
                          sockfd, esp_err_to_name(ret));
-                remove_client(sockfd);
+                // Don't call remove_client() here - let caller handle cleanup to avoid deadlock
                 return ret;
             }
             
@@ -1000,10 +1000,9 @@ esp_err_t WebSocketServer::send_ping_to_client(int sockfd) {
     esp_err_t ret = httpd_ws_send_frame_async(m_http_server, sockfd, &ws_pkt);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to send WebSocket ping to fd=%d: %s", sockfd, esp_err_to_name(ret));
-        // Remove client if ping fails (likely disconnected)
-        remove_client(sockfd);
+        // Don't call remove_client() here - caller (cleanup_inactive_clients) already holds mutex
     }
-    
+
     return ret;
 }
 
@@ -1073,54 +1072,7 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
     if (!m_running || !data) {
         return ESP_ERR_INVALID_STATE;
     }
-    
-    // Smart broadcasting optimization: Check if any clients are subscribed first
-    // This can save 50-95% CPU depending on subscription patterns
-    if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGW(TAG, "Failed to acquire clients mutex for broadcast check");
-        return ESP_ERR_TIMEOUT;
-    }
-    
-    bool has_subscribers = false;
-    for (const auto& client : m_clients) {
-        if (!client->is_active) {
-            continue;
-        }
-        
-        // Check subscription for this event type
-        bool subscribed = false;
-        switch (event_type) {
-            case WS_EVENT_STATUS_UPDATE:
-                subscribed = client->subscriptions.status_updates;
-                break;
-            case WS_EVENT_RELAY_STATE_CHANGED:
-                subscribed = client->subscriptions.relay_state_changes;
-                break;
-            case WS_EVENT_TRANSMIT_STATE_CHANGED:
-                subscribed = client->subscriptions.transmit_state_changes;
-                break;
-            case WS_EVENT_CONFIG_CHANGED:
-                subscribed = client->subscriptions.config_changes;
-                break;
-            default:
-                ESP_LOGE(TAG, "Unknown event type: %d", event_type);
-                xSemaphoreGive(m_clients_mutex);
-                return ESP_ERR_INVALID_ARG;
-        }
-        
-        if (subscribed) {
-            has_subscribers = true;
-            break;
-        }
-    }
-    
-    // If no subscribers, release mutex and exit early
-    if (!has_subscribers) {
-        xSemaphoreGive(m_clients_mutex);
-        ESP_LOGD(TAG, "No subscribers for event type %d, skipping broadcast", event_type);
-        return ESP_OK;
-    }
-    
+
     // Get event name for template
     const char* event_name;
     switch (event_type) {
@@ -1137,35 +1089,38 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
             event_name = "config_changed";
             break;
         default:
-            // Already handled above
-            xSemaphoreGive(m_clients_mutex);
+            ESP_LOGE(TAG, "Unknown event type: %d", event_type);
             return ESP_ERR_INVALID_ARG;
     }
-    
+
     // Use pre-allocated template for event message - 80-90% CPU saving vs cJSON
     static char message_buffer[WS_MAX_MESSAGE_SIZE];  // Static buffer for thread safety
-    
+
     // Efficient sprintf template instead of cJSON operations
     int len = snprintf(message_buffer, sizeof(message_buffer),
                       "{\"type\":\"event\",\"event\":\"%s\",\"data\":%s}",
                       event_name, data);
-    
+
     if (len >= sizeof(message_buffer)) {
         ESP_LOGE(TAG, "Event message too large for buffer (%d >= %zu)", len, sizeof(message_buffer));
-        xSemaphoreGive(m_clients_mutex);
         return ESP_ERR_NO_MEM;
     }
-    
-    ESP_LOGD(TAG, "Broadcasting event: %s", event_name);
-    
-    
-    // Send to all subscribed clients (mutex already held from above)
-    size_t sent_count = 0;
+
+    // STEP 1: Collect list of clients to notify (while holding mutex)
+    // This prevents deadlock by avoiding I/O operations while holding the mutex
+    std::vector<int> target_sockfds;
+    target_sockfds.reserve(WS_MAX_CLIENTS);
+
+    if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire clients mutex for broadcast check");
+        return ESP_ERR_TIMEOUT;
+    }
+
     for (const auto& client : m_clients) {
         if (!client->is_active) {
             continue;
         }
-        
+
         // Check if client is subscribed to this event type
         bool should_send = false;
         switch (event_type) {
@@ -1182,21 +1137,58 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
                 should_send = client->subscriptions.config_changes;
                 break;
         }
-        
+
         if (should_send) {
-            esp_err_t ret = send_to_client(client->sockfd, message_buffer);
-            if (ret == ESP_OK) {
-                sent_count++;
-            } else {
-                ESP_LOGW(TAG, "Failed to send event to client fd=%d", client->sockfd);
-            }
+            target_sockfds.push_back(client->sockfd);
         }
     }
-    
+
     xSemaphoreGive(m_clients_mutex);
-    
-    ESP_LOGD(TAG, "Event '%s' sent to %zu clients", event_name, sent_count);
-    
+
+    // Early exit if no subscribers
+    if (target_sockfds.empty()) {
+        ESP_LOGD(TAG, "No subscribers for event type %d, skipping broadcast", event_type);
+        return ESP_OK;
+    }
+
+    ESP_LOGD(TAG, "Broadcasting event '%s' to %zu clients", event_name, target_sockfds.size());
+
+    // STEP 2: Send to each client (WITHOUT holding mutex to avoid deadlock)
+    std::vector<int> failed_sockfds;
+    size_t sent_count = 0;
+
+    for (int sockfd : target_sockfds) {
+        esp_err_t ret = send_to_client(sockfd, message_buffer);
+        if (ret == ESP_OK) {
+            sent_count++;
+        } else {
+            ESP_LOGW(TAG, "Failed to send event to client fd=%d", sockfd);
+            failed_sockfds.push_back(sockfd);
+        }
+    }
+
+    // STEP 3: Clean up failed clients (acquire mutex for cleanup)
+    if (!failed_sockfds.empty()) {
+        if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            for (int failed_fd : failed_sockfds) {
+                auto it = std::remove_if(m_clients.begin(), m_clients.end(),
+                    [failed_fd](const std::unique_ptr<WebSocketClient>& client) {
+                        return client->sockfd == failed_fd;
+                    });
+
+                if (it != m_clients.end()) {
+                    m_clients.erase(it, m_clients.end());
+                    ESP_LOGD(TAG, "Removed failed WebSocket client fd=%d", failed_fd);
+                }
+            }
+            xSemaphoreGive(m_clients_mutex);
+        } else {
+            ESP_LOGW(TAG, "Failed to acquire mutex for client cleanup after broadcast");
+        }
+    }
+
+    ESP_LOGD(TAG, "Event '%s' sent to %zu/%zu clients", event_name, sent_count, target_sockfds.size());
+
     return ESP_OK;
 }
 
