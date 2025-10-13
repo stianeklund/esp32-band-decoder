@@ -223,6 +223,11 @@ void InputManager::ptt_poll_task() {
     }
 
     for (;;) {
+        // Feed watchdog at the start of each loop iteration
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            esp_task_wdt_reset();
+        }
+
         if (!initialized_) {
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
@@ -255,6 +260,11 @@ void InputManager::ptt_poll_task() {
             current_inputs_mask, [](const bool state) { AntennaSwitch::instance().on_hw_ptt_a_state_change(state); }
         );
 
+        // Feed watchdog after PTT A processing in case it takes time
+        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
+            esp_task_wdt_reset();
+        }
+
         handle_ptt_line(
             ptt_input_radio_b_config_,
             ptt_input_radio_b_active_high_config_,
@@ -263,11 +273,6 @@ void InputManager::ptt_poll_task() {
             current_inputs_mask, [](const bool state) { AntennaSwitch::instance().on_hw_ptt_b_state_change(state); }
         );
 
-        // Feed watchdog periodically for PTT task
-        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
-            esp_task_wdt_reset();
-        }
-        
         vTaskDelayUntil(&xLastWakeTime, xFrequency); // Consistent 5ms intervals
     }
 }
