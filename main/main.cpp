@@ -205,7 +205,13 @@ extern "C" [[noreturn]] void app_main(void) {
                                 ESP_LOGE(TAG, "Failed to start WebSocket server");
                                 if (ret == ESP_OK) ret = ESP_FAIL;
                             } else {
-                                ESP_LOGI(TAG, "WebSocket server started successfully at ws://device-ip/ws");
+                                // Get the actual IP address for the log message
+                                char ws_ip_addr[16];
+                                if (WifiManager::instance().get_ip_info(ws_ip_addr, sizeof(ws_ip_addr)) == ESP_OK) {
+                                    ESP_LOGI(TAG, "WebSocket server started successfully at ws://%s/ws", ws_ip_addr);
+                                } else {
+                                    ESP_LOGI(TAG, "WebSocket server started successfully at /ws");
+                                }
                             }
                         }
                     }
