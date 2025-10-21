@@ -59,6 +59,7 @@ private:
     bool is_same_band(uint32_t freq1, uint32_t freq2) const;
 
     esp_err_t process_fa_command(std::string_view command);
+    esp_err_t process_fb_command(std::string_view command);
 
     esp_err_t process_if_command(std::string_view command);
 
@@ -78,7 +79,10 @@ private:
     std::unordered_map<uint16_t, CommandHandler> command_handlers;
     QueueHandle_t uart2_queue;
     antenna_switch_config_t current_config{};
-    uint32_t current_frequency{0};
+    uint32_t current_frequency{0};  // Frequency of the currently active VFO
+    uint32_t vfo_a_frequency{0};    // VFO A frequency
+    uint32_t vfo_b_frequency{0};    // VFO B frequency
+    uint8_t active_vfo{0};          // 0 = VFO A, 1 = VFO B (from IF P10 field)
     int current_band_index{-1}; // Cache for current frequency's band
     bool transmitting{false}; // Tracks if radio is transmitting
     bool rit_on{false}; // RIT status

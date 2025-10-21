@@ -25,6 +25,7 @@ CatParser::CatParser()
     // Initialize command handlers
     command_handlers = {
         {'F' << 8 | 'A', &CatParser::process_fa_command},
+        {'F' << 8 | 'B', &CatParser::process_fb_command},
         {'A' << 8 | 'I', &CatParser::process_ai_command},
         {'A' << 8 | 'P', &CatParser::process_ap_command},
         {'I' << 8 | 'F', &CatParser::process_if_command},
@@ -564,11 +565,25 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
         default:  new_mode_str = "UNKNOWN";
     }
 
+    // Parse VFO selection (P10 field at position 28)
+    // P10: 0 = VFO A, 1 = VFO B, 2 = Memory
+    const uint8_t vfo_selection = command[28] - '0';  // Convert ASCII to number
+
     const bool tx_state_changed = new_tx_state != transmitting; // Compare new with current member state
     const std::string old_mode = current_mode;                   // Capture current mode before update
 
-    ESP_LOGD(TAG, "IF command parsing: freq=%lu, new_tx_state=%d, current_tx_state=%d, tx_changed=%d", 
-             frequency, new_tx_state, transmitting, tx_state_changed);
+    ESP_LOGD(TAG, "IF command parsing: freq=%lu, vfo_sel=%u, new_tx_state=%d, current_tx_state=%d, tx_changed=%d",
+             frequency, vfo_selection, new_tx_state, transmitting, tx_state_changed);
+
+    // Update VFO-specific frequency storage
+    if (vfo_selection == 0) {
+        vfo_a_frequency = frequency;
+    } else if (vfo_selection == 1) {
+        vfo_b_frequency = frequency;
+    }
+
+    // Track which VFO is active
+    active_vfo = vfo_selection;
 
     // Update internal states
     current_mode = new_mode_str;
@@ -590,10 +605,17 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
         ESP_LOGV(TAG, "Mode also changed from %s to %s", old_mode.c_str(), current_mode.c_str());
     }
 
+    ESP_LOGV(TAG, "IF command: freq=%lu Hz, mode=%s, tx=%d, VFO=%c (A_freq=%lu, B_freq=%lu)",
+             frequency, current_mode.c_str(), transmitting, vfo_selection == 0 ? 'A' : (vfo_selection == 1 ? 'B' : 'M'),
+             vfo_a_frequency, vfo_b_frequency);
 
-    ESP_LOGV(TAG, "IF command: freq=%lu Hz, mode=%s, tx=%d", frequency, current_mode.c_str(), transmitting);
+    // Only process frequency changes if this is for the active VFO
+    // This prevents antenna switching when inactive VFO frequency updates are received
+    if (vfo_selection == active_vfo) {
+        return handle_frequency_change(frequency);
+    }
 
-    return handle_frequency_change(frequency);
+    return ESP_OK;
 }
 
 esp_err_t CatParser::process_fa_command(const std::string_view command) {
@@ -608,12 +630,44 @@ esp_err_t CatParser::process_fa_command(const std::string_view command) {
 
     if (result.ec == std::errc() && result.ptr == end_ptr) {
         ESP_LOGV(TAG, "FA command frequency: %lu Hz", frequency);
-        return handle_frequency_change(frequency);
+        // Update VFO A frequency
+        vfo_a_frequency = frequency;
+
+        // Only trigger antenna change if VFO A is active
+        if (active_vfo == 0) {
+            return handle_frequency_change(frequency);
+        }
+        return ESP_OK;
     }
 
     ESP_LOGE(TAG, "Invalid frequency format in FA command: %.*s",
              static_cast<int>(command.length()), command.data());
     // We don't want to error here (I guess)
+    return ESP_OK;
+}
+
+esp_err_t CatParser::process_fb_command(const std::string_view command) {
+    uint32_t frequency;
+
+    const char* const start_ptr = command.data();
+    const char* const end_ptr = command.data() + command.length();
+
+    auto result = std::from_chars(start_ptr, end_ptr, frequency);
+
+    if (result.ec == std::errc() && result.ptr == end_ptr) {
+        ESP_LOGV(TAG, "FB command frequency: %lu Hz", frequency);
+        // Update VFO B frequency
+        vfo_b_frequency = frequency;
+
+        // Only trigger antenna change if VFO B is active
+        if (active_vfo == 1) {
+            return handle_frequency_change(frequency);
+        }
+        return ESP_OK;
+    }
+
+    ESP_LOGE(TAG, "Invalid frequency format in FB command: %.*s",
+             static_cast<int>(command.length()), command.data());
     return ESP_OK;
 }
 
