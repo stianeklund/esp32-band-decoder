@@ -1111,10 +1111,47 @@ esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
     const bool is_this_radio_a_relay = (relay_id >= 1 && relay_id <= RelayController::RELAYS_PER_RADIO);
     const RadioID radio_context = is_this_radio_a_relay ? RadioID::A : RadioID::B;
 
-    // The band_number is -1 here as this is a direct relay set, not tied to a specific band's auto-selection.
+    // Try to determine the current band from CAT frequency for preference tracking
+    // Only save preference if the selected antenna is configured for the current band
+    int band_number_for_preference = -1;  // Default: no band context
+
+    if (state && radio_context == RadioID::A) {
+        // For Radio A, we can get the current frequency from CAT parser
+        const uint32_t current_frequency = CatParser::instance().get_frequency();
+
+        if (current_frequency > 0) {
+            // Look up which band this frequency belongs to
+            const auto& config = get_cached_config();
+            const auto radio_idx = static_cast<size_t>(RadioID::A);
+
+            for (int i = 0; i < config.num_bands; i++) {
+                const auto& band = config.bands[radio_idx][i];
+                if (current_frequency >= band.start_freq && current_frequency <= band.end_freq) {
+                    // Found the band for current frequency
+                    // Now check if this relay is configured for this band
+                    int port_idx = relay_id - 1; // Convert 1-based relay to 0-based port
+
+                    if (port_idx >= 0 && port_idx < config.num_antenna_ports &&
+                        band.antenna_ports[port_idx]) {
+                        // This antenna IS configured for this band - save preference
+                        band_number_for_preference = i;
+                        ESP_LOGD(TAG, "Manual relay %d selection on band %d (%s, %lu Hz): antenna IS configured for band, will save preference",
+                                 relay_id, i, band.description, current_frequency);
+                    } else {
+                        // This antenna is NOT configured for this band - temporary override
+                        ESP_LOGD(TAG, "Manual relay %d selection on band %d (%s, %lu Hz): antenna NOT configured for band, temporary override (no preference save)",
+                                 relay_id, i, band.description, current_frequency);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     // All logic for TX interlock, conflict anticipation, preference update, and restoration
     // is handled by set_relay_for_antenna.
-    return set_relay_for_antenna(relay_id, /*band_number=*/-1, radio_context, state);
+    // band_number_for_preference will be valid only if the antenna is configured for the current band
+    return set_relay_for_antenna(relay_id, band_number_for_preference, radio_context, state);
 }
 
 esp_err_t AntennaSwitch::set_relay_radio_b(const int relay_id, const bool state) {
