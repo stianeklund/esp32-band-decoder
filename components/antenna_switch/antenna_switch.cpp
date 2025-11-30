@@ -181,7 +181,6 @@ void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
     ESP_LOGV(TAG, "on_hw_ptt_a_state_change: Input detected. Active: %s. Time: %lld", active ? "true" : "false", esp_timer_get_time());
     const bool old_hw_ptt_a_value = hw_ptt_a_active_.load(std::memory_order_relaxed);
 
-    // TODO consider removing this, what if we don't detect TX -> RX this would leave us in a locked ptt situation?
     if (old_hw_ptt_a_value == active) {
         ESP_LOGV(TAG, "Radio A: HW PTT raw state received (%s) is same as current. No action.", active ? "ACTIVE" : "INACTIVE");
         return;
@@ -192,19 +191,27 @@ void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
              active ? "ACTIVE" : "INACTIVE");
 
     // Determine effective TX state BEFORE applying the new HW PTT state.
-    // This uses the OLD hw_ptt_a_value and current CAT state.
-    const bool cat_is_tx_a = cat_tx_a_active_.load(std::memory_order_relaxed); // Use internal state
-    const bool was_effectively_transmitting = old_hw_ptt_a_value || cat_is_tx_a;
+    const bool old_cat_tx_a = cat_tx_a_active_.load(std::memory_order_relaxed);
+    const bool was_effectively_transmitting = old_hw_ptt_a_value || old_cat_tx_a;
 
     // Store the new HW PTT state
     hw_ptt_a_active_.store(active, std::memory_order_relaxed);
 
-    // Determine effective TX state AFTER applying the new HW PTT state.
-    // This uses the NEW hw_ptt_a_value and current CAT state.
-    const bool is_now_effectively_transmitting = active || cat_is_tx_a;
+    // When HW PTT goes inactive, clear any stale CAT TX state.
+    // The hardware PTT line is the authoritative source for TX state when configured.
+    // This prevents CAT TX state from getting "stuck" and blocking antenna changes.
+    if (!active && old_cat_tx_a) {
+        ESP_LOGI(TAG, "Radio A: HW PTT went inactive, clearing stale CAT TX state (was %s).",
+                 old_cat_tx_a ? "ON" : "OFF");
+        cat_tx_a_active_.store(false, std::memory_order_relaxed);
+    }
 
-    ESP_LOGV(TAG, "Radio A: Effective TX state check (HW PTT change): was_eff_tx=%d, is_now_eff_tx=%d (new_hw_ptt=%d, cat_tx=%d)",
-             was_effectively_transmitting, is_now_effectively_transmitting, active, cat_is_tx_a);
+    // Determine effective TX state AFTER applying changes.
+    // Since we cleared CAT TX when HW PTT goes inactive, effective state now follows HW PTT.
+    const bool is_now_effectively_transmitting = active;
+
+    ESP_LOGV(TAG, "Radio A: Effective TX state check (HW PTT change): was_eff_tx=%d, is_now_eff_tx=%d (new_hw_ptt=%d, cat_tx_cleared=%d)",
+             was_effectively_transmitting, is_now_effectively_transmitting, active, !active && old_cat_tx_a);
 
     if (was_effectively_transmitting && !is_now_effectively_transmitting) {
         // Effective TX state changed from ON to OFF
