@@ -20,7 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static auto TAG = "MAIN";
+static constexpr const char* TAG = "MAIN";
 
 static RelayController* g_relay_controller = nullptr;
 static SerialCli g_serial_cli;
@@ -268,60 +268,17 @@ extern "C" [[noreturn]] void app_main(void) {
         // Delay to reduce system load and allow other tasks to run
         // This should be unconditional and inside the main loop
         vTaskDelay(pdMS_TO_TICKS(500));
-    } // This brace now correctly closes the while(true) loop,
-    // regardless of CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS.
-
-    // The following block provides a dedicated mode for WiFi configuration
-    // where SmartConfig is actively initiated, and the Serial CLI remains available.
-    // If WiFi connection is established, the system restarts.
-    // This section is currently not jumped to via a goto, but could be refactored into a function
-    // or used with a goto if specific unrecoverable startup states need to force this mode.
-    ESP_LOGI(TAG, "Entering SmartConfig handler. Attempting to start SmartConfig.");
-
-    // Optional: Clear existing credentials to ensure a fresh SmartConfig attempt,
-    // especially if this handler is entered due to persistent connection failures.
-    // WifiManager::instance().clear_credentials();
-
-    // Ensure SmartConfig is started. WifiManager's internal logic might also start it,
-    // but calling it here makes it explicit for this handler.
-    if (WifiManager::instance().start_smartconfig() == ESP_OK) {
-        ESP_LOGI(TAG, "SmartConfig initiated by handler. CLI is available for alternative configuration.");
-    }
-    else {
-        ESP_LOGW(
-            TAG,
-            "Failed to explicitly start SmartConfig via handler. WifiManager might still attempt it based on events.");
-    }
-
-    ESP_LOGI(TAG, "SmartConfig handler active. CLI is available. Waiting for WiFi connection to restart system...");
-    // Loop indefinitely, allowing CLI to operate (as it's a separate task)
-    // and waiting for WiFi connection to trigger a system restart.
-    while (true) {
-        if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
-            esp_task_wdt_reset();
-        }
-
-        if (WifiManager::instance().is_connected()) {
-            ESP_LOGI(TAG, "Connection established (possibly via SmartConfig or CLI). Restarting system...");
-            RestartManager::clear_restart_count(); // Assuming connection means configuration is good
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            esp_restart(); // Restart to apply new state cleanly
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Check connection status periodically
         }
     }
-    // Note: The above loop is infinite. app_main will remain here until WiFi connects and system restarts.
+    // Note: The main while(true) loop above is infinite - code below is only reached via goto error_handler
 
 error_handler:
     ESP_LOGE(TAG, "Fatal error occurred in app_main: %s. Restarting.", esp_err_to_name(ret));
     RestartManager::store_error_state(ret);
 
-    // Clean up all resources
-    if (relay_controller) {
-        delete relay_controller;
-        relay_controller = nullptr;
-        g_relay_controller = nullptr;
-    }
+    // Note: relay_controller points to a singleton (RelayController::instance()), do NOT delete it.
+    // Singletons manage their own lifetime.
+    g_relay_controller = nullptr;
 
     if (RestartManager::check_restart_count() == ESP_FAIL) {
         ESP_LOGE(TAG, "Maximum restart attempts reached. Forcing SmartConfig mode and CLI availability.");
