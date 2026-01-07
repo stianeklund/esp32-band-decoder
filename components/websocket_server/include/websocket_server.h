@@ -135,7 +135,10 @@ private:
     mutable SemaphoreHandle_t m_buffer_pool_mutex;
     static const size_t WS_BUFFER_POOL_SIZE = 4;  // Pool of 4 buffers
     static const size_t WS_BUFFER_SIZE = WS_MAX_MESSAGE_SIZE + 128;  // Extra space for headers
-    
+
+    // Mutex for protecting static response buffers from concurrent access
+    mutable SemaphoreHandle_t m_response_buffer_mutex;
+
     static const char* TAG;
 };
 

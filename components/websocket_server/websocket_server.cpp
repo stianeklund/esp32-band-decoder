@@ -26,6 +26,7 @@ WebSocketServer::WebSocketServer()
     , m_initialized(false)
     , m_running(false)
     , m_buffer_pool_mutex(nullptr)
+    , m_response_buffer_mutex(nullptr)
 {
     ESP_LOGD(TAG, "WebSocketServer constructor");
 }
@@ -33,17 +34,22 @@ WebSocketServer::WebSocketServer()
 WebSocketServer::~WebSocketServer() {
     stop();
     destroy_buffer_pool();
-    
+
     if (m_clients_mutex) {
         vSemaphoreDelete(m_clients_mutex);
         m_clients_mutex = nullptr;
     }
-    
+
     if (m_buffer_pool_mutex) {
         vSemaphoreDelete(m_buffer_pool_mutex);
         m_buffer_pool_mutex = nullptr;
     }
-    
+
+    if (m_response_buffer_mutex) {
+        vSemaphoreDelete(m_response_buffer_mutex);
+        m_response_buffer_mutex = nullptr;
+    }
+
     if (m_keepalive_timer) {
         xTimerDelete(m_keepalive_timer, portMAX_DELAY);
         m_keepalive_timer = nullptr;
@@ -64,6 +70,16 @@ esp_err_t WebSocketServer::init() {
         ESP_LOGE(TAG, "Failed to create clients mutex");
         return ESP_ERR_NO_MEM;
     }
+
+    // Create recursive mutex for response buffer protection (thread safety for static buffers)
+    // Recursive mutex allows same task to acquire multiple times (needed for broadcast_status_update -> broadcast_event)
+    m_response_buffer_mutex = xSemaphoreCreateRecursiveMutex();
+    if (!m_response_buffer_mutex) {
+        ESP_LOGE(TAG, "Failed to create response buffer mutex");
+        vSemaphoreDelete(m_clients_mutex);
+        m_clients_mutex = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
     
     // Create keepalive timer
     m_keepalive_timer = xTimerCreate(
@@ -76,22 +92,26 @@ esp_err_t WebSocketServer::init() {
     
     if (!m_keepalive_timer) {
         ESP_LOGE(TAG, "Failed to create keepalive timer");
+        vSemaphoreDelete(m_response_buffer_mutex);
+        m_response_buffer_mutex = nullptr;
         vSemaphoreDelete(m_clients_mutex);
         m_clients_mutex = nullptr;
         return ESP_ERR_NO_MEM;
     }
-    
+
     // Reserve space for clients
     m_clients.reserve(WS_MAX_CLIENTS);
-    
+
     // Initialize buffer pool for performance optimization
     esp_err_t ret = init_buffer_pool();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize buffer pool: %s", esp_err_to_name(ret));
-        vSemaphoreDelete(m_clients_mutex);
-        m_clients_mutex = nullptr;
         xTimerDelete(m_keepalive_timer, portMAX_DELAY);
         m_keepalive_timer = nullptr;
+        vSemaphoreDelete(m_response_buffer_mutex);
+        m_response_buffer_mutex = nullptr;
+        vSemaphoreDelete(m_clients_mutex);
+        m_clients_mutex = nullptr;
         return ret;
     }
     
@@ -706,12 +726,18 @@ esp_err_t WebSocketServer::handle_request(int sockfd, const ws_message_t* messag
 }
 
 esp_err_t WebSocketServer::send_response(int sockfd, const char* request_id, ws_message_type_t type, const char* data) {
+    // Acquire recursive mutex to protect static buffer from concurrent access
+    if (xSemaphoreTakeRecursive(m_response_buffer_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire response buffer mutex");
+        return ESP_ERR_TIMEOUT;
+    }
+
     // Use pre-allocated template for response - 80-90% CPU saving vs cJSON
     static char response_buffer[WS_MAX_MESSAGE_SIZE];
-    
-    const char* type_str = (type == WS_MSG_RESPONSE) ? "response" : 
+
+    const char* type_str = (type == WS_MSG_RESPONSE) ? "response" :
                           (type == WS_MSG_EVENT) ? "event" : "error";
-    
+
     int len;
     if (request_id && strlen(request_id) > 0) {
         if (data) {
@@ -738,13 +764,16 @@ esp_err_t WebSocketServer::send_response(int sockfd, const char* request_id, ws_
                           type_str);
         }
     }
-    
+
     if (len >= sizeof(response_buffer)) {
         ESP_LOGE(TAG, "Response message too large for buffer (%d >= %zu)", len, sizeof(response_buffer));
+        xSemaphoreGiveRecursive(m_response_buffer_mutex);
         return ESP_ERR_NO_MEM;
     }
-    
-    return send_to_client(sockfd, response_buffer);
+
+    esp_err_t ret = send_to_client(sockfd, response_buffer);
+    xSemaphoreGiveRecursive(m_response_buffer_mutex);
+    return ret;
 }
 
 esp_err_t WebSocketServer::send_error(int sockfd, const char* request_id, const char* error_msg) {
@@ -1012,55 +1041,66 @@ esp_err_t WebSocketServer::broadcast_status_update() {
     if (!data) {
         return ESP_ERR_NO_MEM;
     }
-    
+
+    // Acquire recursive mutex to protect static buffer from concurrent access
+    if (xSemaphoreTakeRecursive(m_response_buffer_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire response buffer mutex for status update");
+        cJSON_Delete(data);
+        return ESP_ERR_TIMEOUT;
+    }
+
     // Use static buffer for JSON serialization - saves malloc/free overhead
-    static char status_json_buffer[WS_MAX_MESSAGE_SIZE];
-    
+    static char status_json_buffer[WS_MAX_MESSAGE_SIZE];  // Protected by m_response_buffer_mutex
+
     // Use cJSON_PrintPreallocated for zero-allocation serialization
     if (!cJSON_PrintPreallocated(data, status_json_buffer, sizeof(status_json_buffer), false)) {
         ESP_LOGE(TAG, "Status JSON too large for buffer (max: %zu bytes)", sizeof(status_json_buffer));
         cJSON_Delete(data);
+        xSemaphoreGiveRecursive(m_response_buffer_mutex);
         return ESP_ERR_NO_MEM;
     }
-    
+
+    // broadcast_event also acquires m_response_buffer_mutex (recursive, so same task can re-acquire)
     esp_err_t ret = broadcast_event(WS_EVENT_STATUS_UPDATE, status_json_buffer);
-    
+
+    xSemaphoreGiveRecursive(m_response_buffer_mutex);
+
     cJSON_Delete(data);
     return ret;
 }
 
 esp_err_t WebSocketServer::broadcast_relay_state_change(int relay_id, bool state) {
-    // Use pre-allocated template instead of cJSON operations
-    static char json_buffer[128];  // Static buffer for thread safety with mutex
-    
+    // Stack-allocated buffer for thread safety (small enough for stack)
+    char json_buffer[128];
+
     // Efficient sprintf template - 80-90% CPU saving vs cJSON operations
-    int len = snprintf(json_buffer, sizeof(json_buffer), 
-                      "{\"relay\":%d,\"state\":%s}", 
+    int len = snprintf(json_buffer, sizeof(json_buffer),
+                      "{\"relay\":%d,\"state\":%s}",
                       relay_id, state ? "true" : "false");
-    
+
     if (len >= sizeof(json_buffer)) {
         ESP_LOGE(TAG, "JSON buffer too small for relay state change");
         return ESP_ERR_NO_MEM;
     }
-    
+
     return broadcast_event(WS_EVENT_RELAY_STATE_CHANGED, json_buffer);
 }
 
 
 esp_err_t WebSocketServer::broadcast_transmit_state_change(bool transmitting) {
-    // Use pre-allocated template instead of cJSON operations
-    static char json_buffer[64];  // Static buffer for thread safety with mutex
-    
+    // Stack-allocated buffer for thread safety (small enough for stack)
+    char json_buffer[64];
+
     // Efficient sprintf template - 80-90% CPU saving vs cJSON operations
-    int len = snprintf(json_buffer, sizeof(json_buffer), 
-                      "{\"transmitting\":%s}", 
+    int len = snprintf(json_buffer, sizeof(json_buffer),
+                      "{\"transmitting\":%s}",
                       transmitting ? "true" : "false");
-    
+
     if (len >= sizeof(json_buffer)) {
         ESP_LOGE(TAG, "JSON buffer too small for transmit state change");
         return ESP_ERR_NO_MEM;
     }
-    
+
     return broadcast_event(WS_EVENT_TRANSMIT_STATE_CHANGED, json_buffer);
 }
 
@@ -1071,6 +1111,12 @@ esp_err_t WebSocketServer::broadcast_config_change() {
 esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const char* data) {
     if (!m_running || !data) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    // Acquire recursive mutex to protect static buffer from concurrent access
+    if (xSemaphoreTakeRecursive(m_response_buffer_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire response buffer mutex for broadcast");
+        return ESP_ERR_TIMEOUT;
     }
 
     // Get event name for template
@@ -1090,11 +1136,12 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
             break;
         default:
             ESP_LOGE(TAG, "Unknown event type: %d", event_type);
+            xSemaphoreGiveRecursive(m_response_buffer_mutex);
             return ESP_ERR_INVALID_ARG;
     }
 
     // Use pre-allocated template for event message - 80-90% CPU saving vs cJSON
-    static char message_buffer[WS_MAX_MESSAGE_SIZE];  // Static buffer for thread safety
+    static char message_buffer[WS_MAX_MESSAGE_SIZE];  // Protected by m_response_buffer_mutex
 
     // Efficient sprintf template instead of cJSON operations
     int len = snprintf(message_buffer, sizeof(message_buffer),
@@ -1103,10 +1150,11 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
 
     if (len >= sizeof(message_buffer)) {
         ESP_LOGE(TAG, "Event message too large for buffer (%d >= %zu)", len, sizeof(message_buffer));
+        xSemaphoreGiveRecursive(m_response_buffer_mutex);
         return ESP_ERR_NO_MEM;
     }
 
-    // STEP 1: Collect list of clients to notify (while holding mutex)
+    // STEP 1: Collect list of clients to notify (while holding clients mutex)
     // This prevents deadlock by avoiding I/O operations while holding the mutex
     std::vector<int> target_sockfds;
     target_sockfds.reserve(WS_MAX_CLIENTS);
@@ -1148,6 +1196,7 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
     // Early exit if no subscribers
     if (target_sockfds.empty()) {
         ESP_LOGD(TAG, "No subscribers for event type %d, skipping broadcast", event_type);
+        xSemaphoreGiveRecursive(m_response_buffer_mutex);
         return ESP_OK;
     }
 
@@ -1189,6 +1238,7 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
 
     ESP_LOGD(TAG, "Event '%s' sent to %zu/%zu clients", event_name, sent_count, target_sockfds.size());
 
+    xSemaphoreGiveRecursive(m_response_buffer_mutex);
     return ESP_OK;
 }
 

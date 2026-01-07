@@ -307,36 +307,46 @@ esp_err_t WebSocketHandlers::handle_unsubscribe_request(int sockfd, const char* 
 
 esp_err_t WebSocketHandlers::send_json_response(int sockfd, const char* request_id, const cJSON* data) {
     ESP_LOGV(TAG, "Sending JSON response to fd=%d, request_id=%s", sockfd, request_id ? request_id : "none");
-    
+
     if (!data) {
         ESP_LOGE(TAG, "Cannot send response: data is null");
         return ESP_ERR_INVALID_ARG;
     }
-    
+
+    // Acquire WebSocketServer's response buffer mutex (friend class has access)
+    auto& ws_server = WebSocketServer::instance();
+    if (xSemaphoreTakeRecursive(ws_server.m_response_buffer_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "Failed to acquire response buffer mutex for JSON response");
+        return ESP_ERR_TIMEOUT;
+    }
+
     // Use static buffer for JSON serialization - saves malloc/free overhead
-    static char json_response_buffer[WS_MAX_MESSAGE_SIZE];
-    
+    static char json_response_buffer[WS_MAX_MESSAGE_SIZE];  // Protected by ws_server.m_response_buffer_mutex
+
     // Use cJSON_PrintPreallocated for zero-allocation serialization
     if (!cJSON_PrintPreallocated(const_cast<cJSON*>(data), json_response_buffer, sizeof(json_response_buffer), false)) {
         ESP_LOGE(TAG, "JSON response too large for buffer (max: %zu bytes)", sizeof(json_response_buffer));
+        xSemaphoreGiveRecursive(ws_server.m_response_buffer_mutex);
         return ESP_ERR_NO_MEM;
     }
-    
+
     ESP_LOGV(TAG, "Sending WebSocket response: %.*s", 200, json_response_buffer); // Truncate long responses
-    esp_err_t ret = WebSocketServer::instance().send_response(sockfd, request_id, WS_MSG_RESPONSE, json_response_buffer);
+    esp_err_t ret = ws_server.send_response(sockfd, request_id, WS_MSG_RESPONSE, json_response_buffer);
+    xSemaphoreGiveRecursive(ws_server.m_response_buffer_mutex);
+
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send WebSocket response: %s", esp_err_to_name(ret));
     } else {
         ESP_LOGV(TAG, "WebSocket response sent successfully");
     }
-    
+
     return ret;
 }
 
 esp_err_t WebSocketHandlers::send_success_response(int sockfd, const char* request_id, const char* message) {
-    // Use pre-allocated template for success response - 80-90% CPU saving vs cJSON
-    static char success_buffer[512];
-    
+    // Stack-allocated buffer for thread safety (small enough for stack)
+    char success_buffer[512];
+
     int len;
     if (message) {
         // Success response with message
@@ -348,7 +358,7 @@ esp_err_t WebSocketHandlers::send_success_response(int sockfd, const char* reque
         len = snprintf(success_buffer, sizeof(success_buffer),
                       "{\"status\":\"success\"}");
     }
-    
+
     if (len >= sizeof(success_buffer)) {
         ESP_LOGE(TAG, "Success message too large for buffer (%d >= %zu)", len, sizeof(success_buffer));
         return ESP_ERR_NO_MEM;
