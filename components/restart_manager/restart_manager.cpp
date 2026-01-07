@@ -2,7 +2,7 @@
 
 #include <nvs.h>
 
-static auto TAG = "RESTART_MANAGER";
+static constexpr const char* TAG = "RESTART_MANAGER";
 
 const char* RestartManager::RESTART_COUNTER_KEY = "restart_cnt";
 const char* RestartManager::ERROR_STATE_KEY = "last_error";

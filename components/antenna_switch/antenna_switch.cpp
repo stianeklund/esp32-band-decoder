@@ -11,7 +11,7 @@
 #include "esp_timer.h"
 #include "websocket_server.h"
 
-static auto TAG = "ANTENNA_SWITCH";
+static constexpr const char* TAG = "ANTENNA_SWITCH";
 
 // Constructor for AntennaSwitch
 AntennaSwitch::AntennaSwitch()

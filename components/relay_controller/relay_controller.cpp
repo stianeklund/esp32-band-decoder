@@ -10,7 +10,7 @@
 #include <chrono>
 #include "config_cache.h"
 
-static const char* TAG = "RELAY_CONTROLLER";
+static constexpr const char* TAG = "RELAY_CONTROLLER";
 
 RelayController::RelayController()
     : currently_selected_relay_(0),

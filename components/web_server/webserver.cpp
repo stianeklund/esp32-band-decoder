@@ -24,7 +24,7 @@
 #include "cat_parser.h"
 #include "my_mqtt_client.h"
 
-static const char* TAG = "WEBSERVER";
+static constexpr const char* TAG = "WEBSERVER";
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 

@@ -15,7 +15,7 @@
 #include "esp_err.h"
 #include "esp_task_wdt.h"
 
-static auto TAG = "SYSTEM_INIT";
+static constexpr const char* TAG = "SYSTEM_INIT";
 
 static bool is_valid_ip() {
     esp_netif_ip_info_t ip_info;

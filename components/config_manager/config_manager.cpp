@@ -12,7 +12,7 @@
 #include "cJSON.h"
 #include "esp_timer.h" // For esp_timer_get_time()
 
-static auto TAG = "CONFIG_MANAGER";
+static constexpr const char* TAG = "CONFIG_MANAGER";
 
 // Initialize static member
 ConfigManager *ConfigManager::instance_ = nullptr;

@@ -7,7 +7,7 @@
 #include "esp_timer.h"
 #include <array>
 
-static auto TAG = "TCP_CLIENT";
+static constexpr const char* TAG = "TCP_CLIENT";
 
 TCPClient::TCPClient() : sock(-1), port(0), dest_addr(), is_connected(false),
                          connect_timeout_sec_(5), keepalive_idle_(5),

@@ -4,7 +4,7 @@
 #include "lwip/sys.h"
 #include <arpa/inet.h>
 
-static const char *TAG = "UDP_CLIENT";
+static constexpr const char* TAG = "UDP_CLIENT";
 
 UDPClient::UDPClient() : sock(-1) {}
 
