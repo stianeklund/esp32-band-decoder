@@ -13,7 +13,7 @@
 #include <errno.h>
 
 // Ensure TAG is defined for logging
-static const char *TAG = "MQTTClient";
+static constexpr const char* TAG = "MQTTClient";
 
 MQTTClient &MQTTClient::instance() {
     static MQTTClient instance;
@@ -151,40 +151,46 @@ bool MQTTClient::check_broker_connectivity() const {
         return false;
     }
 
-    // Resolve hostname
-    struct hostent *host_entry = lwip_gethostbyname(hostname);
-    if (!host_entry) {
-        ESP_LOGD(TAG, "DNS resolution failed for %s", hostname);
+    // Resolve hostname using thread-safe getaddrinfo
+    struct addrinfo hints = {};
+    struct addrinfo *addr_result = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    char port_str[8];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    int gai_err = lwip_getaddrinfo(hostname, port_str, &hints, &addr_result);
+    if (gai_err != 0 || !addr_result) {
+        ESP_LOGD(TAG, "DNS resolution failed for %s: %d", hostname, gai_err);
         lwip_close(sock);
         return false;
     }
 
-    // Setup address structure
+    // Setup address structure from resolved address
     struct sockaddr_in dest_addr;
-    memset(&dest_addr, 0, sizeof(dest_addr));
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_port = htons(port);
-    memcpy(&dest_addr.sin_addr, host_entry->h_addr, host_entry->h_length);
+    memcpy(&dest_addr, addr_result->ai_addr, sizeof(dest_addr));
+    lwip_freeaddrinfo(addr_result);
 
     // Attempt connection
-    int result = lwip_connect(sock, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+    int connect_result = lwip_connect(sock, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
     bool is_connected = false;
 
-    if (result == 0) {
+    if (connect_result == 0) {
         // Connected immediately
         is_connected = true;
     } else if (errno == EINPROGRESS) {
         // Connection in progress, wait for completion with timeout
         fd_set write_set;
         struct timeval timeout;
-        
+
         FD_ZERO(&write_set);
         FD_SET(sock, &write_set);
         timeout.tv_sec = 2;  // 2 second timeout
         timeout.tv_usec = 0;
-        
-        result = lwip_select(sock + 1, NULL, &write_set, NULL, &timeout);
-        if (result > 0) {
+
+        int select_result = lwip_select(sock + 1, NULL, &write_set, NULL, &timeout);
+        if (select_result > 0) {
             // Check if connection actually succeeded
             int error = 0;
             socklen_t len = sizeof(error);
