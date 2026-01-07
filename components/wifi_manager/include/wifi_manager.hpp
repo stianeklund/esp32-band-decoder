@@ -3,6 +3,8 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "esp_netif.h"
 
 
@@ -68,12 +70,23 @@ private:
     esp_err_t load_credentials(char* ssid, size_t ssid_size, 
                              char* password, size_t password_size);
 
+    // Reconnect task methods
+    static void reconnect_task_trampoline(void* arg);
+    void reconnect_task();
+    void signal_reconnect();
+    void reset_reconnect_attempts();
+
     // Member variables
     EventGroupHandle_t m_wifi_event_group{nullptr};
     esp_netif_t* m_sta_netif{nullptr};
     bool m_wifi_connected{false};
     bool m_ip_obtained{false};
     bool m_using_saved_credentials{false};
+
+    // Reconnect task members (fixes blocking event handler)
+    TaskHandle_t m_reconnect_task_handle{nullptr};
+    SemaphoreHandle_t m_reconnect_signal{nullptr};
+    int m_reconnect_attempts{0};  // Moved from static locals to fix shadowing bug
     // New state machine for handling reconfiguration
     enum class ReconfigState {
         NONE,                           // Normal operation

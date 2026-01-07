@@ -26,7 +26,7 @@
     } while(0)
 #endif
 
-static auto TAG = "WIFI_MANAGER";
+static constexpr const char* TAG = "WIFI_MANAGER";
 
 WifiManager &WifiManager::instance() {
     static WifiManager instance;
@@ -34,6 +34,15 @@ WifiManager &WifiManager::instance() {
 }
 
 WifiManager::~WifiManager() {
+    // Stop reconnect task
+    if (m_reconnect_task_handle) {
+        vTaskDelete(m_reconnect_task_handle);
+        m_reconnect_task_handle = nullptr;
+    }
+    if (m_reconnect_signal) {
+        vSemaphoreDelete(m_reconnect_signal);
+        m_reconnect_signal = nullptr;
+    }
     if (m_wifi_event_group) {
         vEventGroupDelete(m_wifi_event_group);
     }
@@ -237,15 +246,9 @@ void WifiManager::event_handler(void* arg, const esp_event_base_t event_base,
             default:
                 ESP_LOGI(TAG, "STA_DISCONNECTED: Normal disconnect or unexpected.");
                 instance.m_using_saved_credentials = false; // No longer relying on (potentially failed) saved/previous credentials
-                
-                // Add exponential backoff for reconnection attempts
-                static int reconnect_attempts = 0;
-                int backoff_delay = (1 <<  std::ranges::min(reconnect_attempts, 6)) * 1000; // Max ~64 seconds
-                ESP_LOGI(TAG, "Reconnecting in %d ms (attempt %d)", backoff_delay, reconnect_attempts + 1);
-                
-                vTaskDelay(pdMS_TO_TICKS(backoff_delay));
-                esp_wifi_connect(); // Attempt to reconnect (will trigger STA_START for SmartConfig)
-                reconnect_attempts++;
+
+                // Signal the reconnect task (non-blocking) instead of delaying in event handler
+                instance.signal_reconnect();
                 break;
         }
     }
@@ -271,14 +274,9 @@ void WifiManager::event_handler(void* arg, const esp_event_base_t event_base,
         }
         // Whether from SmartConfig, saved creds, or manual reconfig, if we got an IP, we are using "valid" (though maybe just temporary for SC) credentials.
         instance.m_using_saved_credentials = true;
-        
+
         // Reset reconnect attempts counter on successful connection
-        static int reconnect_attempts = 0;
-        reconnect_attempts = 0;
-
-
-        // Add a small delay to ensure connection status propagates
-        vTaskDelay(pdMS_TO_TICKS(100));
+        instance.reset_reconnect_attempts();
 
         // Webserver is now started in main.cpp after full system initialization
     }
@@ -405,6 +403,24 @@ esp_err_t WifiManager::init() {
     if (!m_wifi_event_group) {
         ESP_LOGE(TAG, "Failed to create event group");
         return ESP_ERR_NO_MEM;
+    }
+
+    // Create reconnect signal semaphore
+    if (!m_reconnect_signal) {
+        m_reconnect_signal = xSemaphoreCreateBinary();
+        if (!m_reconnect_signal) {
+            ESP_LOGE(TAG, "Failed to create reconnect signal semaphore");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    // Create reconnect task
+    if (!m_reconnect_task_handle) {
+        if (xTaskCreate(reconnect_task_trampoline, "wifi_reconn", 3072, this, 2, &m_reconnect_task_handle) != pdPASS) {
+            ESP_LOGE(TAG, "Failed to create reconnect task");
+            return ESP_ERR_NO_MEM;
+        }
+        ESP_LOGI(TAG, "WiFi reconnect task created");
     }
 
     // Initialize TCP/IP adapter with more robust error handling
@@ -709,10 +725,59 @@ void WifiManager::wifi_health_check_task() {
         // Periodic connection status log (every 5 minutes = 10 * 30s)
         static uint32_t status_log_counter = 0;
         if (++status_log_counter >= 10) {
-            ESP_LOGI(TAG, "WiFi status: %s, IP obtained: %s", 
+            ESP_LOGI(TAG, "WiFi status: %s, IP obtained: %s",
                      m_wifi_connected ? "Connected" : "Disconnected",
                      m_ip_obtained ? "Yes" : "No");
             status_log_counter = 0;
         }
     }
+}
+
+// Reconnect task trampoline for static callback
+void WifiManager::reconnect_task_trampoline(void* arg) {
+    auto* manager = static_cast<WifiManager*>(arg);
+    manager->reconnect_task();
+}
+
+// Dedicated reconnect task with exponential backoff (non-blocking for event handler)
+void WifiManager::reconnect_task() {
+    ESP_LOGI(TAG, "WiFi reconnect task started");
+
+    while (true) {
+        // Wait for signal to attempt reconnection (blocks until signaled)
+        if (xSemaphoreTake(m_reconnect_signal, portMAX_DELAY) == pdTRUE) {
+            // Calculate exponential backoff delay (max ~64 seconds)
+            const int backoff_delay = (1 << std::min(m_reconnect_attempts, 6)) * 1000;
+            ESP_LOGI(TAG, "Reconnecting in %d ms (attempt %d)", backoff_delay, m_reconnect_attempts + 1);
+
+            // Delay with backoff (this is the blocking delay moved from event handler)
+            vTaskDelay(pdMS_TO_TICKS(backoff_delay));
+
+            // Check if we're already connected (connection could have happened via other means)
+            if (!m_wifi_connected) {
+                ESP_LOGI(TAG, "Attempting WiFi reconnection...");
+                esp_wifi_connect();
+            } else {
+                ESP_LOGI(TAG, "Already connected, skipping reconnect attempt");
+            }
+
+            m_reconnect_attempts++;
+        }
+    }
+}
+
+// Signal the reconnect task to attempt reconnection (non-blocking, safe for event handler)
+void WifiManager::signal_reconnect() {
+    if (m_reconnect_signal) {
+        xSemaphoreGive(m_reconnect_signal);
+    } else {
+        ESP_LOGW(TAG, "Reconnect signal semaphore not initialized, falling back to immediate connect");
+        esp_wifi_connect();
+    }
+}
+
+// Reset reconnect attempts counter (called on successful connection)
+void WifiManager::reset_reconnect_attempts() {
+    m_reconnect_attempts = 0;
+    ESP_LOGD(TAG, "Reconnect attempts counter reset");
 }
