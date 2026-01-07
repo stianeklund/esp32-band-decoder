@@ -2,19 +2,23 @@
 #define INPUT_MANAGER_H
 
 #include "esp_err.h"
-#include <mutex>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "config_cache.h"
 
 class InputManager final : public ConfigCache {
 public:
-    // Singleton instance method
-    static InputManager& instance();
+    // Meyers' singleton instance method (thread-safe in C++11 and later)
+    static InputManager& instance() {
+        static InputManager instance;
+        return instance;
+    }
 
-    // Delete copy constructor and assignment operator
+    // Delete copy/move constructor and assignment operators
     InputManager(const InputManager&) = delete;
     InputManager& operator=(const InputManager&) = delete;
+    InputManager(InputManager&&) = delete;
+    InputManager& operator=(InputManager&&) = delete;
 
     /**
      * @brief Initializes the InputManager and the underlying hardware if not already initialized.
@@ -51,9 +55,6 @@ private:
                          uint16_t inputs_mask, const std::function<void(bool)>& on_state_change);
     void handle_ptt_read_error();
     void ptt_poll_task();
-
-    static InputManager* instance_;
-    static std::mutex instance_mutex_;
 
     bool initialized_ = false;
     TaskHandle_t ptt_poll_task_handle_ = nullptr;

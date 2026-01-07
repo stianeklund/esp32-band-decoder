@@ -5,7 +5,7 @@
 #include "esp_task_wdt.h"
 #include "kc868_a16_hw.h"
 
-static auto TAG = "InputManager";
+static constexpr const char* TAG = "InputManager";
 
 // Helper function to determine the logical state of a PTT input
 // and report the physical state of the PCF8574 pin for logging.
@@ -40,16 +40,7 @@ static bool determine_ptt_logical_state(
     return logical_ptt_active;
 }
 
-InputManager* InputManager::instance_ = nullptr;
-std::mutex InputManager::instance_mutex_;
-
-InputManager& InputManager::instance() {
-    std::lock_guard lock(instance_mutex_);
-    if (instance_ == nullptr) {
-        instance_ = new InputManager();
-    }
-    return *instance_;
-}
+// Meyers' singleton - instance() is now inline in header
 
 InputManager::InputManager() : 
     initialized_(false), 
