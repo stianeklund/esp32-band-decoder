@@ -84,7 +84,7 @@ private:
     uint32_t vfo_b_frequency{0};    // VFO B frequency
     uint8_t active_vfo{0};          // 0 = VFO A, 1 = VFO B (from IF P10 field)
     int current_band_index{-1}; // Cache for current frequency's band
-    bool transmitting{false}; // Tracks if radio is transmitting
+    std::atomic<bool> transmitting{false}; // Tracks if radio is transmitting (atomic for thread safety)
     bool rit_on{false}; // RIT status
     bool xit_on{false}; // XIT status
     bool split_on{false}; // Split operation status
