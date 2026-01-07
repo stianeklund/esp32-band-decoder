@@ -4,7 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-static auto TAG = "KC868_A16_HW";
+static constexpr const char* TAG = "KC868_A16_HW";
 static uint16_t output_state = 0;
 static bool kc868_a16_initialized = false;
 static SemaphoreHandle_t i2c_bus_mutex_ = nullptr;
@@ -330,6 +330,13 @@ esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
 uint16_t kc868_a16_get_all_outputs() {
     // This function returns the logical state (1 = ON, 0 = OFF)
     // output_state stores the PCF8574 register view (active-low, 1 = OFF, 0 = ON)
+    // Protect read with mutex for thread safety (output_state is modified in other functions under mutex)
+    if (i2c_bus_mutex_ && xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
+        uint16_t result = ~output_state & 0xFFFF;
+        xSemaphoreGive(i2c_bus_mutex_);
+        return result;
+    }
+    // Fallback if mutex not available - return cached value (may be stale)
     return ~output_state & 0xFFFF;
 }
 
