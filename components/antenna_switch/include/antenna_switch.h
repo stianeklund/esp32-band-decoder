@@ -151,6 +151,12 @@ private:
     std::atomic<bool> cat_tx_a_active_{false}; // Stores CAT-reported TX state for Radio A
     std::atomic<bool> cat_tx_b_active_{false}; // Stores CAT-reported TX state for Radio B
 
+    // PTT debounce: track when HW PTT went active to require sustained signal
+    // before clearing CAT TX state (prevents glitches from causing mid-TX antenna switching)
+    static constexpr int64_t PTT_DEBOUNCE_US = 50000;  // 50ms debounce
+    int64_t hw_ptt_a_active_since_us_{0};  // Timestamp when HW PTT A went active
+    int64_t hw_ptt_b_active_since_us_{0};  // Timestamp when HW PTT B went active
+
     // Pointer to relay controller
     RelayController* relay_controller_ = nullptr;
     int pre_tx_active_relay_radio_a_ = 0;         // Stores active relay for A if B starts TX
@@ -166,6 +172,11 @@ private:
     // Timers for delayed relay restoration (using esp_timer for sub-10ms precision)
     esp_timer_handle_t radio_b_restore_delay_timer_ = nullptr;
     esp_timer_handle_t radio_a_restore_delay_timer_ = nullptr;
+
+    // Retry counters for timer rescheduling (prevent infinite loops)
+    static constexpr int MAX_TIMER_RETRIES = 5;
+    int radio_a_restore_retry_count_ = 0;
+    int radio_b_restore_retry_count_ = 0;
 
     SemaphoreHandle_t interlock_mutex_ = nullptr;
 

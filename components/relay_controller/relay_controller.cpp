@@ -189,15 +189,17 @@ esp_err_t RelayController::update_all_relay_states() {
 
 
 uint16_t RelayController::get_relay_states() const {
-    uint16_t raw_states = kc868_a16_get_all_outputs();
-    if (raw_states != 0x0000) {
-        ESP_LOGD(TAG, "Raw states from hardware: 0x%04X", raw_states);
+    // kc868_a16_get_all_outputs() returns logical state (1 = ON, 0 = OFF).
+    // However, UI layer expects active-low format (0 = ON, 1 = OFF) for consistency
+    // with the active-low checking pattern: if (!((states >> i) & 1))
+    // So we intentionally invert to provide active-low format to callers.
+    const uint16_t logical_states = kc868_a16_get_all_outputs();
+    const uint16_t active_low_states = ~logical_states & 0xFFFF;
+
+    if (active_low_states != 0xFFFF) {
+        ESP_LOGD(TAG, "Relay states (active-low): 0x%04X", active_low_states);
     }
-    uint16_t states = ~raw_states & 0xFFFF;
-    if (states != 0xFFFF) {
-        ESP_LOGD(TAG, "Inverted states: 0x%04X", states);
-    }
-    return states;
+    return active_low_states;
 }
 
 esp_err_t RelayController::turn_off_all_relays_except(const int relay_to_keep_on) {

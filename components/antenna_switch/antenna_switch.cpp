@@ -177,8 +177,8 @@ const antenna_switch_config_t& AntennaSwitch::get_config_ref() const {
 
 // Callback from InputManager when hardware PTT A state changes
 void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
-    int64_t ptt_a_start_time = esp_timer_get_time();
-    ESP_LOGV(TAG, "on_hw_ptt_a_state_change: Input detected. Active: %s. Time: %lld", active ? "true" : "false", esp_timer_get_time());
+    const int64_t ptt_a_start_time = esp_timer_get_time();
+    ESP_LOGV(TAG, "on_hw_ptt_a_state_change: Input detected. Active: %s. Time: %lld", active ? "true" : "false", ptt_a_start_time);
     const bool old_hw_ptt_a_value = hw_ptt_a_active_.load(std::memory_order_relaxed);
 
     if (old_hw_ptt_a_value == active) {
@@ -194,16 +194,29 @@ void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
     const bool old_cat_tx_a = cat_tx_a_active_.load(std::memory_order_relaxed);
     const bool was_effectively_transmitting = old_hw_ptt_a_value || old_cat_tx_a;
 
+    // Track PTT active timestamp for debounce
+    if (active && !old_hw_ptt_a_value) {
+        // PTT going active - record timestamp
+        hw_ptt_a_active_since_us_ = ptt_a_start_time;
+    }
+
     // Store the new HW PTT state
     hw_ptt_a_active_.store(active, std::memory_order_relaxed);
 
-    // When HW PTT goes inactive, clear any stale CAT TX state.
-    // The hardware PTT line is the authoritative source for TX state when configured.
-    // This prevents CAT TX state from getting "stuck" and blocking antenna changes.
+    // When HW PTT goes inactive, clear any stale CAT TX state - but only if PTT was
+    // active for at least PTT_DEBOUNCE_US. This prevents brief glitches from clearing
+    // CAT TX state and allowing antenna switching mid-transmission.
     if (!active && old_cat_tx_a) {
-        ESP_LOGI(TAG, "Radio A: HW PTT went inactive, clearing stale CAT TX state (was %s).",
-                 old_cat_tx_a ? "ON" : "OFF");
-        cat_tx_a_active_.store(false, std::memory_order_relaxed);
+        const int64_t ptt_active_duration_us = ptt_a_start_time - hw_ptt_a_active_since_us_;
+        if (ptt_active_duration_us >= PTT_DEBOUNCE_US) {
+            ESP_LOGI(TAG, "Radio A: HW PTT went inactive (was active for %lld us), clearing stale CAT TX state.",
+                     ptt_active_duration_us);
+            cat_tx_a_active_.store(false, std::memory_order_relaxed);
+        } else {
+            ESP_LOGW(TAG, "Radio A: HW PTT glitch detected (active only %lld us < %lld us debounce). NOT clearing CAT TX state.",
+                     ptt_active_duration_us, PTT_DEBOUNCE_US);
+            // Don't clear CAT TX state - this was likely a glitch
+        }
     }
 
     // Determine effective TX state AFTER applying changes.
@@ -564,27 +577,45 @@ void AntennaSwitch::radio_b_restore_timer_callback(void* arg) {
         return;
     }
 
+    // Helper lambda to handle rescheduling with retry limit
+    auto try_reschedule = [self](const char* reason) -> bool {
+        if (++self->radio_b_restore_retry_count_ > MAX_TIMER_RETRIES) {
+            ESP_LOGE(TAG, "Radio B restore timer: Max retries (%d) exceeded (%s). Aborting restoration for relay %d.",
+                     MAX_TIMER_RETRIES, reason, self->pre_tx_active_relay_radio_b_);
+            self->pre_tx_active_relay_radio_b_ = 0;
+            self->radio_b_restore_retry_count_ = 0;
+            return false;
+        }
+
+        if (self->radio_b_restore_delay_timer_ == nullptr || self->pre_tx_active_relay_radio_b_ == 0) {
+            ESP_LOGD(TAG, "Radio B restore timer: Cannot reschedule - timer null or no relay to restore.");
+            self->radio_b_restore_retry_count_ = 0;
+            return false;
+        }
+
+        const auto& cached_cfg = self->get_cached_config();
+        uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
+        if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
+
+        uint16_t reschedule_delay_ms = current_delay_ms / 2;
+        if (reschedule_delay_ms < 50) reschedule_delay_ms = 50;
+
+        ESP_LOGD(TAG, "Radio B restore timer: Retry %d/%d for relay %d in %u ms (%s)",
+                 self->radio_b_restore_retry_count_, MAX_TIMER_RETRIES,
+                 self->pre_tx_active_relay_radio_b_, reschedule_delay_ms, reason);
+
+        if (esp_timer_start_once(self->radio_b_restore_delay_timer_, reschedule_delay_ms * 1000) != ESP_OK) {
+            ESP_LOGE(TAG, "Radio B restore timer: Failed to reschedule. Aborting for relay %d.", self->pre_tx_active_relay_radio_b_);
+            self->pre_tx_active_relay_radio_b_ = 0;
+            self->radio_b_restore_retry_count_ = 0;
+            return false;
+        }
+        return true;
+    };
+
     if (xSemaphoreTake(self->interlock_mutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
         ESP_LOGE(TAG, "Radio B restore timer: Could not take interlock_mutex_. Rescheduling.");
-        if (self->radio_b_restore_delay_timer_ != nullptr && self->pre_tx_active_relay_radio_b_ != 0) {
-            const auto& cached_cfg = self->get_cached_config();
-            uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
-            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
-
-            uint16_t reschedule_delay_ms = current_delay_ms / 2;
-            if (reschedule_delay_ms < 50) reschedule_delay_ms = 50; // Minimum reschedule delay 50ms
-
-            ESP_LOGD(TAG, "Radio B restore timer: Rescheduling for relay %d in %u ms (interlock_mutex_ busy)", self->pre_tx_active_relay_radio_b_, reschedule_delay_ms);
-            if (esp_timer_start_once(self->radio_b_restore_delay_timer_, reschedule_delay_ms * 1000) != ESP_OK) {
-                 ESP_LOGE(TAG, "Radio B restore timer: Failed to reschedule after interlock_mutex_ busy. Aborting for relay %d.", self->pre_tx_active_relay_radio_b_);
-                 self->pre_tx_active_relay_radio_b_ = 0; // Cannot reschedule, abort this attempt
-            }
-        } else if (self->pre_tx_active_relay_radio_b_ == 0) {
-             ESP_LOGD(TAG, "Radio B restore timer: interlock_mutex_ busy, but no relay to restore.");
-        } else {
-             ESP_LOGE(TAG, "Radio B restore timer: interlock_mutex_ busy, timer invalid, cannot reschedule relay %d.", self->pre_tx_active_relay_radio_b_);
-             self->pre_tx_active_relay_radio_b_ = 0; // Cannot reschedule, abort
-        }
+        try_reschedule("mutex busy");
         return;
     }
 
@@ -592,6 +623,7 @@ void AntennaSwitch::radio_b_restore_timer_callback(void* arg) {
 
     if (self->pre_tx_active_relay_radio_b_ == 0) {
         ESP_LOGD(TAG, "Radio B restore timer: No pre_tx_active_relay_radio_b_ to restore (cleared or already restored).");
+        self->radio_b_restore_retry_count_ = 0;
         xSemaphoreGive(self->interlock_mutex_);
         return;
     }
@@ -600,6 +632,7 @@ void AntennaSwitch::radio_b_restore_timer_callback(void* arg) {
     if (self->is_radio_a_transmitting_effective()) {
         ESP_LOGW(TAG, "Radio B restore timer: Radio A started transmitting again. Aborting restoration of relay %d.", self->pre_tx_active_relay_radio_b_);
         // pre_tx_active_relay_radio_b_ is NOT cleared here. on_radio_a_tx_start would have handled it or will handle it.
+        self->radio_b_restore_retry_count_ = 0;
         xSemaphoreGive(self->interlock_mutex_);
         return;
     }
@@ -609,23 +642,10 @@ void AntennaSwitch::radio_b_restore_timer_callback(void* arg) {
         const int radio_b_port_idx = (self->pre_tx_active_relay_radio_b_ - 1) % RelayController::RELAYS_PER_RADIO;
 
         if (const int radio_a_port_idx = (active_a_relay - 1) % RelayController::RELAYS_PER_RADIO; radio_a_port_idx == radio_b_port_idx) {
-            ESP_LOGW(TAG, "Radio B restore timer: Radio A is using port %d (relay %d), cannot restore Radio B relay %d (same port). Will retry later.", 
+            ESP_LOGW(TAG, "Radio B restore timer: Radio A is using port %d (relay %d), cannot restore Radio B relay %d (same port). Will retry later.",
                      radio_a_port_idx + 1, active_a_relay, self->pre_tx_active_relay_radio_b_);
-
-            const auto& cached_cfg = self->get_cached_config();
-            uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
-            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
-            
-            uint16_t reschedule_delay_ms = current_delay_ms; // Retry with the original configured delay
-            if (reschedule_delay_ms < 50) reschedule_delay_ms = 50;
-
-
-            ESP_LOGD(TAG, "Radio B restore timer: Rescheduling for relay %d in %u ms (port conflict with Radio A)", self->pre_tx_active_relay_radio_b_, reschedule_delay_ms);
-            if (esp_timer_start_once(self->radio_b_restore_delay_timer_, reschedule_delay_ms * 1000) != ESP_OK) {
-                ESP_LOGE(TAG, "Radio B restore timer: Failed to reschedule on port conflict. Aborting for relay %d.", self->pre_tx_active_relay_radio_b_);
-                self->pre_tx_active_relay_radio_b_ = 0; // Cannot reschedule, abort
-            }
             xSemaphoreGive(self->interlock_mutex_);
+            try_reschedule("port conflict");
             return;
         } else {
             ESP_LOGD(TAG, "Radio B restore timer: Radio A is using port %d (relay %d), Radio B can safely restore to port %d (relay %d).",
@@ -637,48 +657,38 @@ void AntennaSwitch::radio_b_restore_timer_callback(void* arg) {
 
     if (self->is_radio_b_transmitting_effective()) {
         ESP_LOGW(TAG, "Radio B restore timer: Radio B is now transmitting on its own. Aborting restoration of its previous relay %d.", self->pre_tx_active_relay_radio_b_);
-        self->pre_tx_active_relay_radio_b_ = 0; // Abort and clear
+        self->pre_tx_active_relay_radio_b_ = 0;
+        self->radio_b_restore_retry_count_ = 0;
         xSemaphoreGive(self->interlock_mutex_);
         return;
     }
 
     if (!self->relay_controller_) {
         ESP_LOGE(TAG, "Radio B restore timer: Relay controller not initialized.");
-        self->pre_tx_active_relay_radio_b_ = 0; // Cannot restore, clear
+        self->pre_tx_active_relay_radio_b_ = 0;
+        self->radio_b_restore_retry_count_ = 0;
         xSemaphoreGive(self->interlock_mutex_);
         return;
     }
-    
+
     ESP_LOGD(TAG, "Radio B restore timer: Attempting to restore Radio B relay %d to ON.", self->pre_tx_active_relay_radio_b_);
 
     if (const esp_err_t err = self->relay_controller_->set_relay(self->pre_tx_active_relay_radio_b_, true); err != ESP_OK) {
         ESP_LOGE(TAG, "Radio B restore timer: Failed to restore Radio B relay %d: %s", self->pre_tx_active_relay_radio_b_, esp_err_to_name(err));
 
-        if (err == ESP_ERR_TIMEOUT && self->radio_b_restore_delay_timer_ != nullptr && self->pre_tx_active_relay_radio_b_ != 0) {
-            // If it was a timeout (potentially mutex or I2C hardware), reschedule
-            ESP_LOGW(TAG, "Radio B restore timer: Rescheduling restoration for relay %d due to timeout error from set_relay.", self->pre_tx_active_relay_radio_b_);
-            const auto& cached_cfg = self->get_cached_config();
-            uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
-            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
-            
-            uint16_t reschedule_delay_ms = current_delay_ms / 2; 
-            if (reschedule_delay_ms < 50) reschedule_delay_ms = 50; // Minimum 50ms
-
-            ESP_LOGD(TAG, "Radio B restore timer: Rescheduling for relay %d in %u ms (set_relay timeout)", self->pre_tx_active_relay_radio_b_, reschedule_delay_ms);
-            if (esp_timer_start_once(self->radio_b_restore_delay_timer_, reschedule_delay_ms * 1000) == ESP_OK) {
-                // Successfully rescheduled, so don't clear pre_tx_active_relay_radio_b_ yet
-                xSemaphoreGive(self->interlock_mutex_);
-                return; // Exit without clearing the relay to be restored
-            }
-
-            ESP_LOGE(TAG, "Radio B restore timer: Failed to reschedule after set_relay error. Aborting restoration for relay %d.", self->pre_tx_active_relay_radio_b_);
-            // Fall through to clear pre_tx_active_relay_radio_b_
+        if (err == ESP_ERR_TIMEOUT) {
+            xSemaphoreGive(self->interlock_mutex_);
+            try_reschedule("set_relay timeout");
+            return;
         }
-        // If not rescheduled, or error was not timeout, or other issue, clear the relay.
-        self->pre_tx_active_relay_radio_b_ = 0; 
-    } else { // Success
+        // Non-timeout error - abort
+        self->pre_tx_active_relay_radio_b_ = 0;
+        self->radio_b_restore_retry_count_ = 0;
+    } else {
+        // Success
         ESP_LOGD(TAG, "Radio B restore timer: Successfully restored Radio B relay %d.", self->pre_tx_active_relay_radio_b_);
-        self->pre_tx_active_relay_radio_b_ = 0; // Clear after successful restoration
+        self->pre_tx_active_relay_radio_b_ = 0;
+        self->radio_b_restore_retry_count_ = 0;
     }
     xSemaphoreGive(self->interlock_mutex_);
 }
@@ -802,27 +812,45 @@ void AntennaSwitch::radio_a_restore_timer_callback(void* arg) {
         return;
     }
 
+    // Helper lambda to handle rescheduling with retry limit
+    auto try_reschedule = [self](const char* reason) -> bool {
+        if (++self->radio_a_restore_retry_count_ > MAX_TIMER_RETRIES) {
+            ESP_LOGE(TAG, "Radio A restore timer: Max retries (%d) exceeded (%s). Aborting restoration for relay %d.",
+                     MAX_TIMER_RETRIES, reason, self->pre_tx_active_relay_radio_a_);
+            self->pre_tx_active_relay_radio_a_ = 0;
+            self->radio_a_restore_retry_count_ = 0;
+            return false;
+        }
+
+        if (self->radio_a_restore_delay_timer_ == nullptr || self->pre_tx_active_relay_radio_a_ == 0) {
+            ESP_LOGD(TAG, "Radio A restore timer: Cannot reschedule - timer null or no relay to restore.");
+            self->radio_a_restore_retry_count_ = 0;
+            return false;
+        }
+
+        const auto& cached_cfg = self->get_cached_config();
+        uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
+        if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
+
+        uint16_t reschedule_delay_ms = current_delay_ms / 2;
+        if (reschedule_delay_ms < 50) reschedule_delay_ms = 50;
+
+        ESP_LOGD(TAG, "Radio A restore timer: Retry %d/%d for relay %d in %u ms (%s)",
+                 self->radio_a_restore_retry_count_, MAX_TIMER_RETRIES,
+                 self->pre_tx_active_relay_radio_a_, reschedule_delay_ms, reason);
+
+        if (esp_timer_start_once(self->radio_a_restore_delay_timer_, reschedule_delay_ms * 1000) != ESP_OK) {
+            ESP_LOGE(TAG, "Radio A restore timer: Failed to reschedule. Aborting for relay %d.", self->pre_tx_active_relay_radio_a_);
+            self->pre_tx_active_relay_radio_a_ = 0;
+            self->radio_a_restore_retry_count_ = 0;
+            return false;
+        }
+        return true;
+    };
+
     if (xSemaphoreTake(self->interlock_mutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
         ESP_LOGE(TAG, "Radio A restore timer: Could not take interlock_mutex_. Rescheduling.");
-        if (self->radio_a_restore_delay_timer_ != nullptr && self->pre_tx_active_relay_radio_a_ != 0) {
-            const auto& cached_cfg = self->get_cached_config();
-            uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
-            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
-
-            uint16_t reschedule_delay_ms = current_delay_ms / 2;
-            if (reschedule_delay_ms < 50) reschedule_delay_ms = 50; // Minimum reschedule delay 50ms
-            
-            ESP_LOGD(TAG, "Radio A restore timer: Rescheduling for relay %d in %u ms (interlock_mutex_ busy)", self->pre_tx_active_relay_radio_a_, reschedule_delay_ms);
-            if (esp_timer_start_once(self->radio_a_restore_delay_timer_, reschedule_delay_ms * 1000) != ESP_OK) {
-                ESP_LOGE(TAG, "Radio A restore timer: Failed to reschedule after interlock_mutex_ busy. Aborting for relay %d.", self->pre_tx_active_relay_radio_a_);
-                self->pre_tx_active_relay_radio_a_ = 0; // Cannot reschedule, abort
-            }
-        } else if (self->pre_tx_active_relay_radio_a_ == 0) {
-            ESP_LOGD(TAG, "Radio A restore timer: interlock_mutex_ busy, but no relay to restore.");
-        } else {
-            ESP_LOGE(TAG, "Radio A restore timer: interlock_mutex_ busy, timer invalid, cannot reschedule relay %d.", self->pre_tx_active_relay_radio_a_);
-            self->pre_tx_active_relay_radio_a_ = 0; // Cannot reschedule, abort
-        }
+        try_reschedule("mutex busy");
         return;
     }
 
@@ -830,6 +858,7 @@ void AntennaSwitch::radio_a_restore_timer_callback(void* arg) {
 
     if (self->pre_tx_active_relay_radio_a_ == 0) {
         ESP_LOGD(TAG, "Radio A restore timer: No pre_tx_active_relay_radio_a_ to restore (cleared or already restored).");
+        self->radio_a_restore_retry_count_ = 0;
         xSemaphoreGive(self->interlock_mutex_);
         return;
     }
@@ -837,6 +866,7 @@ void AntennaSwitch::radio_a_restore_timer_callback(void* arg) {
     if (self->is_radio_b_transmitting_effective()) {
         ESP_LOGW(TAG, "Radio A restore timer: Radio B started transmitting again. Aborting restoration of relay %d.", self->pre_tx_active_relay_radio_a_);
         // pre_tx_active_relay_radio_a_ is NOT cleared here. on_radio_b_tx_start would have handled it.
+        self->radio_a_restore_retry_count_ = 0;
         xSemaphoreGive(self->interlock_mutex_);
         return;
     }
@@ -846,21 +876,10 @@ void AntennaSwitch::radio_a_restore_timer_callback(void* arg) {
         const int radio_a_port_idx = (self->pre_tx_active_relay_radio_a_ - 1) % RelayController::RELAYS_PER_RADIO;
 
         if (const int radio_b_port_idx = (active_b_relay - 1) % RelayController::RELAYS_PER_RADIO; radio_b_port_idx == radio_a_port_idx) {
-            ESP_LOGW(TAG, "Radio A restore timer: Radio B is using port %d (relay %d), cannot restore Radio A relay %d (same port). Will retry later.", 
+            ESP_LOGW(TAG, "Radio A restore timer: Radio B is using port %d (relay %d), cannot restore Radio A relay %d (same port). Will retry later.",
                      radio_b_port_idx + 1, active_b_relay, self->pre_tx_active_relay_radio_a_);
-            const auto& cached_cfg = self->get_cached_config();
-            uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
-            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
-
-            uint16_t reschedule_delay_ms = current_delay_ms; // Retry with the original configured delay
-            if (reschedule_delay_ms < 50) reschedule_delay_ms = 50;
-
-            ESP_LOGD(TAG, "Radio A restore timer: Rescheduling for relay %d in %u ms (port conflict with Radio B)", self->pre_tx_active_relay_radio_a_, reschedule_delay_ms);
-            if (esp_timer_start_once(self->radio_a_restore_delay_timer_, reschedule_delay_ms * 1000) != ESP_OK) {
-                ESP_LOGE(TAG, "Radio A restore timer: Failed to reschedule on port conflict. Aborting for relay %d.", self->pre_tx_active_relay_radio_a_);
-                self->pre_tx_active_relay_radio_a_ = 0; // Cannot reschedule, abort
-            }
             xSemaphoreGive(self->interlock_mutex_);
+            try_reschedule("port conflict");
             return;
         } else {
             ESP_LOGV(TAG, "Radio A restore timer: Radio B is using port %d (relay %d), Radio A can safely restore to port %d (relay %d).",
@@ -872,43 +891,37 @@ void AntennaSwitch::radio_a_restore_timer_callback(void* arg) {
 
     if (self->is_radio_a_transmitting_effective()) {
         ESP_LOGW(TAG, "Radio A restore timer: Radio A is now transmitting on its own. Aborting restoration of its previous relay %d.", self->pre_tx_active_relay_radio_a_);
-        self->pre_tx_active_relay_radio_a_ = 0; 
+        self->pre_tx_active_relay_radio_a_ = 0;
+        self->radio_a_restore_retry_count_ = 0;
         xSemaphoreGive(self->interlock_mutex_);
         return;
     }
 
     if (!self->relay_controller_) {
         ESP_LOGE(TAG, "Radio A restore timer: Relay controller not initialized.");
-        self->pre_tx_active_relay_radio_a_ = 0; 
+        self->pre_tx_active_relay_radio_a_ = 0;
+        self->radio_a_restore_retry_count_ = 0;
         xSemaphoreGive(self->interlock_mutex_);
         return;
     }
-    
-    ESP_LOGD(TAG, "Radio A restore timer: Attempting to restore Radio A relay %d to ON.", self->pre_tx_active_relay_radio_a_);
-    esp_err_t err = self->relay_controller_->set_relay(self->pre_tx_active_relay_radio_a_, true);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Radio A restore timer: Failed to restore Radio A relay %d: %s", self->pre_tx_active_relay_radio_a_, esp_err_to_name(err));
-        if (err == ESP_ERR_TIMEOUT && self->radio_a_restore_delay_timer_ != nullptr && self->pre_tx_active_relay_radio_a_ != 0) {
-            ESP_LOGW(TAG, "Radio A restore timer: Rescheduling restoration for relay %d due to timeout error from set_relay.", self->pre_tx_active_relay_radio_a_);
-            const auto& cached_cfg = self->get_cached_config();
-            uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
-            if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback
-            
-            uint16_t reschedule_delay_ms = current_delay_ms / 2;
-            if (reschedule_delay_ms < 50) reschedule_delay_ms = 50; // Minimum 50ms
 
-            ESP_LOGD(TAG, "Radio A restore timer: Rescheduling for relay %d in %u ms (set_relay timeout)", self->pre_tx_active_relay_radio_a_, reschedule_delay_ms);
-            if (esp_timer_start_once(self->radio_a_restore_delay_timer_, reschedule_delay_ms * 1000) == ESP_OK) {
-                xSemaphoreGive(self->interlock_mutex_);
-                return; 
-            } else {
-                ESP_LOGE(TAG, "Radio A restore timer: Failed to reschedule after set_relay error. Aborting restoration for relay %d.", self->pre_tx_active_relay_radio_a_);
-            }
+    ESP_LOGD(TAG, "Radio A restore timer: Attempting to restore Radio A relay %d to ON.", self->pre_tx_active_relay_radio_a_);
+    if (const esp_err_t err = self->relay_controller_->set_relay(self->pre_tx_active_relay_radio_a_, true); err != ESP_OK) {
+        ESP_LOGE(TAG, "Radio A restore timer: Failed to restore Radio A relay %d: %s", self->pre_tx_active_relay_radio_a_, esp_err_to_name(err));
+
+        if (err == ESP_ERR_TIMEOUT) {
+            xSemaphoreGive(self->interlock_mutex_);
+            try_reschedule("set_relay timeout");
+            return;
         }
-        self->pre_tx_active_relay_radio_a_ = 0; 
+        // Non-timeout error - abort
+        self->pre_tx_active_relay_radio_a_ = 0;
+        self->radio_a_restore_retry_count_ = 0;
     } else {
+        // Success
         ESP_LOGD(TAG, "Radio A restore timer: Successfully restored Radio A relay %d.", self->pre_tx_active_relay_radio_a_);
-        self->pre_tx_active_relay_radio_a_ = 0; 
+        self->pre_tx_active_relay_radio_a_ = 0;
+        self->radio_a_restore_retry_count_ = 0;
     }
     xSemaphoreGive(self->interlock_mutex_);
 }

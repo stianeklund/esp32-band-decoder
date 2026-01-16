@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include "cJSON.h"
 #include "esp_err.h"
@@ -20,18 +21,18 @@ public:
     void parse_radio_info(const cJSON* json);
     void set_has_serial_data(bool has_data);
     [[nodiscard]] uint32_t get_current_frequency() const;
-    [[nodiscard]] bool is_transmitting() const { return is_transmitting_; }
-    [[nodiscard]] bool has_serial_data() const { return has_serial_data_; }
+    [[nodiscard]] bool is_transmitting() const { return is_transmitting_.load(); }
+    [[nodiscard]] bool has_serial_data() const { return has_serial_data_.load(); }
 
 private:
     MQTTClient();
     static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
     [[nodiscard]] bool check_broker_connectivity() const;
-    
+
     esp_mqtt_client_handle_t client_;
     std::function<void(uint32_t)> frequency_callback_;
     static constexpr char TAG[] = "MQTTClient";
-    uint32_t current_frequency_;
-    bool is_transmitting_{false};
-    bool has_serial_data_{false};
+    std::atomic<uint32_t> current_frequency_{0};
+    std::atomic<bool> is_transmitting_{false};   // Atomic for cross-task access
+    std::atomic<bool> has_serial_data_{false};   // Atomic for cross-task access
 };

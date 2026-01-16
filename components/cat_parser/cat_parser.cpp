@@ -569,11 +569,12 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
     // P10: 0 = VFO A, 1 = VFO B, 2 = Memory
     const uint8_t vfo_selection = command[28] - '0';  // Convert ASCII to number
 
-    const bool tx_state_changed = new_tx_state != transmitting; // Compare new with current member state
+    const bool current_tx_state = transmitting.load();
+    const bool tx_state_changed = new_tx_state != current_tx_state;
     const std::string old_mode = current_mode;                   // Capture current mode before update
 
     ESP_LOGD(TAG, "IF command parsing: freq=%lu, vfo_sel=%u, new_tx_state=%d, current_tx_state=%d, tx_changed=%d",
-             frequency, vfo_selection, new_tx_state, transmitting, tx_state_changed);
+             frequency, vfo_selection, new_tx_state, current_tx_state, tx_state_changed);
 
     // Update VFO-specific frequency storage
     if (vfo_selection == 0) {
@@ -606,7 +607,7 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
     }
 
     ESP_LOGV(TAG, "IF command: freq=%lu Hz, mode=%s, tx=%d, VFO=%c (A_freq=%lu, B_freq=%lu)",
-             frequency, current_mode.c_str(), transmitting, vfo_selection == 0 ? 'A' : (vfo_selection == 1 ? 'B' : 'M'),
+             frequency, current_mode.c_str(), transmitting.load(), vfo_selection == 0 ? 'A' : (vfo_selection == 1 ? 'B' : 'M'),
              vfo_a_frequency, vfo_b_frequency);
 
     // Only process frequency changes if this is for the active VFO
@@ -672,10 +673,11 @@ esp_err_t CatParser::process_fb_command(const std::string_view command) {
 }
 
 void CatParser::set_transmitting(const bool new_state) {
-    if (transmitting != new_state) { // 'transmitting' is the member bool of CatParser
-        ESP_LOGD(TAG, "CatParser internal transmit state changing from %s to %s", 
-                 transmitting ? "ON" : "OFF", new_state ? "ON" : "OFF");
-        transmitting = new_state; // Update CatParser's own state
+    const bool old_state = transmitting.load();
+    if (old_state != new_state) {
+        ESP_LOGD(TAG, "CatParser internal transmit state changing from %s to %s",
+                 old_state ? "ON" : "OFF", new_state ? "ON" : "OFF");
+        transmitting.store(new_state);
 
         // Notify AntennaSwitch about this change for Radio A
         ESP_LOGD(TAG, "Notifying AntennaSwitch of CAT TX state change to: %s", new_state ? "ON" : "OFF");
@@ -794,7 +796,7 @@ esp_err_t CatParser::probe_and_configure_ai_mode() {
         ESP_LOGI(TAG, "Already parsing valid CAT commands, AI mode likely enabled");
         ESP_LOGI(TAG, "Current radio state: freq=%lu Hz (%.3f MHz), mode='%s', transmitting=%s, split=%s",
                  current_frequency, current_frequency / 1000000.0, current_mode.data(),
-                 transmitting ? "YES" : "NO", split_on ? "ON" : "OFF");
+                 transmitting.load() ? "YES" : "NO", split_on ? "ON" : "OFF");
         ESP_LOGI(TAG, "Time since last valid command: %lld seconds, last raw data: %lld seconds (threshold: %d seconds)", 
                  time_since_last_valid_command, time_since_last_data, SERIAL_DATA_TIMEOUT_S);
         radio_provides_auto_updates_ = true;

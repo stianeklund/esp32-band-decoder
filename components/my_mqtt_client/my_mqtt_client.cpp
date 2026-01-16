@@ -271,7 +271,7 @@ void MQTTClient::handle_radio_info(const char *data, int data_len) {
 void MQTTClient::parse_radio_info(const cJSON *json) {
     // This check is for a different purpose (data source priority)
     if (const auto &config = get_cached_config();
-        !config.allow_concurrent_data_sources && has_serial_data_) {
+        !config.allow_concurrent_data_sources && has_serial_data_.load()) {
         ESP_LOGD(TAG, "MQTT data received but serial data has priority and concurrent sources disallowed.");
         return;
     }
@@ -281,16 +281,16 @@ void MQTTClient::parse_radio_info(const cJSON *json) {
 
     // Handle transmit state first as it's more time-critical
     if (const cJSON *tx = cJSON_GetObjectItem(json, "IsTransmitting"); cJSON_IsBool(tx)) {
-        if (const bool new_tx_state = cJSON_IsTrue(tx); new_tx_state != is_transmitting_) {
-            is_transmitting_ = new_tx_state;
+        if (const bool new_tx_state = cJSON_IsTrue(tx); new_tx_state != is_transmitting_.load()) {
+            is_transmitting_.store(new_tx_state);
             cat_parser_set_transmit(new_tx_state); // Update CAT parser immediately
             ESP_LOGI(TAG, "Transmit state changed via MQTT to: %s", new_tx_state ? "true" : "false");
         }
     }
 
     if (freq && freq->valueint > 0) {
-        if (const uint32_t new_freq = freq->valueint; new_freq != current_frequency_) {
-            current_frequency_ = new_freq;
+        if (const uint32_t new_freq = freq->valueint; new_freq != current_frequency_.load()) {
+            current_frequency_.store(new_freq);
             if (frequency_callback_) {
                 frequency_callback_(new_freq);
             }
@@ -319,11 +319,11 @@ void MQTTClient::set_frequency_callback(std::function<void(uint32_t)> callback) 
 }
 
 void MQTTClient::set_has_serial_data(const bool has_data) {
-    has_serial_data_ = has_data;
+    has_serial_data_.store(has_data);
 }
 
 uint32_t MQTTClient::get_current_frequency() const {
-    return current_frequency_;
+    return current_frequency_.load();
 }
 
 void MQTTClient::mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {

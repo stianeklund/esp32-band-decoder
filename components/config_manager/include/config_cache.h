@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 
 // Forward declarations
 struct antenna_switch_config;
@@ -9,15 +10,19 @@ class ConfigManager;
 
 /**
  * @brief Base class providing cached configuration access to reduce ConfigManager calls
- * 
+ *
  * This class should be inherited by components that frequently access configuration.
  * It caches the configuration locally and only refreshes when the config version changes.
+ *
+ * Thread-safety: Cache refresh is protected by a mutex to prevent data races during
+ * concurrent access from multiple tasks.
  */
 class ConfigCache {
 protected:
     mutable antenna_switch_config_t* cached_config_;
     mutable std::atomic<uint32_t> cached_version_{0};
     mutable std::atomic<bool> cache_valid_{false};
+    mutable std::mutex cache_mutex_;  // Protects cache refresh operations
 
     /**
      * @brief Update the cached configuration if needed
