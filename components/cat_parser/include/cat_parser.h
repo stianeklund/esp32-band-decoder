@@ -102,6 +102,8 @@ private:
     static constexpr int SERIAL_DATA_TIMEOUT_S = 5;  // 5 second timeout
     std::chrono::steady_clock::time_point last_serial_data_time;
     std::chrono::steady_clock::time_point last_valid_command_time;  // Track when we last parsed a valid CAT command
+    std::chrono::steady_clock::time_point last_ai_query_time;  // Track when we last sent an AI query
+    static constexpr int AI_QUERY_INTERVAL_S = 5;  // Retry AI query every 5 seconds if no response
     bool radio_provides_auto_updates_{false}; // True if Kenwood AI (Auto Information) from the radio is ON
 };
 

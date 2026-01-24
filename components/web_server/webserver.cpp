@@ -355,6 +355,9 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     const cJSON *ai_mode = cJSON_GetObjectItem(root, "ai_mode");
     new_config.ai_mode = cJSON_IsTrue(ai_mode);
 
+    const cJSON *rx_antenna_enabled = cJSON_GetObjectItem(root, "rx_antenna_enabled");
+    new_config.rx_antenna_enabled = cJSON_IsTrue(rx_antenna_enabled);
+
     const cJSON *allow_concurrent_data_sources= cJSON_GetObjectItem(root, "allow_concurrent_data_sources");
     new_config.allow_concurrent_data_sources = cJSON_IsTrue(allow_concurrent_data_sources);
 
