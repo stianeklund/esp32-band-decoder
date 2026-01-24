@@ -61,6 +61,7 @@ public:
     static esp_err_t reset_wifi_handler(httpd_req_t *req);
     static esp_err_t relay_status_handler(httpd_req_t *req);
     static esp_err_t relay_control_handler(httpd_req_t *req);
+    static esp_err_t set_rx_antenna_handler(httpd_req_t *req);
     static esp_err_t antenna_switch_handler(httpd_req_t *req);
     static esp_err_t config_export_handler(httpd_req_t *req);
     static esp_err_t config_import_handler(httpd_req_t *req);

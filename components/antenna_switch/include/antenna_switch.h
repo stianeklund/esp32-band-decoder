@@ -37,6 +37,7 @@ typedef struct band_config {
     uint32_t start_freq;
     uint32_t end_freq;
     bool antenna_ports[MAX_ANTENNA_PORTS];
+    uint8_t rx_antenna_port;  // 1-based relay ID for separate RX antenna, 0 = use TX antenna
 } band_config_t;
 
 // Struct for the base configuration data stored in the "config_base" NVS blob
@@ -45,9 +46,10 @@ typedef struct {
     bool ai_mode;                       // Enable Auto Information (AI2) mode
     bool allow_concurrent_data_sources; // This field is part of the base config
     bool websocket_enabled;             // Enable/disable WebSocket server
+    bool rx_antenna_enabled;            // Enable separate RX antenna feature
     uint8_t num_bands;                  // Actual number of bands used, up to MAX_BANDS
     uint8_t num_antenna_ports;          // Actual number of antenna ports used, up to MAX_ANTENNA_PORTS
-    radio_operation_mode_t radio_operation_mode; 
+    radio_operation_mode_t radio_operation_mode;
     uint8_t last_used_antenna[2][MAX_BANDS]; // Stores 1-based relay_id
 } base_nvs_config_data_t;
 
@@ -55,7 +57,8 @@ typedef struct antenna_switch_config {
     // Fields managed by base_nvs_config_data_t for NVS persistence
     bool auto_mode;
     bool ai_mode;                       // Enable Auto Information (AI2) mode
-    bool allow_concurrent_data_sources; 
+    bool allow_concurrent_data_sources;
+    bool rx_antenna_enabled;            // Enable separate RX antenna feature
     uint8_t num_bands;
     uint8_t num_antenna_ports;
     radio_operation_mode_t radio_operation_mode;

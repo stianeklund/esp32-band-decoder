@@ -214,11 +214,17 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
     cJSON_AddStringToObject(root, "data_source", data_source_a);
     
     std::vector<int> available_antennas_a;
+    int current_band_index_a = -1;
+    const char* current_band_name_a = "";
+    uint8_t rx_antenna_a = 0;
 
     if (current_freq > 0) { // Only if frequency is known for Radio A
         for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
             const auto &band_cfg = config.bands[0][band_idx]; // Radio A band config (bands[0])
             if (current_freq >= band_cfg.start_freq && current_freq <= band_cfg.end_freq) {
+                current_band_index_a = band_idx;
+                current_band_name_a = band_cfg.description;
+                rx_antenna_a = band_cfg.rx_antenna_port;
                 // Check physical ports 1-8 (indices 0-7 in antenna_ports array)
                 for (int port_idx = 0; port_idx < RelayController::RELAYS_PER_RADIO; port_idx++) {
                     if (port_idx < MAX_ANTENNA_PORTS && band_cfg.antenna_ports[port_idx]) {
@@ -234,6 +240,16 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
         cJSON_AddItemToArray(antennas_a_json, cJSON_CreateNumber(antenna));
     }
     cJSON_AddItemToObject(root, "available_antennas", antennas_a_json); // Keep original name for Radio A
+
+    // RX Antenna feature fields
+    cJSON_AddNumberToObject(root, "current_band_index", current_band_index_a);
+    cJSON_AddStringToObject(root, "current_band_name", current_band_name_a);
+    cJSON_AddBoolToObject(root, "rx_antenna_enabled", config.rx_antenna_enabled);
+    cJSON_AddNumberToObject(root, "rx_antenna", rx_antenna_a);
+    // Determine if currently using RX antenna (not transmitting and RX antenna is active)
+    bool is_rx_mode = config.rx_antenna_enabled && !is_transmitting && rx_antenna_a != 0 &&
+                      active_antenna_a_num == static_cast<int>(rx_antenna_a);
+    cJSON_AddBoolToObject(root, "is_rx_mode", is_rx_mode);
 
     // Add Radio B status if applicable
     if (config.radio_operation_mode != RADIO_OP_MODE_SINGLE_A) {
@@ -852,6 +868,111 @@ esp_err_t WebServer::relay_control_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+esp_err_t WebServer::set_rx_antenna_handler(httpd_req_t *req) {
+    char buf[128];
+    int ret = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    if (ret <= 0) {
+        ESP_LOGE(TAG, "Failed to receive set-rx-antenna request");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to receive request");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to parse JSON for set-rx-antenna");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    const cJSON *relay = cJSON_GetObjectItem(root, "relay");
+    const cJSON *radio = cJSON_GetObjectItem(root, "radio");
+    const cJSON *band_index = cJSON_GetObjectItem(root, "band_index");
+    const cJSON *clear = cJSON_GetObjectItem(root, "clear");
+
+    // Validate required fields
+    if (!cJSON_IsNumber(relay) || !cJSON_IsString(radio) || !cJSON_IsNumber(band_index)) {
+        ESP_LOGE(TAG, "Missing or invalid required fields in set-rx-antenna request");
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing relay, radio, or band_index");
+        return ESP_FAIL;
+    }
+
+    const int relay_num = relay->valueint;
+    const char* radio_str = radio->valuestring;
+    const int band_idx = band_index->valueint;
+    const bool clear_rx = cJSON_IsBool(clear) && cJSON_IsTrue(clear);
+
+    // Determine radio index (0 = A, 1 = B)
+    int radio_idx = 0;
+    if (strcmp(radio_str, "B") == 0 || strcmp(radio_str, "b") == 0) {
+        radio_idx = 1;
+    }
+
+    // Validate band index
+    const auto& config = AntennaSwitch::instance().get_config_ref();
+    if (band_idx < 0 || band_idx >= config.num_bands) {
+        ESP_LOGE(TAG, "Invalid band_index %d (num_bands=%d)", band_idx, config.num_bands);
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid band_index");
+        return ESP_FAIL;
+    }
+
+    // Validate relay number (1-8 for Radio A, 9-16 for Radio B)
+    const int relay_min = radio_idx == 0 ? 1 : 9;
+    const int relay_max = radio_idx == 0 ? 8 : 16;
+    if (!clear_rx && (relay_num < relay_min || relay_num > relay_max)) {
+        ESP_LOGE(TAG, "Invalid relay %d for radio %s (must be %d-%d)", relay_num, radio_str, relay_min, relay_max);
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid relay for radio");
+        return ESP_FAIL;
+    }
+
+    // Get a mutable copy of the config
+    antenna_switch_config_t new_config;
+    AntennaSwitch::instance().get_config(&new_config);
+
+    // Set or clear the RX antenna port
+    const uint8_t new_rx_port = clear_rx ? 0 : static_cast<uint8_t>(relay_num);
+    new_config.bands[radio_idx][band_idx].rx_antenna_port = new_rx_port;
+
+    // Save the updated config
+    esp_err_t err = AntennaSwitch::instance().set_config(&new_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save RX antenna config: %s", esp_err_to_name(err));
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save config");
+        return ESP_FAIL;
+    }
+
+    // Build response
+    cJSON *response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "success", true);
+    cJSON_AddStringToObject(response, "band", new_config.bands[radio_idx][band_idx].description);
+    cJSON_AddNumberToObject(response, "rx_antenna", new_rx_port);
+
+    char message[64];
+    if (clear_rx) {
+        snprintf(message, sizeof(message), "RX antenna cleared for %s",
+                 new_config.bands[radio_idx][band_idx].description);
+    } else {
+        snprintf(message, sizeof(message), "RX antenna for %s set to Relay %d",
+                 new_config.bands[radio_idx][band_idx].description, relay_num);
+    }
+    cJSON_AddStringToObject(response, "message", message);
+
+    char *json_string = cJSON_Print(response);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_string);
+
+    ESP_LOGI(TAG, "%s", message);
+
+    free(json_string);
+    cJSON_Delete(response);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
 esp_err_t WebServer::antenna_switch_handler(httpd_req_t *req) {
     ESP_LOGD(TAG, "Antenna switch request received");
 
@@ -1414,6 +1535,13 @@ esp_err_t WebServer::register_uri_handlers() const
         .user_ctx = nullptr
     };
 
+    static constexpr httpd_uri_t set_rx_antenna = {
+        .uri = "/relay/set-rx-antenna",
+        .method = HTTP_POST,
+        .handler = set_rx_antenna_handler,
+        .user_ctx = nullptr
+    };
+
     static constexpr httpd_uri_t antenna_switch = {
         .uri = "/api/antenna/switch",
         .method = HTTP_POST,
@@ -1518,6 +1646,12 @@ esp_err_t WebServer::register_uri_handlers() const
     ret = httpd_register_uri_handler(m_server, &relay_control);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register relay control handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = httpd_register_uri_handler(m_server, &set_rx_antenna);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register set-rx-antenna handler: %s", esp_err_to_name(ret));
         return ret;
     }
 

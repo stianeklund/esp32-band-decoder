@@ -357,25 +357,39 @@ esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
         const auto &band_config_for_radio = config.bands[radio_idx_numeric][i];
         if (frequency >= band_config_for_radio.start_freq &&
             frequency <= band_config_for_radio.end_freq) {
-            
-            int target_relay_id = 0;
-            const uint8_t preferred_antenna = config.last_used_antenna[radio_idx_numeric][i];
 
-            // Check if preferred antenna is valid (1-based) and configured for this band
-            if (preferred_antenna != 0 && 
-                preferred_antenna <= config.num_antenna_ports &&
-                band_config_for_radio.antenna_ports[preferred_antenna - 1]) {
-                target_relay_id = preferred_antenna;
-                ESP_LOGD(TAG, "Using preferred antenna %d for Radio %c, Band %d (Freq: %lu Hz)",
+            int target_relay_id = 0;
+
+            // Check if RX antenna feature is enabled and we're NOT transmitting
+            const bool use_rx_antenna = config.rx_antenna_enabled &&
+                                        !is_radio_a_transmitting_effective() &&
+                                        band_config_for_radio.rx_antenna_port != 0;
+
+            if (use_rx_antenna) {
+                // Use the configured RX antenna for this band
+                target_relay_id = band_config_for_radio.rx_antenna_port;
+                ESP_LOGD(TAG, "RX mode: Using RX antenna %d for Radio %c, Band %d (Freq: %lu Hz)",
                          target_relay_id, (current_radio_context == RadioID::A ? 'A' : 'B'), i, frequency);
             } else {
-                // Fallback: Find the first available antenna port for this band
-                for (int j = 0; j < config.num_antenna_ports; j++) { // j is port_index (0-based)
-                    if (band_config_for_radio.antenna_ports[j]) {
-                        target_relay_id = j + 1; // relay_id is 1-based
-                        ESP_LOGD(TAG, "Using first available antenna %d for Radio %c, Band %d (Freq: %lu Hz)",
-                                 target_relay_id, (current_radio_context == RadioID::A ? 'A' : 'B'), i, frequency);
-                        break;
+                // Use TX antenna (existing logic)
+                const uint8_t preferred_antenna = config.last_used_antenna[radio_idx_numeric][i];
+
+                // Check if preferred antenna is valid (1-based) and configured for this band
+                if (preferred_antenna != 0 &&
+                    preferred_antenna <= config.num_antenna_ports &&
+                    band_config_for_radio.antenna_ports[preferred_antenna - 1]) {
+                    target_relay_id = preferred_antenna;
+                    ESP_LOGD(TAG, "Using preferred TX antenna %d for Radio %c, Band %d (Freq: %lu Hz)",
+                             target_relay_id, (current_radio_context == RadioID::A ? 'A' : 'B'), i, frequency);
+                } else {
+                    // Fallback: Find the first available antenna port for this band
+                    for (int j = 0; j < config.num_antenna_ports; j++) { // j is port_index (0-based)
+                        if (band_config_for_radio.antenna_ports[j]) {
+                            target_relay_id = j + 1; // relay_id is 1-based
+                            ESP_LOGD(TAG, "Using first available TX antenna %d for Radio %c, Band %d (Freq: %lu Hz)",
+                                     target_relay_id, (current_radio_context == RadioID::A ? 'A' : 'B'), i, frequency);
+                            break;
+                        }
                     }
                 }
             }
@@ -387,8 +401,8 @@ esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
                 return set_relay_for_antenna(target_relay_id, i, current_radio_context, true);
             }
 
-            ESP_LOGW(TAG, "No available/preferred antenna port found for Radio %c, Band %d (Freq: %lu Hz, Preferred: %d)",
-                     (current_radio_context == RadioID::A ? 'A' : 'B'), i, frequency, preferred_antenna);
+            ESP_LOGW(TAG, "No available/preferred antenna port found for Radio %c, Band %d (Freq: %lu Hz)",
+                     (current_radio_context == RadioID::A ? 'A' : 'B'), i, frequency);
             return ESP_OK; // No suitable antenna, but not an error in processing
         }
     }
@@ -450,6 +464,52 @@ void AntennaSwitch::on_radio_a_tx_start() {
         return;
     }
 
+    const auto& config = get_cached_config(); // Use cached config
+
+    // RX Antenna feature: Switch from RX to TX antenna if currently on RX antenna
+    if (config.rx_antenna_enabled && config.auto_mode) {
+        // Find current band for Radio A
+        const uint32_t current_freq = cat_parser_get_frequency();
+        if (current_freq > 0) {
+            for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
+                const auto& band = config.bands[static_cast<size_t>(RadioID::A)][band_idx];
+                if (current_freq >= band.start_freq && current_freq <= band.end_freq) {
+                    // Check if RX antenna is configured and we're currently using it
+                    if (band.rx_antenna_port != 0) {
+                        const int current_relay = get_active_relay_for_radio(RadioID::A);
+                        if (current_relay == static_cast<int>(band.rx_antenna_port)) {
+                            // We're on the RX antenna, need to switch to TX antenna
+                            int tx_relay_id = 0;
+                            const uint8_t preferred = config.last_used_antenna[static_cast<size_t>(RadioID::A)][band_idx];
+                            if (preferred != 0 && preferred <= config.num_antenna_ports &&
+                                band.antenna_ports[preferred - 1]) {
+                                tx_relay_id = preferred;
+                            } else {
+                                // Find first available TX antenna
+                                for (int j = 0; j < config.num_antenna_ports; j++) {
+                                    if (band.antenna_ports[j]) {
+                                        tx_relay_id = j + 1;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (tx_relay_id != 0 && tx_relay_id != current_relay) {
+                                ESP_LOGI(TAG, "PTT: Switching from RX ant %d to TX ant %d for band %s",
+                                         current_relay, tx_relay_id, band.description);
+                                if (relay_controller_) {
+                                    relay_controller_->set_relay(current_relay, false);
+                                    relay_controller_->set_relay(tx_relay_id, true);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     const int active_relay_radio_a = get_active_relay_for_radio(RadioID::A);
 
     if (active_relay_radio_a == 0) {
@@ -472,8 +532,6 @@ void AntennaSwitch::on_radio_a_tx_start() {
         esp_timer_stop(radio_b_restore_delay_timer_);
         // pre_tx_active_relay_radio_b_ is not cleared here; it might be needed if this TX cycle also stops.
     }
-
-    const auto& config = get_cached_config(); // Use cached config
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
         ESP_LOGV(TAG, "Single Radio A mode, no interlock action needed for Radio B.");
         xSemaphoreGive(interlock_mutex_);
@@ -529,8 +587,37 @@ void AntennaSwitch::on_radio_a_tx_stop() {
     ESP_LOGD(TAG, "Radio A TX: HW PTT A: %s, CAT TX A: %s. Scheduling Radio B state restoration if applicable.",
              hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
              cat_tx_a_active_.load(std::memory_order_relaxed) ? "ON" : "OFF");
-    
+
     const auto& config = get_cached_config(); // Use cached config
+
+    // RX Antenna feature: Switch back to RX antenna after transmission ends
+    if (config.rx_antenna_enabled && config.auto_mode) {
+        const uint32_t current_freq = cat_parser_get_frequency();
+        if (current_freq > 0) {
+            for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
+                const auto& band = config.bands[static_cast<size_t>(RadioID::A)][band_idx];
+                if (current_freq >= band.start_freq && current_freq <= band.end_freq) {
+                    // Check if RX antenna is configured
+                    if (band.rx_antenna_port != 0) {
+                        const int current_relay = get_active_relay_for_radio(RadioID::A);
+                        const int rx_relay = static_cast<int>(band.rx_antenna_port);
+
+                        // Only switch if not already on RX antenna
+                        if (current_relay != rx_relay && current_relay != 0) {
+                            ESP_LOGI(TAG, "PTT release: Switching back to RX ant %d from TX ant %d for band %s",
+                                     rx_relay, current_relay, band.description);
+                            if (relay_controller_) {
+                                relay_controller_->set_relay(current_relay, false);
+                                relay_controller_->set_relay(rx_relay, true);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
         ESP_LOGD(TAG, "Single Radio A mode, no interlock restoration needed for Radio B.");
         xSemaphoreGive(interlock_mutex_);

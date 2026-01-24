@@ -197,6 +197,7 @@ esp_err_t ConfigManager::init() { // Made non-const
         current_config_->num_bands = 8;
         current_config_->auto_mode = true;
         current_config_->ai_mode = false;
+        current_config_->rx_antenna_enabled = false;
         current_config_->num_antenna_ports = 6;
         current_config_->uart_baud_rate = 57600;
         current_config_->uart_parity = UART_PARITY_DISABLE;
@@ -258,6 +259,7 @@ esp_err_t ConfigManager::init() { // Made non-const
                 for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
                     band[i].antenna_ports[j] = false; // No ports enabled by default
                 }
+                band[i].rx_antenna_port = 0; // No separate RX antenna by default
             }
             // Initialize any remaining bands beyond the predefined ones
             for (int i = 10; i < MAX_BANDS; ++i) {
@@ -268,6 +270,7 @@ esp_err_t ConfigManager::init() { // Made non-const
                 for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
                     band[i].antenna_ports[j] = false;
                 }
+                band[i].rx_antenna_port = 0; // No separate RX antenna by default
             }
         }
 
@@ -310,6 +313,7 @@ esp_err_t ConfigManager::reset_to_defaults() {
     defaultConfig.num_bands = 8;
     defaultConfig.auto_mode = true;
     defaultConfig.ai_mode = false;
+    defaultConfig.rx_antenna_enabled = false;
     defaultConfig.num_antenna_ports = 6;
     defaultConfig.uart_baud_rate = 57600;
     defaultConfig.uart_parity = UART_PARITY_DISABLE;
@@ -374,6 +378,7 @@ esp_err_t ConfigManager::reset_to_defaults() {
             for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
                 band_radio_set[i].antenna_ports[j] = false; // No ports enabled by default
             }
+            band_radio_set[i].rx_antenna_port = 0; // No separate RX antenna by default
         }
         // Initialize any remaining bands (if MAX_BANDS > 10) to a generic state
         for (int i = 10; i < MAX_BANDS; ++i) {
@@ -384,6 +389,7 @@ esp_err_t ConfigManager::reset_to_defaults() {
             for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
                 band_radio_set[i].antenna_ports[j] = false;
             }
+            band_radio_set[i].rx_antenna_port = 0; // No separate RX antenna by default
         }
     }
 
@@ -454,6 +460,7 @@ esp_err_t ConfigManager::save_to_nvs() const {
     base_data_to_save.ai_mode = current_config_->ai_mode;
     base_data_to_save.allow_concurrent_data_sources = current_config_->allow_concurrent_data_sources;
     base_data_to_save.websocket_enabled = current_config_->websocket_enabled;
+    base_data_to_save.rx_antenna_enabled = current_config_->rx_antenna_enabled;
     base_data_to_save.num_bands = current_config_->num_bands;
     base_data_to_save.num_antenna_ports = current_config_->num_antenna_ports;
     base_data_to_save.radio_operation_mode = current_config_->radio_operation_mode;
@@ -673,11 +680,12 @@ esp_err_t ConfigManager::load_from_nvs() const {
             current_config_->ai_mode = loaded_base_data.ai_mode;
             current_config_->allow_concurrent_data_sources = loaded_base_data.allow_concurrent_data_sources;
             current_config_->websocket_enabled = loaded_base_data.websocket_enabled;
+            current_config_->rx_antenna_enabled = loaded_base_data.rx_antenna_enabled;
             current_config_->num_bands = loaded_base_data.num_bands;
             current_config_->num_antenna_ports = loaded_base_data.num_antenna_ports;
             current_config_->radio_operation_mode = loaded_base_data.radio_operation_mode;
             memcpy(current_config_->last_used_antenna, loaded_base_data.last_used_antenna, sizeof(current_config_->last_used_antenna));
-            ESP_LOGD(TAG, "Base config (config_base) loaded successfully. Num_bands: %d, Num_ports: %d", current_config_->num_bands, current_config_->num_antenna_ports);
+            ESP_LOGD(TAG, "Base config (config_base) loaded successfully. Num_bands: %d, Num_ports: %d, RX antenna: %s", current_config_->num_bands, current_config_->num_antenna_ports, current_config_->rx_antenna_enabled ? "enabled" : "disabled");
         } else {
             ESP_LOGE(TAG, "Base config (config_base) size mismatch. Expected %d, got %d. Using defaults for base config.", sizeof(base_nvs_config_data_t), base_data_size);
             base_load_err = ESP_ERR_NVS_INVALID_LENGTH; 
@@ -751,6 +759,7 @@ esp_err_t ConfigManager::load_from_nvs() const {
                     for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
                         current_config_->bands[r][i].antenna_ports[j] = (j == 0);
                     }
+                    current_config_->bands[r][i].rx_antenna_port = 0; // No separate RX antenna by default
                 } else { // For bands beyond the 10 defaults, set some generic default
                     snprintf(current_config_->bands[r][i].description, sizeof(current_config_->bands[r][i].description), "Band %d", i + 1);
                     current_config_->bands[r][i].start_freq = 0;
@@ -758,6 +767,7 @@ esp_err_t ConfigManager::load_from_nvs() const {
                     for (int j = 0; j < MAX_ANTENNA_PORTS; ++j) {
                         current_config_->bands[r][i].antenna_ports[j] = false;
                     }
+                    current_config_->bands[r][i].rx_antenna_port = 0; // No separate RX antenna by default
                 }
             }
         }
@@ -1018,6 +1028,7 @@ esp_err_t ConfigManager::export_config_to_json(char **json_string) const {
     // Basic configuration
     cJSON_AddBoolToObject(config, "auto_mode", current_config_->auto_mode);
     cJSON_AddBoolToObject(config, "ai_mode", current_config_->ai_mode);
+    cJSON_AddBoolToObject(config, "rx_antenna_enabled", current_config_->rx_antenna_enabled);
     cJSON_AddBoolToObject(config, "allow_concurrent_data_sources", current_config_->allow_concurrent_data_sources);
     cJSON_AddNumberToObject(config, "num_bands", current_config_->num_bands);
     cJSON_AddNumberToObject(config, "num_antenna_ports", current_config_->num_antenna_ports);
@@ -1198,6 +1209,14 @@ esp_err_t ConfigManager::import_config_from_json(const char *json_string, bool v
     } else {
         ESP_LOGW(TAG, "ai_mode field not found or invalid, defaulting to false");
         temp_config.ai_mode = false;
+    }
+
+    cJSON *rx_antenna_enabled = cJSON_GetObjectItem(config, "rx_antenna_enabled");
+    if (cJSON_IsBool(rx_antenna_enabled)) {
+        temp_config.rx_antenna_enabled = cJSON_IsTrue(rx_antenna_enabled);
+    } else {
+        ESP_LOGW(TAG, "rx_antenna_enabled field not found or invalid, defaulting to false");
+        temp_config.rx_antenna_enabled = false;
     }
 
     cJSON *allow_concurrent = cJSON_GetObjectItem(config, "allow_concurrent_data_sources");
