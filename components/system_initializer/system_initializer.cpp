@@ -104,14 +104,9 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
     ESP_RETURN_ON_ERROR(InputManager::instance().init(), TAG, "Failed to initialize input manager");
     ESP_RETURN_ON_ERROR(cat_parser_init(), TAG, "Failed to initialize CAT parser");
     
-    // Probe and configure AI mode if enabled
-    ESP_LOGI(TAG, "Probing AI mode configuration...");
-    if (esp_err_t ai_probe_ret = CatParser::instance().probe_and_configure_ai_mode(); ai_probe_ret != ESP_OK) {
-        ESP_LOGW(TAG, "AI mode probing failed: %s", esp_err_to_name(ai_probe_ret));
-        // Continue initialization as AI mode is optional
-    } else {
-        ESP_LOGI(TAG, "AI mode probe completed successfully.");
-    }
+    // Request async AI mode probe (non-blocking, will be handled by UART task)
+    ESP_LOGI(TAG, "Requesting async AI mode probe...");
+    CatParser::instance().request_ai_probe();
 
     // Initialize MQTT client configuration (this does not connect yet).
     // The MQTTClient::init() method itself handles the case where MQTT might be disabled
