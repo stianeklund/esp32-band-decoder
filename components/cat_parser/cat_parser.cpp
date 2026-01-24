@@ -269,6 +269,12 @@ void CatParser::uart_task() {
                     now - last_serial_data_time).count() > SERIAL_DATA_TIMEOUT_S) {
                 MQTTClient::instance().set_has_serial_data(false);
             }
+
+            // Check for async AI probe request (runs in UART task context, non-blocking for webserver)
+            if (ai_probe_requested_.exchange(false)) {
+                ESP_LOGI(TAG, "Processing async AI probe request");
+                probe_and_configure_ai_mode();
+            }
         }
         taskYIELD();
     }

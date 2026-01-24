@@ -692,13 +692,10 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
         ESP_LOGW(TAG, "Failed to update CAT parser configuration: %s", esp_err_to_name(err));
     }
 
-    // Trigger AI mode probing if ai_mode is enabled
+    // Request async AI mode probing if ai_mode is enabled (non-blocking)
     if (new_config.auto_mode && new_config.ai_mode) {
-        ESP_LOGI(TAG, "AI mode enabled in new configuration, triggering probe");
-        esp_err_t ai_probe_ret = CatParser::instance().probe_and_configure_ai_mode();
-        if (ai_probe_ret != ESP_OK) {
-            ESP_LOGW(TAG, "AI mode probing failed after config update: %s", esp_err_to_name(ai_probe_ret));
-        }
+        ESP_LOGI(TAG, "AI mode enabled in new configuration, requesting async probe");
+        CatParser::instance().request_ai_probe();
     }
 
     // Use chunked sending for the success response

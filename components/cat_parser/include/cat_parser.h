@@ -46,6 +46,10 @@ public:
     esp_err_t send_to_radio(const char* command);
     esp_err_t probe_and_configure_ai_mode();
 
+    // Request async AI mode probe (non-blocking, executed by UART task)
+    void request_ai_probe() { ai_probe_requested_.store(true); }
+    bool is_ai_probe_pending() const { return ai_probe_requested_.load(); }
+
     // Legacy C-style interface for backward compatibility
     static CatParser &instance();
 
@@ -94,6 +98,7 @@ private:
 
     // static CatParser *instance_; // Removed for pure Meyers' singleton
     std::atomic<bool> shutdown_requested;
+    std::atomic<bool> ai_probe_requested_{false};  // Request async AI probe from UART task
     static constexpr int SERIAL_DATA_TIMEOUT_S = 5;  // 5 second timeout
     std::chrono::steady_clock::time_point last_serial_data_time;
     std::chrono::steady_clock::time_point last_valid_command_time;  // Track when we last parsed a valid CAT command
