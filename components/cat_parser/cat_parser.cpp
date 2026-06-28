@@ -304,6 +304,20 @@ void CatParser::uart0_to_uart2_task()
 }
 
 esp_err_t CatParser::dispatch_one_command(std::string_view command_view) {
+    // TEMP DIAGNOSTIC (transverter detection): log ONLY transverter-related CAT commands so we can
+    // see whether they cross this serial line when the XVTR button is pressed, and with what value,
+    // without the FA/FB/IF flood. Matches EX* (covers EX056/EX085/EX059/EX060), AN*, XO* — all valid
+    // TS-590SG CAT commands. Grep the monitor for "[CATRAW]" while toggling XVTR. Remove once the
+    // detection approach is settled.
+    {
+        const auto starts_with = [command_view](const std::string_view p) {
+            return command_view.size() >= p.size() && command_view.substr(0, p.size()) == p;
+        };
+        if (starts_with("EX") || starts_with("AN") || starts_with("XO")) {
+            ESP_LOGI(TAG, "[CATRAW] %.*s", static_cast<int>(command_view.length()), command_view.data());
+        }
+    }
+
     if (command_view.length() < 2) { // Command must be at least 2 chars
         if (!command_view.empty()) {
             ESP_LOGD(TAG, "Short command received (length < 2): %.*s", static_cast<int>(command_view.length()), command_view.data());
