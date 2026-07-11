@@ -469,7 +469,15 @@ void AntennaSwitch::on_radio_a_tx_start() {
         return;
     }
 
-    const auto& config = get_cached_config(); // Use cached config
+    // Heap-backed snapshot keeps the ~1.85KB struct off the stack (may run on a shallow task).
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in on_radio_a_tx_start");
+        xSemaphoreGive(interlock_mutex_);
+        return;
+    }
+    *config_snapshot = get_cached_config(); // Use cached config
+    const auto& config = *config_snapshot;
 
     // RX Antenna feature: Switch from RX to TX antenna if currently on RX antenna
     if (config.rx_antenna_enabled && config.auto_mode) {
@@ -593,7 +601,15 @@ void AntennaSwitch::on_radio_a_tx_stop() {
              hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
              cat_tx_a_active_.load(std::memory_order_relaxed) ? "ON" : "OFF");
 
-    const auto& config = get_cached_config(); // Use cached config
+    // Heap-backed snapshot keeps the ~1.85KB struct off the stack (may run on a shallow task).
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in on_radio_a_tx_stop");
+        xSemaphoreGive(interlock_mutex_);
+        return;
+    }
+    *config_snapshot = get_cached_config(); // Use cached config
+    const auto& config = *config_snapshot;
 
     // RX Antenna feature: Switch back to RX antenna after transmission ends
     if (config.rx_antenna_enabled && config.auto_mode) {
@@ -641,7 +657,7 @@ void AntennaSwitch::on_radio_a_tx_stop() {
             pre_tx_active_relay_radio_b_ = 0; // Abort restoration for this stored relay
         } else {
             if (radio_b_restore_delay_timer_ != nullptr) {
-                uint16_t current_delay_ms = ConfigManager::instance().get_radio_restore_delay_ms();
+                uint16_t current_delay_ms = config.radio_restore_delay_ms; // reuse snapshot above
                 if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback for logging safety
                 ESP_LOGD(TAG, "Radio A TX stop: Scheduling Radio B relay %d restoration in %u ms.", pre_tx_active_relay_radio_b_, current_delay_ms);
                 if (esp_timer_start_once(radio_b_restore_delay_timer_, current_delay_ms * 1000) != ESP_OK) { // Convert ms to microseconds
@@ -683,8 +699,8 @@ void AntennaSwitch::radio_b_restore_timer_callback(void* arg) {
             return false;
         }
 
-        const auto& cached_cfg = self->get_cached_config();
-        uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
+        // Single scalar read via accessor; no full-struct copy on the esp_timer task stack.
+        uint16_t current_delay_ms = ConfigManager::instance().get_radio_restore_delay_ms();
         if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
 
         uint16_t reschedule_delay_ms = current_delay_ms / 2;
@@ -809,8 +825,16 @@ void AntennaSwitch::on_radio_b_tx_start() {
         esp_timer_stop(radio_a_restore_delay_timer_);
     }
     
-    const auto& config = get_cached_config(); // Use cached config
-   
+    // Heap-backed snapshot keeps the ~1.85KB struct off the stack (may run on a shallow task).
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in on_radio_b_tx_start");
+        xSemaphoreGive(interlock_mutex_);
+        return;
+    }
+    *config_snapshot = get_cached_config(); // Use cached config
+    const auto& config = *config_snapshot;
+
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
         ESP_LOGW(TAG, "Radio B TX reported in SINGLE_A mode. This is unexpected.");
         xSemaphoreGive(interlock_mutex_);
@@ -859,7 +883,17 @@ void AntennaSwitch::on_radio_b_tx_stop() {
     ESP_LOGD(TAG, "Radio B TX: HW PTT B: %s. Scheduling Radio A state restoration if applicable.",
              hw_ptt_b_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE");
 
-    if (const auto& config = get_cached_config(); config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
+    // Heap-backed snapshot keeps the ~1.85KB struct off the stack (may run on a shallow task).
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in on_radio_b_tx_stop");
+        xSemaphoreGive(interlock_mutex_);
+        return;
+    }
+    *config_snapshot = get_cached_config();
+    const auto& config = *config_snapshot;
+
+    if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
         xSemaphoreGive(interlock_mutex_);
         return;
     }
@@ -875,8 +909,7 @@ void AntennaSwitch::on_radio_b_tx_stop() {
              pre_tx_active_relay_radio_a_ = 0;
         } else {
             if (radio_a_restore_delay_timer_ != nullptr) {
-                const auto& cached_cfg_for_delay = get_cached_config();
-                uint16_t current_delay_ms = cached_cfg_for_delay.radio_restore_delay_ms;
+                uint16_t current_delay_ms = config.radio_restore_delay_ms; // reuse snapshot above
 
                 if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
                 ESP_LOGD(TAG, "Radio B TX stop: Scheduling Radio A relay %d restoration in %u ms.", pre_tx_active_relay_radio_a_, current_delay_ms);
@@ -918,8 +951,8 @@ void AntennaSwitch::radio_a_restore_timer_callback(void* arg) {
             return false;
         }
 
-        const auto& cached_cfg = self->get_cached_config();
-        uint16_t current_delay_ms = cached_cfg.radio_restore_delay_ms;
+        // Single scalar read via accessor; no full-struct copy on the esp_timer task stack.
+        uint16_t current_delay_ms = ConfigManager::instance().get_radio_restore_delay_ms();
         if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200;
 
         uint16_t reschedule_delay_ms = current_delay_ms / 2;
@@ -1092,7 +1125,14 @@ esp_err_t AntennaSwitch::update_last_used_antenna_preference(const int activated
 // Helper to attempt restoration of relays deselected by auto-resolved port conflicts
 void AntennaSwitch::attempt_restore_auto_resolved_radio_a_relay() {
     // Check if conditions for auto-restoration are met
-    if (const auto& config = get_cached_config(); config.radio_operation_mode != RADIO_OP_MODE_CONCURRENT_AB ||
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in attempt_restore_auto_resolved_radio_a_relay");
+        return;
+    }
+    *config_snapshot = get_cached_config();
+    const auto& config = *config_snapshot;
+    if (config.radio_operation_mode != RADIO_OP_MODE_CONCURRENT_AB ||
         !config.interlock_auto_resolves_conflict ||
         !config.auto_restore_on_conflict_resolution) {
         // If conditions are not met, and a relay was stored, log and clear it.
@@ -1145,7 +1185,14 @@ void AntennaSwitch::attempt_restore_auto_resolved_radio_a_relay() {
 }
 
 void AntennaSwitch::attempt_restore_auto_resolved_radio_b_relay() {
-    if (const auto& config = get_cached_config(); config.radio_operation_mode != RADIO_OP_MODE_CONCURRENT_AB ||
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in attempt_restore_auto_resolved_radio_b_relay");
+        return;
+    }
+    *config_snapshot = get_cached_config();
+    const auto& config = *config_snapshot;
+    if (config.radio_operation_mode != RADIO_OP_MODE_CONCURRENT_AB ||
         !config.interlock_auto_resolves_conflict ||
         !config.auto_restore_on_conflict_resolution) {
         if (auto_resolved_conflict_prev_b_relay_ != 0) {
@@ -1229,8 +1276,16 @@ esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
         const uint32_t current_frequency = CatParser::instance().get_frequency();
 
         if (current_frequency > 0) {
-            // Look up which band this frequency belongs to
-            const auto& config = get_cached_config();
+            // Look up which band this frequency belongs to (heap-backed snapshot; keeps
+            // the ~1.85KB struct off the stack). Preference detection is best-effort: on
+            // allocation failure, set the relay without band context rather than failing.
+            const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+            if (!config_snapshot) {
+                ESP_LOGE(TAG, "Failed to allocate config snapshot in set_relay; skipping band preference detection");
+                return set_relay_for_antenna(relay_id, band_number_for_preference, radio_context, state);
+            }
+            *config_snapshot = get_cached_config();
+            const auto& config = *config_snapshot;
             const auto radio_idx = static_cast<size_t>(RadioID::A);
 
             for (int i = 0; i < config.num_bands; i++) {
