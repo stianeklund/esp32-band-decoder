@@ -1,0 +1,11 @@
+# cJSON and esp-mqtt were removed from ESP-IDF core in v6.0 and are now managed
+# components. This component's PUBLIC header (my_mqtt_client.h) includes both
+# "cJSON.h" and "mqtt_client.h", so both dependencies must be public so that
+# consumers of this header (e.g. websocket_server) compile.
+dependencies:
+  espressif/cjson:
+    version: "*"
+    public: true
+  espressif/mqtt:
+    version: "*"
+    public: true

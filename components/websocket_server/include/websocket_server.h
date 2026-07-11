@@ -92,6 +92,9 @@ private:
     // Client management
     esp_err_t add_client(int sockfd);
     esp_err_t remove_client(int sockfd);
+    // Close the underlying httpd socket for a client (returns it to the socket pool).
+    // Safe to call from any task and idempotent for already-closed sockets.
+    void close_client_socket(int sockfd);
     WebSocketClient* find_client(int sockfd);
     esp_err_t cleanup_inactive_clients();
     
@@ -133,8 +136,11 @@ private:
     // Buffer pool for performance optimization
     std::vector<std::unique_ptr<FrameBuffer>> m_buffer_pool;
     mutable SemaphoreHandle_t m_buffer_pool_mutex;
-    static const size_t WS_BUFFER_POOL_SIZE = 4;  // Pool of 4 buffers
-    static const size_t WS_BUFFER_SIZE = WS_MAX_MESSAGE_SIZE + 128;  // Extra space for headers
+    // constexpr (not const): these are ODR-used (e.g. perfect-forwarded through
+    // std::make_unique), which for a plain static const would require an
+    // out-of-class definition and fails to link. constexpr is implicitly inline.
+    static constexpr size_t WS_BUFFER_POOL_SIZE = 4;  // Pool of 4 buffers
+    static constexpr size_t WS_BUFFER_SIZE = WS_MAX_MESSAGE_SIZE + 128;  // Extra space for headers
 
     // Mutex for protecting static response buffers from concurrent access
     mutable SemaphoreHandle_t m_response_buffer_mutex;

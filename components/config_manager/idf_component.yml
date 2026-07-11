@@ -1,0 +1,4 @@
+# cJSON moved to a managed component in ESP-IDF v6.0. Used only in
+# config_manager.cpp (not in a public header), so a private dependency suffices.
+dependencies:
+  espressif/cjson: "*"

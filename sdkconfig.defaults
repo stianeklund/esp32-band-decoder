@@ -1,0 +1,20 @@
+# Project non-default settings. Kept here (not just in the generated sdkconfig)
+# so they survive `idf.py reconfigure` and ESP-IDF version upgrades. The v6.0
+# upgrade regenerated sdkconfig and silently reset HTTPD_WS_SUPPORT to its
+# default (n), which broke the entire websocket_server component.
+
+# --- HTTP server / WebSocket ---
+# Required by components/websocket_server (httpd_ws_* API, httpd_uri_t.is_websocket).
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# --- Flash / partitions (KC868-A16 / ESP32) ---
+CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="2MB"
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
+
+# --- LWIP / TCP tuning (socket budget for httpd + WS + mqtt clients) ---
+CONFIG_LWIP_MAX_SOCKETS=10
+CONFIG_LWIP_MAX_ACTIVE_TCP=16
+CONFIG_LWIP_MAX_LISTENING_TCP=16
+CONFIG_LWIP_SO_REUSE=y
+CONFIG_TCP_MSL=60000

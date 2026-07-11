@@ -44,3 +44,9 @@ bin/
 ### Mac OS ###
 .DS_Store
 .env
+
+### ESP-IDF ###
+# Downloaded by the component manager from dependencies.lock; not source.
+managed_components/
+# Backup written by idf.py when regenerating sdkconfig.
+sdkconfig.old

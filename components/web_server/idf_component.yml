@@ -1,0 +1,4 @@
+# cJSON moved to a managed component in ESP-IDF v6.0. Used only in webserver.cpp
+# (not in a public header), so a private dependency is sufficient.
+dependencies:
+  espressif/cjson: "*"

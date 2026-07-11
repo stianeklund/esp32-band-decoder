@@ -313,6 +313,10 @@ esp_err_t WebSocketServer::websocket_handler(httpd_req_t *req) {
     if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
         ESP_LOGI(TAG, "WebSocket close frame received from fd=%d", sockfd);
         server->remove_client(sockfd);
+        // Handler returns ESP_OK, so httpd will NOT close the socket for us.
+        // Trigger the close explicitly so the descriptor is freed even if the
+        // peer never follows the CLOSE frame with a TCP FIN.
+        server->close_client_socket(sockfd);
         return ESP_OK;
     }
     
@@ -889,9 +893,34 @@ esp_err_t WebSocketServer::remove_client(int sockfd) {
         m_clients.erase(it, m_clients.end());
         ESP_LOGD(TAG, "Removed WebSocket client fd=%d", sockfd);
     }
-    
+
     xSemaphoreGive(m_clients_mutex);
+    // NOTE: this only drops tracking. Socket teardown is the caller's
+    // responsibility: httpd auto-closes the socket when a URI handler returns a
+    // non-ESP_OK status, and callers that detect a dead-but-still-open socket
+    // (keepalive timeout, failed broadcast, CLOSE frame) must additionally call
+    // close_client_socket(). See close_client_socket() for why.
     return ESP_OK;
+}
+
+void WebSocketServer::close_client_socket(int sockfd) {
+    if (!m_http_server || sockfd < 0) {
+        return;
+    }
+
+    // httpd_sess_trigger_close() queues the close on the httpd task, so it is
+    // safe to call from the keepalive timer / broadcast tasks as well as from
+    // within the httpd task itself. For an already-closed/unknown socket it
+    // simply returns an error, which we ignore.
+    //
+    // Only call this for a socket whose httpd session is still open (a leaked /
+    // dead-but-connected client). Do NOT call it after a URI handler returns an
+    // error status: httpd closes that socket synchronously, and the queued
+    // close would race a freshly-accepted connection that reused the same fd.
+    esp_err_t ret = httpd_sess_trigger_close(m_http_server, sockfd);
+    if (ret != ESP_OK) {
+        ESP_LOGD(TAG, "close_client_socket(fd=%d): %s", sockfd, esp_err_to_name(ret));
+    }
 }
 
 WebSocketServer::WebSocketClient* WebSocketServer::find_client(int sockfd) {
@@ -926,9 +955,21 @@ esp_err_t WebSocketServer::disconnect_all_clients() {
     }
     
     ESP_LOGI(TAG, "Disconnecting %zu WebSocket clients", m_clients.size());
+
+    std::vector<int> sockets_to_close;
+    sockets_to_close.reserve(m_clients.size());
+    for (const auto& client : m_clients) {
+        sockets_to_close.push_back(client->sockfd);
+    }
     m_clients.clear();
-    
+
     xSemaphoreGive(m_clients_mutex);
+
+    // Return the descriptors to the pool. The WebSocket server shares the web
+    // server's httpd instance, so stopping WS does not close these sockets.
+    for (int sockfd : sockets_to_close) {
+        close_client_socket(sockfd);
+    }
     return ESP_OK;
 }
 
@@ -954,23 +995,26 @@ esp_err_t WebSocketServer::cleanup_inactive_clients() {
     
     uint64_t current_time = esp_timer_get_time() / 1000; // Convert to milliseconds
     size_t removed_count = 0;
-    
+    std::vector<int> sockets_to_close;
+
     auto it = m_clients.begin();
     while (it != m_clients.end()) {
         WebSocketClient* client = it->get();
-        
+
         // Check if client should be disconnected based on missed PONGs
         if (client->missed_pong_count >= WS_MAX_MISSED_PONGS) {
-            ESP_LOGW(TAG, "Removing WebSocket client fd=%d after %d missed PONGs", 
+            ESP_LOGW(TAG, "Removing WebSocket client fd=%d after %d missed PONGs",
                      client->sockfd, client->missed_pong_count);
+            sockets_to_close.push_back(client->sockfd);
             it = m_clients.erase(it);
             removed_count++;
             continue;
         }
-        
+
         // Fallback: check if client has been inactive for too long (wall-clock timeout)
         if (current_time - client->last_activity > WS_CLIENT_TIMEOUT_MS) {
             ESP_LOGW(TAG, "Removing inactive WebSocket client fd=%d (fallback timeout)", client->sockfd);
+            sockets_to_close.push_back(client->sockfd);
             it = m_clients.erase(it);
             removed_count++;
             continue;
@@ -1001,11 +1045,18 @@ esp_err_t WebSocketServer::cleanup_inactive_clients() {
     }
     
     xSemaphoreGive(m_clients_mutex);
-    
+
+    // Close the underlying httpd sockets outside the mutex so the descriptors are
+    // returned to the pool. This is the primary leak path: WAN/NAT clients that
+    // vanish without a TCP FIN are only detected here (missed PONGs / timeout).
+    for (int sockfd : sockets_to_close) {
+        close_client_socket(sockfd);
+    }
+
     if (removed_count > 0) {
         ESP_LOGI(TAG, "Cleaned up %zu inactive WebSocket clients", removed_count);
     }
-    
+
     return ESP_OK;
 }
 
@@ -1233,6 +1284,12 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
             xSemaphoreGive(m_clients_mutex);
         } else {
             ESP_LOGW(TAG, "Failed to acquire mutex for client cleanup after broadcast");
+        }
+
+        // Close the sockets of clients that failed to receive (dead connections)
+        // so their descriptors are returned to the pool instead of leaking.
+        for (int failed_fd : failed_sockfds) {
+            close_client_socket(failed_fd);
         }
     }
 

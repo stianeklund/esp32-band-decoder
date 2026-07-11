@@ -1,0 +1,6 @@
+# cJSON moved to a managed component in ESP-IDF v6.0. websocket_handlers.h (a
+# public header) uses cJSON, so the dependency is public.
+dependencies:
+  espressif/cjson:
+    version: "*"
+    public: true
