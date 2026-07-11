@@ -28,9 +28,7 @@ MQTTClient::MQTTClient()
 }
 
 esp_err_t MQTTClient::init() {
-    const auto &config = get_cached_config();
-
-    if (!config.mqtt_enabled) {
+    if (!ConfigManager::instance().is_mqtt_enabled()) {
         ESP_LOGI(TAG, "MQTT is disabled in configuration.");
         if (client_) {
             ESP_LOGI(TAG, "MQTT client was previously initialized, now de-initializing as MQTT is disabled.");
@@ -43,6 +41,8 @@ esp_err_t MQTTClient::init() {
         }
         return ESP_OK; // Successfully handled disabled state
     }
+
+    const auto &config = get_cached_config();
 
     // MQTT is enabled in configuration.
     if (client_) {

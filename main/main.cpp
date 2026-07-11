@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_system.h" // For esp_restart
 #include "relay_controller.h"
+#include "config_manager.h"
 #include "restart_manager.h"
 #include "serial_cli.h"
 #include "system_initializer.h"
@@ -186,8 +187,7 @@ extern "C" [[noreturn]] void app_main(void) {
                 ESP_LOGI(TAG, "WebServer started successfully with all URI handlers registered.");
                 
                 // Check if WebSocket is enabled in configuration
-                const auto& config = AntennaSwitch::instance().get_config_ref();
-                if (config.websocket_enabled) {
+                if (ConfigManager::instance().is_websocket_enabled()) {
                     // Initialize and start WebSocket server
                     ESP_LOGI(TAG, "WebSocket enabled - Initializing WebSocket server...");
                     if (websocket_server_init() != ESP_OK) {

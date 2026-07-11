@@ -48,6 +48,11 @@ public:
     // Return snapshots so callers cannot observe a concurrent in-place update.
     antenna_switch_config_t get_config() const;
     antenna_switch_config_t get_config_ref() const;
+    void get_ptt_config(int &radio_a_input, bool &radio_a_active_high,
+                        int &radio_b_input, bool &radio_b_active_high) const;
+    bool is_mqtt_enabled() const;
+    bool is_websocket_enabled() const;
+    uint16_t get_radio_restore_delay_ms() const;
     
     // Get current configuration version for cache invalidation
     uint32_t get_config_version() const { return config_version_.load(); }

@@ -1,12 +1,13 @@
 #ifndef INPUT_MANAGER_H
 #define INPUT_MANAGER_H
 
+#include <cstdint>
+#include <functional>
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "config_cache.h"
 
-class InputManager final : public ConfigCache {
+class InputManager final {
 public:
     // Meyers' singleton instance method (thread-safe in C++11 and later)
     static InputManager& instance() {
@@ -66,6 +67,7 @@ private:
     bool ptt_input_radio_a_active_high_config_ = false;
     int ptt_input_radio_b_config_ = -1;
     bool ptt_input_radio_b_active_high_config_ = false;
+    uint32_t ptt_config_version_ = UINT32_MAX;
 
     /**
      * @brief Refreshes the locally cached PTT configuration settings 

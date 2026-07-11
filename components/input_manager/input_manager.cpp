@@ -1,5 +1,6 @@
 #include "input_manager.h"
 #include "antenna_switch.h"
+#include "config_manager.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
@@ -117,14 +118,15 @@ esp_err_t InputManager::get_all_inputs(uint16_t* state_mask) {
 }
 
 void InputManager::refresh_active_ptt_config() {
-    // This call is efficient. It only re-reads from ConfigManager (and potentially NVS)
-    // if the cache is invalid or the config version has changed.
-    const auto& config = get_cached_config(); 
+    const uint32_t current_version = ConfigManager::instance().get_config_version();
+    if (ptt_config_version_ == current_version) {
+        return;
+    }
 
-    ptt_input_radio_a_config_ = config.ptt_input_radio_a;
-    ptt_input_radio_a_active_high_config_ = config.ptt_input_radio_a_active_high;
-    ptt_input_radio_b_config_ = config.ptt_input_radio_b;
-    ptt_input_radio_b_active_high_config_ = config.ptt_input_radio_b_active_high;
+    ConfigManager::instance().get_ptt_config(
+        ptt_input_radio_a_config_, ptt_input_radio_a_active_high_config_,
+        ptt_input_radio_b_config_, ptt_input_radio_b_active_high_config_);
+    ptt_config_version_ = current_version;
 }
 
 // Trampoline function for the FreeRTOS task

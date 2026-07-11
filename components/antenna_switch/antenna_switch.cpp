@@ -42,8 +42,7 @@ AntennaSwitch::AntennaSwitch()
     // so its instance() call should trigger its construction if not already done.
     // A safer approach might be to initialize/update timer periods in AntennaSwitch::init() after ConfigManager is confirmed ready.
     // For now, assuming ConfigManager is available or provides a usable default from its own constructor.
-    const auto& initial_config = get_cached_config(); // Use cached config instead of direct ConfigManager access
-    uint16_t initial_delay_ms = initial_config.radio_restore_delay_ms;
+    uint16_t initial_delay_ms = ConfigManager::instance().get_radio_restore_delay_ms();
 
     // Validate and set a fallback if the configured value is unreasonable (e.g., 0 from a fresh NVS or before full init)
     if (initial_delay_ms < 1 || initial_delay_ms > 5000) { // Min 1ms, Max 5s
@@ -150,8 +149,7 @@ esp_err_t AntennaSwitch::set_config(const antenna_switch_config_t *config) {
 
     // ConfigManager now holds the new config.
     // Apply the new delay to the timers.
-    const auto& current_config_ref = ConfigManager::instance().get_config_ref();
-    uint16_t new_delay_ms = current_config_ref.radio_restore_delay_ms;
+    uint16_t new_delay_ms = ConfigManager::instance().get_radio_restore_delay_ms();
 
     // Validate the delay (e.g., 1ms to 5000ms)
     if (new_delay_ms < 1) new_delay_ms = 1;
@@ -636,9 +634,7 @@ void AntennaSwitch::on_radio_a_tx_stop() {
             pre_tx_active_relay_radio_b_ = 0; // Abort restoration for this stored relay
         } else {
             if (radio_b_restore_delay_timer_ != nullptr) {
-                uint16_t current_delay_ms = ConfigManager::instance().get_config_ref().radio_restore_delay_ms;
-                const auto& cached_cfg_for_delay = get_cached_config();
-                current_delay_ms = cached_cfg_for_delay.radio_restore_delay_ms;
+                uint16_t current_delay_ms = ConfigManager::instance().get_radio_restore_delay_ms();
                 if (current_delay_ms < 1 || current_delay_ms > 5000) current_delay_ms = 200; // Fallback for logging safety
                 ESP_LOGD(TAG, "Radio A TX stop: Scheduling Radio B relay %d restoration in %u ms.", pre_tx_active_relay_radio_b_, current_delay_ms);
                 if (esp_timer_start_once(radio_b_restore_delay_timer_, current_delay_ms * 1000) != ESP_OK) { // Convert ms to microseconds

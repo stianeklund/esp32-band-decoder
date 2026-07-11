@@ -3,6 +3,7 @@
 
 #include "antenna_switch.h"
 #include "cat_parser.h"
+#include "config_manager.h"
 #include <esp_event.h>
 #include <esp_netif.h>
 #include <esp_netif_types.h>
@@ -95,12 +96,18 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
     // Initialize antenna switch configuration
     ESP_RETURN_ON_ERROR(AntennaSwitch::instance().init(), TAG, "Failed to initialize antenna switch");
 
-    // Get the configuration
-    antenna_switch_config_t config;
-    ESP_RETURN_ON_ERROR(AntennaSwitch::instance().get_config(&config), TAG,
-                        "Failed to get antenna switch configuration");
+    // Relay-dependent callbacks can arrive as soon as the input and CAT tasks start.
+    // Initialize and attach the controller before either asynchronous task is created.
+    auto& relay_controller = RelayController::instance();
+    esp_err_t ret = relay_controller.init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize relay controller: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    *relay_controller_out = &relay_controller;
+    AntennaSwitch::instance().set_relay_controller(*relay_controller_out);
 
-    // Initialize CAT parser
+    // Initialize input polling and CAT only after relay control is ready.
     ESP_RETURN_ON_ERROR(InputManager::instance().init(), TAG, "Failed to initialize input manager");
     ESP_RETURN_ON_ERROR(cat_parser_init(), TAG, "Failed to initialize CAT parser");
     
@@ -120,17 +127,8 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
         ESP_LOGI(TAG, "MQTT client configuration prepared.");
     }
 
-    // Get relay controller singleton instance and initialize it immediately
-    auto& relay_controller = RelayController::instance();
-    esp_err_t ret = relay_controller.init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize relay controller: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    
-    // Set the relay controller in antenna switch
-    *relay_controller_out = &relay_controller;
-    AntennaSwitch::instance().set_relay_controller(*relay_controller_out);
+    ESP_LOGI(TAG, "Main task stack high-water mark after device init: %u bytes",
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
 
     // --- Wait for Network Connectivity ---
     bool ip_obtained = is_valid_ip(); // Check initial state
@@ -175,7 +173,7 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
         }
 
         // Attempt to connect MQTT if it's enabled in the configuration
-        if (config.mqtt_enabled) {
+        if (ConfigManager::instance().is_mqtt_enabled()) {
             ESP_LOGI(TAG, "MQTT is enabled. Attempting to connect MQTT client...");
             // MQTTClient::connect() will internally check WifiManager::is_connected(),
             // initialize the client with esp_mqtt_client_init, register events, and start.
@@ -194,7 +192,7 @@ esp_err_t SystemInitializer::initialize_full(RelayController** relay_controller_
         }
     } else {
         ESP_LOGW(TAG, "Timeout waiting for valid IP address or IP not available.");
-        if (config.mqtt_enabled) {
+        if (ConfigManager::instance().is_mqtt_enabled()) {
             ESP_LOGW(TAG, "MQTT is enabled in config but will not connect due to lack of IP.");
             // MQTTClient::init() was already called earlier, so config is loaded.
             // No further action needed here for MQTT if IP is not obtained.

@@ -95,6 +95,30 @@ antenna_switch_config_t ConfigManager::get_config_ref() const {
     return get_config();
 }
 
+void ConfigManager::get_ptt_config(int &radio_a_input, bool &radio_a_active_high,
+                                   int &radio_b_input, bool &radio_b_active_high) const {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    radio_a_input = current_config_->ptt_input_radio_a;
+    radio_a_active_high = current_config_->ptt_input_radio_a_active_high;
+    radio_b_input = current_config_->ptt_input_radio_b;
+    radio_b_active_high = current_config_->ptt_input_radio_b_active_high;
+}
+
+bool ConfigManager::is_mqtt_enabled() const {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    return current_config_->mqtt_enabled;
+}
+
+bool ConfigManager::is_websocket_enabled() const {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    return current_config_->websocket_enabled;
+}
+
+uint16_t ConfigManager::get_radio_restore_delay_ms() const {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    return current_config_->radio_restore_delay_ms;
+}
+
 void ConfigManager::nvs_writer_task_trampoline(void *arg) {
     ConfigManager *manager = static_cast<ConfigManager*>(arg);
     manager->nvs_writer_task();
