@@ -332,11 +332,23 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
     
-    // Read the data
-    if (const int received = httpd_req_recv(req, content, content_len); received <= 0) {
-        free(content);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive data");
-        return ESP_FAIL;
+    // Read the data. httpd_req_recv() may return fewer bytes than requested when
+    // the body spans multiple TCP segments (a full config easily does), so loop
+    // until the whole body is read. A single recv left garbage in the tail of
+    // the buffer, causing cJSON_Parse to fail with "Invalid JSON".
+    size_t total_received = 0;
+    while (total_received < content_len) {
+        const int received = httpd_req_recv(req, content + total_received,
+                                            content_len - total_received);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;  // Transient timeout, retry
+        }
+        if (received <= 0) {
+            free(content);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to receive data");
+            return ESP_FAIL;
+        }
+        total_received += received;
     }
     content[content_len] = '\0';
 
@@ -806,14 +818,35 @@ esp_err_t WebServer::relay_status_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// Receive up to buf_size-1 bytes of the request body into buf, looping over
+// partial reads and transient timeouts, then NUL-terminate. httpd_req_recv()
+// may return fewer bytes than requested when the body spans multiple TCP
+// segments; a single read can leave a truncated buffer that fails to parse.
+// Returns the number of bytes read, or <= 0 on error.
+static int recv_request_body(httpd_req_t *req, char *buf, size_t buf_size) {
+    const size_t want = MIN(req->content_len, buf_size - 1);
+    size_t total = 0;
+    while (total < want) {
+        const int r = httpd_req_recv(req, buf + total, want - total);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;  // Transient timeout, retry
+        }
+        if (r <= 0) {
+            return r;
+        }
+        total += r;
+    }
+    buf[total] = '\0';
+    return static_cast<int>(total);
+}
+
 esp_err_t WebServer::relay_control_handler(httpd_req_t *req) {
     char buf[32];
-    int ret = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    int ret = recv_request_body(req, buf, sizeof(buf));
     if (ret <= 0) {
         ESP_LOGE(TAG, "Failed to receive relay control request");
         return ESP_FAIL;
     }
-    buf[ret] = '\0';
 
     cJSON *root = cJSON_Parse(buf);
     if (!root) {
@@ -870,13 +903,12 @@ esp_err_t WebServer::relay_control_handler(httpd_req_t *req) {
 
 esp_err_t WebServer::set_rx_antenna_handler(httpd_req_t *req) {
     char buf[128];
-    int ret = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    int ret = recv_request_body(req, buf, sizeof(buf));
     if (ret <= 0) {
         ESP_LOGE(TAG, "Failed to receive set-rx-antenna request");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to receive request");
         return ESP_FAIL;
     }
-    buf[ret] = '\0';
 
     cJSON *root = cJSON_Parse(buf);
     if (!root) {
@@ -977,13 +1009,12 @@ esp_err_t WebServer::antenna_switch_handler(httpd_req_t *req) {
     ESP_LOGD(TAG, "Antenna switch request received");
 
     char buf[64];
-    int ret = httpd_req_recv(req, buf, MIN(req->content_len, sizeof(buf) - 1));
+    int ret = recv_request_body(req, buf, sizeof(buf));
     if (ret <= 0) {
         ESP_LOGE(TAG, "Failed to receive antenna switch request");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to receive request");
         return ESP_FAIL;
     }
-    buf[ret] = '\0';
 
     cJSON *root = cJSON_Parse(buf);
     if (!root) {
