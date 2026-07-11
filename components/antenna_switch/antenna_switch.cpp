@@ -339,8 +339,15 @@ bool AntennaSwitch::is_radio_b_transmitting_effective() const {
 esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
     ESP_LOGV(TAG, "Setting antenna for frequency: %lu Hz", frequency);
 
-    // we only need a reference to config here as we won't mutate it
-    const auto &config = get_cached_config(); // Use cached config
+    // Keep the ~1.85KB config snapshot on the heap, not the stack: this runs on the
+    // cat_parser_uart task and can nest into set_relay_for_antenna (which also recurses).
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in set_frequency");
+        return ESP_ERR_NO_MEM;
+    }
+    *config_snapshot = get_cached_config(); // Use cached config
+    const auto &config = *config_snapshot;
     if (!config.auto_mode) {
         ESP_LOGW(TAG, "Automatic mode is disabled, not changing antenna");
         return ESP_OK;
@@ -1308,7 +1315,15 @@ esp_err_t AntennaSwitch::set_relay_for_antenna(const int relay_id, const int ban
         ESP_LOGE(TAG, "Relay controller not initialized for set_relay_for_antenna");
         return ESP_ERR_INVALID_STATE;
     }
-    const auto& config = get_cached_config(); // Use cached config, get early
+    // Heap-backed snapshot keeps the ~1.85KB struct off the stack; this function
+    // recurses (interlock restore below) and runs on the shallow cat_parser_uart task.
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in set_relay_for_antenna");
+        return ESP_ERR_NO_MEM;
+    }
+    *config_snapshot = get_cached_config(); // Use cached config, get early
+    const auto& config = *config_snapshot;
 
     // For conflict restoration logic tracking, get the port index we're trying to activate
     int activating_radio_port_idx = -1;
