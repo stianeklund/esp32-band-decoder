@@ -171,7 +171,7 @@ esp_err_t AntennaSwitch::get_config(antenna_switch_config_t *config) {
     return ESP_OK;
 }
 
-const antenna_switch_config_t& AntennaSwitch::get_config_ref() const {
+antenna_switch_config_t AntennaSwitch::get_config_ref() const {
     return ConfigManager::instance().get_config();
 }
 
@@ -408,7 +408,7 @@ esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
     }
 
     ESP_LOGV(TAG, "Config does not support frequency: %lu Hz for auto-switching on Radio %c", frequency, (current_radio_context == RadioID::A ? 'A' : 'B'));
-    return ESP_OK;
+    return ESP_ERR_NOT_FOUND;
 }
 
 /**
@@ -1077,9 +1077,8 @@ esp_err_t AntennaSwitch::update_last_used_antenna_preference(const int activated
     if (current_cfg_ptr->last_used_antenna[radio_numeric_idx][band_idx] != static_cast<uint8_t>(activated_relay_id)) {
         ESP_LOGD(TAG, "Updating last used antenna for Radio %c, Band %d to Relay %d (current CAT Freq: %lu Hz)",
                  (radio_of_activated_relay == RadioID::A ? 'A' : 'B'), band_idx, activated_relay_id, current_cat_freq_for_logging);
-        current_cfg_ptr->last_used_antenna[radio_numeric_idx][band_idx] = static_cast<uint8_t>(activated_relay_id);
-
-        if (const esp_err_t save_err = ConfigManager::instance().update_config(*current_cfg_ptr); save_err != ESP_OK) {
+        if (const esp_err_t save_err = ConfigManager::instance().update_last_used_antenna(
+                radio_numeric_idx, band_idx, static_cast<uint8_t>(activated_relay_id)); save_err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to save updated last_used_antenna: %s", esp_err_to_name(save_err));
             return save_err; // Propagate the save error
         }

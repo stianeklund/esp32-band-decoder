@@ -5,6 +5,7 @@
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include <cstring>
+#include <memory>
 #include <sys/param.h>
 #include "freertos/FreeRTOS.h" // For task and semaphore functions
 #include "freertos/task.h"
@@ -85,6 +86,15 @@ ConfigManager &ConfigManager::instance() {
     return instance;
 }
 
+antenna_switch_config_t ConfigManager::get_config() const {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    return *current_config_;
+}
+
+antenna_switch_config_t ConfigManager::get_config_ref() const {
+    return get_config();
+}
+
 void ConfigManager::nvs_writer_task_trampoline(void *arg) {
     ConfigManager *manager = static_cast<ConfigManager*>(arg);
     manager->nvs_writer_task();
@@ -110,10 +120,24 @@ void ConfigManager::nvs_writer_task() {
 
             if (config_dirty_.load()) {
                 ESP_LOGD(TAG, "NVS writer task: Configuration is dirty, saving to NVS.");
-                esp_err_t ret = save_to_nvs(); // This is const, so it's fine
+                uint32_t version_to_save;
+                bool save_full_config;
+                {
+                    std::lock_guard<std::mutex> lock(config_mutex_);
+                    version_to_save = config_version_.load();
+                    save_full_config = full_save_required_.load();
+                }
+                esp_err_t ret = save_full_config ? save_to_nvs() : save_preferences_to_nvs();
                 if (ret == ESP_OK) {
-                    ESP_LOGD(TAG, "NVS writer task: Configuration saved successfully.");
-                    config_dirty_.store(false); // Clear dirty flag only on successful save
+                    std::lock_guard<std::mutex> lock(config_mutex_);
+                    if (config_version_.load() == version_to_save) {
+                        ESP_LOGD(TAG, "NVS writer task: Configuration saved successfully.");
+                        config_dirty_.store(false);
+                        full_save_required_.store(false);
+                    } else {
+                        ESP_LOGD(TAG, "Configuration changed during NVS save; scheduling latest version.");
+                        xSemaphoreGive(nvs_save_signal_);
+                    }
                 } else {
                     ESP_LOGE(TAG, "NVS writer task: Failed to save configuration to NVS: %s. Will retry on next change.", esp_err_to_name(ret));
                     // Keep dirty flag true to retry on next signal if save failed
@@ -276,6 +300,7 @@ esp_err_t ConfigManager::init() { // Made non-const
 
         // Schedule save of default configuration
         config_dirty_.store(true);
+        full_save_required_.store(true);
         if (nvs_save_signal_ != nullptr && nvs_writer_task_handle_ != nullptr) {
             xSemaphoreGive(nvs_save_signal_);
             ESP_LOGD(TAG, "Default configuration set and scheduled for NVS save.");
@@ -289,6 +314,7 @@ esp_err_t ConfigManager::init() { // Made non-const
             } else {
                 ESP_LOGV(TAG, "Fallback synchronous save of default config successful.");
                 config_dirty_.store(false); // Synchronously saved, so not dirty anymore
+                full_save_required_.store(false);
             }
         }
         // Assuming scheduling the save (or sync save) is success for init's perspective here.
@@ -411,11 +437,18 @@ esp_err_t ConfigManager::update_config(const antenna_switch_config_t &new_config
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Update configuration
-    *current_config_ = new_config;
+    uint32_t updated_version;
+    antenna_switch_config_t updated_config;
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        *current_config_ = new_config;
+        updated_config = *current_config_;
+        updated_version = config_version_.fetch_add(1) + 1;
+        config_dirty_.store(true);
+        full_save_required_.store(true);
+    }
 
     // Schedule save of new configuration to NVS
-    config_dirty_.store(true);
     if (nvs_save_signal_ != nullptr && nvs_writer_task_handle_ != nullptr) {
         xSemaphoreGive(nvs_save_signal_);
         ESP_LOGI(TAG, "Configuration updated and scheduled for NVS save.");
@@ -427,26 +460,71 @@ esp_err_t ConfigManager::update_config(const antenna_switch_config_t &new_config
             ESP_LOGE(TAG, "Fallback synchronous save of updated config failed: %s", esp_err_to_name(sync_save_ret));
             // Notify observers anyway, but return the error from saving
             for (const auto &observer: observers_) {
-                observer(*current_config_);
+                observer(updated_config);
             }
             return sync_save_ret; 
         }
         ESP_LOGD(TAG, "Fallback synchronous save of updated config successful.");
-        config_dirty_.store(false); // Synchronously saved
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        if (config_version_.load() == updated_version) {
+            config_dirty_.store(false);
+            full_save_required_.store(false);
+        }
     }
-
-    // Increment version counter to invalidate caches
-    config_version_.fetch_add(1);
 
     // Notify observers
     for (const auto &observer: observers_) {
-        observer(*current_config_);
+        observer(updated_config);
     }
 
     return ESP_OK;
 }
 
+esp_err_t ConfigManager::update_last_used_antenna(const size_t radio_index, const size_t band_index,
+                                                   const uint8_t relay_id) {
+    if (radio_index >= 2 || band_index >= MAX_BANDS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint32_t updated_version;
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        if (band_index >= current_config_->num_bands ||
+            current_config_->last_used_antenna[radio_index][band_index] == relay_id) {
+            return ESP_OK;
+        }
+        current_config_->last_used_antenna[radio_index][band_index] = relay_id;
+        updated_version = config_version_.fetch_add(1) + 1;
+        config_dirty_.store(true);
+    }
+
+    if (nvs_save_signal_ != nullptr && nvs_writer_task_handle_ != nullptr) {
+        xSemaphoreGive(nvs_save_signal_);
+        return ESP_OK;
+    }
+
+    const esp_err_t ret = full_save_required_.load() ? save_to_nvs() : save_preferences_to_nvs();
+    if (ret == ESP_OK) {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        if (config_version_.load() == updated_version) {
+            config_dirty_.store(false);
+            full_save_required_.store(false);
+        }
+    }
+    return ret;
+}
+
 esp_err_t ConfigManager::save_to_nvs() const {
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        return ESP_ERR_NO_MEM;
+    }
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        *config_snapshot = *current_config_;
+    }
+    const antenna_switch_config_t *current_config_ = config_snapshot.get();
+
     nvs_handle_t nvs_handle;
     esp_err_t ret = nvs_open("antenna_switch", NVS_READWRITE, &nvs_handle);
     if (ret != ESP_OK) {
@@ -987,13 +1065,44 @@ esp_err_t ConfigManager::load_from_nvs() const {
 
 
     nvs_close(nvs_handle);
-    return ESP_OK;
+    return ret;
+}
+
+esp_err_t ConfigManager::save_preferences_to_nvs() const {
+    uint8_t preferences[2][MAX_BANDS];
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        memcpy(preferences, current_config_->last_used_antenna, sizeof(preferences));
+    }
+
+    nvs_handle_t nvs_handle;
+    esp_err_t ret = nvs_open("antenna_switch", NVS_READWRITE, &nvs_handle);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    for (int radio = 0; radio < 2; ++radio) {
+        for (int band = 0; band < MAX_BANDS; ++band) {
+            char key[20];
+            snprintf(key, sizeof(key), "lua_r%d_b%d", radio, band);
+            const esp_err_t set_err = nvs_set_u8(nvs_handle, key, preferences[radio][band]);
+            if (ret == ESP_OK && set_err != ESP_OK) {
+                ret = set_err;
+            }
+        }
+    }
+
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+    return ret;
 }
 
 void ConfigManager::add_observer(const std::function<void(const antenna_switch_config_t &)> &observer) {
     observers_.push_back(observer);
     // Immediately notify the new observer of current config
-    observer(*current_config_);
+    observer(get_config());
 }
 
 esp_err_t ConfigManager::export_config_to_json(char **json_string) const {
@@ -1001,6 +1110,16 @@ esp_err_t ConfigManager::export_config_to_json(char **json_string) const {
         ESP_LOGE(TAG, "Invalid json_string parameter");
         return ESP_ERR_INVALID_ARG;
     }
+
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        return ESP_ERR_NO_MEM;
+    }
+    {
+        std::lock_guard<std::mutex> lock(config_mutex_);
+        *config_snapshot = *current_config_;
+    }
+    const antenna_switch_config_t *current_config_ = config_snapshot.get();
 
     cJSON *root = cJSON_CreateObject();
     if (!root) {

@@ -159,11 +159,13 @@ bool RelayController::get_relay_state(const int relay_id) const {
 }
 
 std::map<int, bool> RelayController::get_all_relay_states() const {
+    std::lock_guard lock(relay_mutex_);
     return relay_states_;
 }
 
 esp_err_t RelayController::update_all_relay_states() {
     ESP_LOGD(TAG, "Getting state of all relays");
+    std::lock_guard lock(relay_mutex_);
 
     const uint16_t current_outputs = kc868_a16_get_all_outputs();
     

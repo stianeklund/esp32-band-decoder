@@ -61,7 +61,7 @@ private:
     // Other members
     std::map<int,int> last_selected_relay_for_band_[2]; // same indexing
     std::map<int, bool> relay_states_;
-    std::mutex relay_mutex_;
+    mutable std::mutex relay_mutex_;
 
     // Private methods
     // [[nodiscard]] bool is_transmitting() const; // This will be removed, AntennaSwitch is now the authority

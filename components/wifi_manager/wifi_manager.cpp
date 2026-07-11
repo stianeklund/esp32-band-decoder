@@ -709,11 +709,9 @@ void WifiManager::wifi_health_check_task() {
             
             // If we've failed for 3 consecutive checks (1.5 minutes), try to reconnect
             if (consecutive_failures >= 3) {
-                ESP_LOGI(TAG, "Attempting WiFi reconnection due to health check failure");
-                esp_wifi_disconnect();
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                esp_wifi_connect();
-                consecutive_failures = 0; // Reset counter after reconnection attempt
+                ESP_LOGI(TAG, "Scheduling WiFi reconnection due to health check failure");
+                signal_reconnect();
+                consecutive_failures = 0;
             }
         } else if (m_wifi_connected) {
             if (consecutive_failures > 0) {

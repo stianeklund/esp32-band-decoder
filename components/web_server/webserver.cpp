@@ -195,6 +195,10 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
     ESP_LOGD(TAG, "Current frequency (Radio A): %lu", current_freq);
 
     cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create status response");
+        return ESP_ERR_NO_MEM;
+    }
     cJSON_AddNumberToObject(root, "frequency", current_freq);
     cJSON_AddStringToObject(root, "antenna", active_antenna_a_num ? 
         ("Antenna " + std::to_string(active_antenna_a_num)).c_str() : "None");
@@ -304,6 +308,11 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
     }
 
     char *json_string = cJSON_Print(root);
+    if (!json_string) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to serialize status response");
+        return ESP_ERR_NO_MEM;
+    }
     ESP_LOGD(TAG, "Sending JSON response: %s", json_string);
 
     httpd_resp_set_type(req, "application/json");
@@ -419,11 +428,15 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
         } else {
             ESP_LOGE(TAG, "Invalid baud rate: %d", uart_baud->valueint);
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid baud rate");
+            cJSON_Delete(root);
+            free(content);
             return ESP_FAIL;
         }
     } else {
         ESP_LOGE(TAG, "UART baud rate not specified or invalid");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid or missing baud rate");
+        cJSON_Delete(root);
+        free(content);
         return ESP_FAIL;
     }
 
@@ -807,9 +820,18 @@ esp_err_t WebServer::relay_status_handler(httpd_req_t *req) {
     ESP_LOGD(TAG, "Raw relay states: 0x%04X", relay_states);
     
     cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create relay response");
+        return ESP_ERR_NO_MEM;
+    }
     cJSON_AddNumberToObject(root, "states", relay_states);
 
     char *json_string = cJSON_Print(root);
+    if (!json_string) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to serialize relay response");
+        return ESP_ERR_NO_MEM;
+    }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json_string);
 

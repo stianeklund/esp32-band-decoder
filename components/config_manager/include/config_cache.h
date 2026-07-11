@@ -26,9 +26,9 @@ protected:
 
     /**
      * @brief Update the cached configuration if needed
-     * @return Reference to the cached configuration
+     * @return A coherent copy of the cached configuration
      */
-    const antenna_switch_config_t& get_cached_config() const;
+    antenna_switch_config_t get_cached_config() const;
 
     /**
      * @brief Invalidate the local cache (force refresh on next access)

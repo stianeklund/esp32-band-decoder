@@ -3,6 +3,7 @@
 #include <functional>
 #include <vector>
 #include <atomic> // Required for std::atomic
+#include <mutex>
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h" // Required for FreeRTOS types
 #include "freertos/task.h"     // Required for TaskHandle_t
@@ -16,6 +17,7 @@
 class ConfigManager {
     static ConfigManager *instance_;
     antenna_switch_config_t *current_config_;
+    mutable std::mutex config_mutex_;
     std::vector<std::function<void(const antenna_switch_config_t &)> > observers_;
     
     // Configuration cache version counter for invalidation
@@ -23,12 +25,14 @@ class ConfigManager {
 
     // Asynchronous NVS saving members
     std::atomic<bool> config_dirty_{false};
+    std::atomic<bool> full_save_required_{false};
     std::atomic<bool> nvs_writer_shutdown_requested_{false};
     TaskHandle_t nvs_writer_task_handle_{nullptr};
     SemaphoreHandle_t nvs_save_signal_{nullptr};
 
     static void nvs_writer_task_trampoline(void *arg);
     void nvs_writer_task();
+    esp_err_t save_preferences_to_nvs() const;
 
     // Private constructor for singleton
     ConfigManager();
@@ -41,16 +45,16 @@ public:
 
     ConfigManager &operator=(const ConfigManager &) = delete;
 
-    // Get current config (const to prevent unauthorized modifications)
-    const antenna_switch_config_t &get_config() const { return *current_config_; }
-    // Get current config as a const reference (useful for direct member access without copying)
-    const antenna_switch_config_t &get_config_ref() const { return *current_config_; }
+    // Return snapshots so callers cannot observe a concurrent in-place update.
+    antenna_switch_config_t get_config() const;
+    antenna_switch_config_t get_config_ref() const;
     
     // Get current configuration version for cache invalidation
     uint32_t get_config_version() const { return config_version_.load(); }
 
     // Update config and notify all observers
     esp_err_t update_config(const antenna_switch_config_t &new_config);
+    esp_err_t update_last_used_antenna(size_t radio_index, size_t band_index, uint8_t relay_id);
 
     // Save to / load from NVS
     esp_err_t save_to_nvs() const;

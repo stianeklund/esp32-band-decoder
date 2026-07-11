@@ -55,7 +55,7 @@ CatParser &CatParser::instance() {
 }
 
 
-#define UART_TASK_STACK_SIZE 4096
+#define UART_TASK_STACK_SIZE 8192
 #define UART_QUEUE_SIZE 3
 
 esp_err_t CatParser::init() {
@@ -648,13 +648,8 @@ esp_err_t CatParser::process_if_command(const std::string_view command) {
              frequency, current_mode.c_str(), transmitting.load(), vfo_selection == 0 ? 'A' : (vfo_selection == 1 ? 'B' : 'M'),
              vfo_a_frequency, vfo_b_frequency);
 
-    // Only process frequency changes if this is for the active VFO
-    // This prevents antenna switching when inactive VFO frequency updates are received
-    if (vfo_selection == active_vfo) {
-        return handle_frequency_change(frequency);
-    }
-
-    return ESP_OK;
+    // IF reports the selected VFO and updates active_vfo above, so its frequency is active.
+    return handle_frequency_change(frequency);
 }
 
 esp_err_t CatParser::process_fa_command(const std::string_view command) {

@@ -566,9 +566,14 @@ esp_err_t WebSocketServer::handle_websocket_message(int sockfd, uint8_t *buf, si
     ESP_LOGD(TAG, "Processing WebSocket message from fd=%d: %.*s", sockfd, (int)len, (char*)buf);
     
     // Update client activity
-    WebSocketClient* client = find_client(sockfd);
-    if (client) {
-        client->last_activity = esp_timer_get_time() / 1000; // Convert to milliseconds
+    if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        WebSocketClient* client = find_client(sockfd);
+        if (client) {
+            client->last_activity = esp_timer_get_time() / 1000; // Convert to milliseconds
+        }
+        xSemaphoreGive(m_clients_mutex);
+    } else {
+        ESP_LOGW(TAG, "Failed to acquire clients mutex while updating activity for fd=%d", sockfd);
     }
     
     // Parse JSON message
@@ -1212,6 +1217,7 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
 
     if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         ESP_LOGW(TAG, "Failed to acquire clients mutex for broadcast check");
+        xSemaphoreGiveRecursive(m_response_buffer_mutex);
         return ESP_ERR_TIMEOUT;
     }
 

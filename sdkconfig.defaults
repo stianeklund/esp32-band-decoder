@@ -7,6 +7,9 @@
 # Required by components/websocket_server (httpd_ws_* API, httpd_uri_t.is_websocket).
 CONFIG_HTTPD_WS_SUPPORT=y
 
+# Configuration snapshots can be nested in antenna/relay timer callbacks.
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=8192
+
 # --- Flash / partitions (KC868-A16 / ESP32) ---
 CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="2MB"

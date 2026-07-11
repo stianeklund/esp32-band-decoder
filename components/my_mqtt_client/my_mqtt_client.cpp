@@ -65,7 +65,7 @@ esp_err_t MQTTClient::init() {
     mqtt_cfg.network.disable_auto_reconnect = false;
     mqtt_cfg.network.timeout_ms = 10000;
     mqtt_cfg.task.priority = 5;
-    mqtt_cfg.task.stack_size = 6144;
+    mqtt_cfg.task.stack_size = 8192;
 
     ESP_LOGI(TAG, "Initializing MQTT client with broker: %s, port: %d, username: %s, client_id: %s",
              config.mqtt_broker, config.mqtt_port, config.mqtt_username, config.mqtt_client_id);

@@ -412,8 +412,7 @@ cJSON* WebSocketHandlers::create_status_json() {
     
     cJSON_AddNumberToObject(root, "frequency", current_freq);
     cJSON_AddNumberToObject(root, "frequency_mhz", current_freq / 1000000.0);
-    // Use static buffer instead of std::string allocation - saves heap allocation
-    static char antenna_name_buffer[32];
+    char antenna_name_buffer[32];
     if (active_antenna_a_num) {
         snprintf(antenna_name_buffer, sizeof(antenna_name_buffer), "Antenna %d", active_antenna_a_num);
         cJSON_AddStringToObject(root, "antenna", antenna_name_buffer);
@@ -463,8 +462,7 @@ cJSON* WebSocketHandlers::create_status_json() {
                 break;
             }
         }
-        // Use static buffer instead of std::string allocation - saves heap allocation
-        static char antenna_b_name_buffer[32];
+        char antenna_b_name_buffer[32];
         if (active_antenna_b_num) {
             snprintf(antenna_b_name_buffer, sizeof(antenna_b_name_buffer), "Antenna %d", active_antenna_b_num);
             cJSON_AddStringToObject(root, "antenna_b", antenna_b_name_buffer);

@@ -3,9 +3,11 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include <mutex>
 
 static constexpr const char* TAG = "KC868_A16_HW";
 static uint16_t output_state = 0;
+static std::mutex output_state_mutex_;
 static bool kc868_a16_initialized = false;
 static SemaphoreHandle_t i2c_bus_mutex_ = nullptr;
 
@@ -268,6 +270,8 @@ esp_err_t kc868_a16_set_output(const uint8_t output_num, const bool state) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    std::lock_guard<std::mutex> state_lock(output_state_mutex_);
+
     const uint8_t pcf_addr = (output_num < 8) ? PCF8574_OUTPUT_ADDR_1 : PCF8574_OUTPUT_ADDR_2;
     const uint8_t bit_pos = output_num % 8;
     uint8_t current_byte = (output_num < 8) ?
@@ -299,12 +303,15 @@ esp_err_t kc868_a16_get_output_state(const uint8_t output_num, bool* state) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    std::lock_guard<std::mutex> state_lock(output_state_mutex_);
     const uint16_t mask = 1 << output_num;
     *state = !(output_state & mask);  // Invert because PCF8574 is active low
     return ESP_OK;
 }
 
 esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
+    std::lock_guard<std::mutex> state_lock(output_state_mutex_);
+
     // Convert to PCF8574 active low logic
     const uint8_t low_byte = ~(state_mask & 0xFF);
     const uint8_t high_byte = ~((state_mask >> 8) & 0xFF);
@@ -330,13 +337,7 @@ esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
 uint16_t kc868_a16_get_all_outputs() {
     // This function returns the logical state (1 = ON, 0 = OFF)
     // output_state stores the PCF8574 register view (active-low, 1 = OFF, 0 = ON)
-    // Protect read with mutex for thread safety (output_state is modified in other functions under mutex)
-    if (i2c_bus_mutex_ && xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(100)) == pdTRUE) {
-        uint16_t result = ~output_state & 0xFFFF;
-        xSemaphoreGive(i2c_bus_mutex_);
-        return result;
-    }
-    // Fallback if mutex not available - return cached value (may be stale)
+    std::lock_guard<std::mutex> state_lock(output_state_mutex_);
     return ~output_state & 0xFFFF;
 }
 
