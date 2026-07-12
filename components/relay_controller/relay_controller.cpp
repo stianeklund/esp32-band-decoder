@@ -8,6 +8,7 @@
 #include "esp_timer.h" // Added for esp_timer_get_time()
 #include "freertos/task.h"
 #include <chrono>
+#include <memory>
 #include "config_cache.h"
 
 static constexpr const char* TAG = "RELAY_CONTROLLER";
@@ -266,7 +267,13 @@ bool RelayController::should_delay() const {
 
 esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number, const RadioID radio, const bool state) {
     std::lock_guard lock(relay_mutex_);
-    const auto &cfg = get_cached_config();
+    const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+    if (!config_snapshot) {
+        ESP_LOGE(TAG, "Failed to allocate config snapshot in execute_relay_change");
+        return ESP_ERR_NO_MEM;
+    }
+    get_cached_config(*config_snapshot);
+    const auto &cfg = *config_snapshot;
 
     // More selective transmission check: only block changes to the transmitting radio's own relays
     if (is_transmitting()) {

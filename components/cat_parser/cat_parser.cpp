@@ -61,9 +61,7 @@ CatParser &CatParser::instance() {
 esp_err_t CatParser::init() {
     ESP_LOGD(TAG, "Initializing CAT parser");
 
-    // Get current configuration from antenna switch using get_config_ref()
-    // current_config is a member, so this assigns a copy of the referenced config.
-    current_config = AntennaSwitch::instance().get_config_ref();
+    ConfigManager::instance().get_config(current_config);
 
     // Validate baud rate and set default if invalid
     if (current_config.uart_baud_rate <= 0) {
@@ -115,7 +113,7 @@ esp_err_t CatParser::init() {
             // Depending on severity, might return ret here. For now, proceed with corrected pins.
         }
         // Re-fetch if updated
-        current_config = AntennaSwitch::instance().get_config_ref();
+        ConfigManager::instance().get_config(current_config);
     }
 
     // Configure UART2 with minimal settings
@@ -193,8 +191,10 @@ void CatParser::uart_task() {
     std::string command_accumulator;
     command_accumulator.reserve(256); // Pre-reserve to reduce reallocations
     constexpr size_t MAX_COMMAND_ACCUMULATOR_SIZE = 1024; // Max size for the command accumulator buffer
+    UBaseType_t stack_high_water_mark = uxTaskGetStackHighWaterMark(nullptr);
 
-    ESP_LOGI(TAG, "CAT parser UART task started.");
+    ESP_LOGI(TAG, "CAT parser UART task started (stack high-water mark: %u bytes).",
+             static_cast<unsigned>(stack_high_water_mark));
 
     while (!shutdown_requested.load()) {
         if (xQueueReceive(uart2_queue, &event, xTicksToWait) == pdTRUE) {
@@ -236,9 +236,16 @@ void CatParser::uart_task() {
                                 ESP_LOGV(TAG, "Processing from UART accumulator: %.*s", static_cast<int>(commands_to_process_view.length()), commands_to_process_view.data());
                                 
                                 // Call the centralized process_command
-                                if (const esp_err_t ret = process_command(commands_to_process_view); ret != ESP_OK) {
-                                     ESP_LOGW(TAG, "Error processing command block from UART: %s", esp_err_to_name(ret));
-                                }
+                                 if (const esp_err_t ret = process_command(commands_to_process_view); ret != ESP_OK) {
+                                      ESP_LOGW(TAG, "Error processing command block from UART: %s", esp_err_to_name(ret));
+                                 }
+
+                                 const UBaseType_t current_high_water_mark = uxTaskGetStackHighWaterMark(nullptr);
+                                 if (current_high_water_mark < stack_high_water_mark) {
+                                     stack_high_water_mark = current_high_water_mark;
+                                     ESP_LOGI(TAG, "CAT parser UART stack high-water mark: %u bytes",
+                                              static_cast<unsigned>(stack_high_water_mark));
+                                 }
 
                                 // Erase processed commands from the accumulator
                                 command_accumulator.erase(0, process_len);
@@ -279,8 +286,10 @@ void CatParser::uart_task() {
             }
 
             // Periodic AI query: if ai_mode enabled, no recent valid commands, and enough time since last query
-            const auto& config = AntennaSwitch::instance().get_config_ref();
-            if (config.auto_mode && config.ai_mode) {
+            bool auto_mode = false;
+            bool ai_mode = false;
+            ConfigManager::instance().get_cat_modes(auto_mode, ai_mode);
+            if (auto_mode && ai_mode) {
                 auto time_since_valid_cmd = std::chrono::duration_cast<std::chrono::seconds>(
                     now - last_valid_command_time).count();
                 auto time_since_ai_query = std::chrono::duration_cast<std::chrono::seconds>(
@@ -355,10 +364,7 @@ esp_err_t CatParser::dispatch_one_command(std::string_view command_view) {
 esp_err_t CatParser::update_config() {
     ESP_LOGD(TAG, "Updating CAT parser configuration");
 
-    // Update the member current_config by copying from the reference
-    current_config = AntennaSwitch::instance().get_config_ref();
-    // No esp_err_t to check from get_config_ref itself.
-    // If AntennaSwitch or ConfigManager had an issue providing the ref, it'd be a deeper problem.
+    ConfigManager::instance().get_config(current_config);
 
     ESP_LOGD(TAG, "CAT parser configuration updated successfully");
     return ESP_OK;
@@ -418,8 +424,10 @@ esp_err_t CatParser::process_ai_command(const std::string_view command_payload) 
             
             // Check if we should automatically enable AI2 mode
             {
-                const antenna_switch_config_t& config = AntennaSwitch::instance().get_config_ref();
-                if (config.auto_mode && config.ai_mode) {
+                bool auto_mode = false;
+                bool ai_mode = false;
+                ConfigManager::instance().get_cat_modes(auto_mode, ai_mode);
+                if (auto_mode && ai_mode) {
                     ESP_LOGI(TAG, "AI mode enabled in config, automatically sending AI2 to enable auto information");
                     esp_err_t send_err = send_to_radio("AI2;");
                     if (send_err == ESP_OK) {
@@ -469,23 +477,25 @@ esp_err_t CatParser::process_ap_command(const std::string_view command) {
             return ESP_ERR_INVALID_ARG;
         }
 
-        // Get a const reference to the current config
-        const auto& current_cfg_ref = AntennaSwitch::instance().get_config_ref();
-        // Create a mutable copy on the stack
-        antenna_switch_config_t temp_config = current_cfg_ref;
+        const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
+        if (!config_snapshot) {
+            ESP_LOGE(TAG, "Failed to allocate config snapshot for AP command");
+            return ESP_ERR_NO_MEM;
+        }
+        ConfigManager::instance().get_config(*config_snapshot);
 
         // Modify the copy
-        temp_config.num_antenna_ports = static_cast<uint8_t>(ports_val);
+        config_snapshot->num_antenna_ports = static_cast<uint8_t>(ports_val);
         
         // Set the modified config
-        esp_err_t ret = AntennaSwitch::instance().set_config(&temp_config);
+        esp_err_t ret = AntennaSwitch::instance().set_config(config_snapshot.get());
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to set config for AP command: %s", esp_err_to_name(ret));
             return ret;
         }
         // If set_config was successful, update CatParser's own current_config member
         // to reflect this change immediately.
-        current_config = AntennaSwitch::instance().get_config_ref();
+        ConfigManager::instance().get_config(current_config);
         return ESP_OK;
     }
 
@@ -805,14 +815,15 @@ esp_err_t CatParser::send_to_radio(const char* command) {
 }
 
 esp_err_t CatParser::probe_and_configure_ai_mode() {
-    // Get current configuration to check if ai_mode is enabled
-    const antenna_switch_config_t& config = AntennaSwitch::instance().get_config_ref();
+    bool auto_mode = false;
+    bool ai_mode = false;
+    ConfigManager::instance().get_cat_modes(auto_mode, ai_mode);
 
     // Only proceed if both auto_mode and ai_mode are enabled
-    if (!config.auto_mode || !config.ai_mode) {
+    if (!auto_mode || !ai_mode) {
         ESP_LOGI(TAG, "AI mode probing skipped: auto_mode=%s, ai_mode=%s",
-                 config.auto_mode ? "enabled" : "disabled",
-                 config.ai_mode ? "enabled" : "disabled");
+                 auto_mode ? "enabled" : "disabled",
+                 ai_mode ? "enabled" : "disabled");
         return ESP_OK;
     }
 

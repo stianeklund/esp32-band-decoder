@@ -165,7 +165,7 @@ esp_err_t AntennaSwitch::get_config(antenna_switch_config_t *config) {
     if (config == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    *config = ConfigManager::instance().get_config();
+    ConfigManager::instance().get_config(*config);
     return ESP_OK;
 }
 
@@ -346,7 +346,7 @@ esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
         ESP_LOGE(TAG, "Failed to allocate config snapshot in set_frequency");
         return ESP_ERR_NO_MEM;
     }
-    *config_snapshot = get_cached_config(); // Use cached config
+    get_cached_config(*config_snapshot);
     const auto &config = *config_snapshot;
     if (!config.auto_mode) {
         ESP_LOGW(TAG, "Automatic mode is disabled, not changing antenna");
@@ -430,7 +430,7 @@ esp_err_t AntennaSwitch::set_auto_mode(const bool auto_mode) {
         return ESP_ERR_NO_MEM;
     }
     // Populate the heap-allocated config with current settings
-    *config_ptr = ConfigManager::instance().get_config(); // Copy from ConfigManager's version
+    ConfigManager::instance().get_config(*config_ptr);
 
     config_ptr->auto_mode = auto_mode;
 
@@ -476,7 +476,7 @@ void AntennaSwitch::on_radio_a_tx_start() {
         xSemaphoreGive(interlock_mutex_);
         return;
     }
-    *config_snapshot = get_cached_config(); // Use cached config
+    get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
 
     // RX Antenna feature: Switch from RX to TX antenna if currently on RX antenna
@@ -608,7 +608,7 @@ void AntennaSwitch::on_radio_a_tx_stop() {
         xSemaphoreGive(interlock_mutex_);
         return;
     }
-    *config_snapshot = get_cached_config(); // Use cached config
+    get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
 
     // RX Antenna feature: Switch back to RX antenna after transmission ends
@@ -832,7 +832,7 @@ void AntennaSwitch::on_radio_b_tx_start() {
         xSemaphoreGive(interlock_mutex_);
         return;
     }
-    *config_snapshot = get_cached_config(); // Use cached config
+    get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
 
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
@@ -890,7 +890,7 @@ void AntennaSwitch::on_radio_b_tx_stop() {
         xSemaphoreGive(interlock_mutex_);
         return;
     }
-    *config_snapshot = get_cached_config();
+    get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
 
     if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
@@ -1130,7 +1130,7 @@ void AntennaSwitch::attempt_restore_auto_resolved_radio_a_relay() {
         ESP_LOGE(TAG, "Failed to allocate config snapshot in attempt_restore_auto_resolved_radio_a_relay");
         return;
     }
-    *config_snapshot = get_cached_config();
+    get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
     if (config.radio_operation_mode != RADIO_OP_MODE_CONCURRENT_AB ||
         !config.interlock_auto_resolves_conflict ||
@@ -1190,7 +1190,7 @@ void AntennaSwitch::attempt_restore_auto_resolved_radio_b_relay() {
         ESP_LOGE(TAG, "Failed to allocate config snapshot in attempt_restore_auto_resolved_radio_b_relay");
         return;
     }
-    *config_snapshot = get_cached_config();
+    get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
     if (config.radio_operation_mode != RADIO_OP_MODE_CONCURRENT_AB ||
         !config.interlock_auto_resolves_conflict ||
@@ -1284,7 +1284,7 @@ esp_err_t AntennaSwitch::set_relay(const int relay_id, const bool state) {
                 ESP_LOGE(TAG, "Failed to allocate config snapshot in set_relay; skipping band preference detection");
                 return set_relay_for_antenna(relay_id, band_number_for_preference, radio_context, state);
             }
-            *config_snapshot = get_cached_config();
+            get_cached_config(*config_snapshot);
             const auto& config = *config_snapshot;
             const auto radio_idx = static_cast<size_t>(RadioID::A);
 
@@ -1377,7 +1377,7 @@ esp_err_t AntennaSwitch::set_relay_for_antenna(const int relay_id, const int ban
         ESP_LOGE(TAG, "Failed to allocate config snapshot in set_relay_for_antenna");
         return ESP_ERR_NO_MEM;
     }
-    *config_snapshot = get_cached_config(); // Use cached config, get early
+    get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
 
     // For conflict restoration logic tracking, get the port index we're trying to activate
