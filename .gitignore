@@ -50,3 +50,6 @@ bin/
 managed_components/
 # Backup written by idf.py when regenerating sdkconfig.
 sdkconfig.old
+
+# Local Claude Code settings
+.claude/
