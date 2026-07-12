@@ -29,6 +29,7 @@ protected:
      * @return A coherent copy of the cached configuration
      */
     antenna_switch_config_t get_cached_config() const;
+    void get_cached_config(antenna_switch_config_t &out) const;
 
     /**
      * @brief Invalidate the local cache (force refresh on next access)

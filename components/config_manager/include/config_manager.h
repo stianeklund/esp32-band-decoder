@@ -47,7 +47,9 @@ public:
 
     // Return snapshots so callers cannot observe a concurrent in-place update.
     antenna_switch_config_t get_config() const;
+    void get_config(antenna_switch_config_t &out) const;
     antenna_switch_config_t get_config_ref() const;
+    void get_cat_modes(bool &auto_mode, bool &ai_mode) const;
     void get_ptt_config(int &radio_a_input, bool &radio_a_active_high,
                         int &radio_b_input, bool &radio_b_active_high) const;
     bool is_mqtt_enabled() const;

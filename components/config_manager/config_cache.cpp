@@ -11,17 +11,23 @@ ConfigCache::~ConfigCache() {
 }
 
 antenna_switch_config_t ConfigCache::get_cached_config() const {
+    antenna_switch_config_t config;
+    get_cached_config(config);
+    return config;
+}
+
+void ConfigCache::get_cached_config(antenna_switch_config_t &out) const {
     const uint32_t current_version = ConfigManager::instance().get_config_version();
     std::lock_guard<std::mutex> lock(cache_mutex_);
 
     if (!cache_valid_.load(std::memory_order_relaxed) ||
         cached_version_.load(std::memory_order_relaxed) != current_version) {
-        *cached_config_ = ConfigManager::instance().get_config();
+        ConfigManager::instance().get_config(*cached_config_);
         cached_version_.store(current_version, std::memory_order_relaxed);
         cache_valid_.store(true, std::memory_order_release);
     }
 
-    return *cached_config_;
+    out = *cached_config_;
 }
 
 void ConfigCache::invalidate_cache() const {

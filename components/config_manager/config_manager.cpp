@@ -87,12 +87,24 @@ ConfigManager &ConfigManager::instance() {
 }
 
 antenna_switch_config_t ConfigManager::get_config() const {
+    antenna_switch_config_t config;
+    get_config(config);
+    return config;
+}
+
+void ConfigManager::get_config(antenna_switch_config_t &out) const {
     std::lock_guard<std::mutex> lock(config_mutex_);
-    return *current_config_;
+    out = *current_config_;
 }
 
 antenna_switch_config_t ConfigManager::get_config_ref() const {
     return get_config();
+}
+
+void ConfigManager::get_cat_modes(bool &auto_mode, bool &ai_mode) const {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    auto_mode = current_config_->auto_mode;
+    ai_mode = current_config_->ai_mode;
 }
 
 void ConfigManager::get_ptt_config(int &radio_a_input, bool &radio_a_active_high,
