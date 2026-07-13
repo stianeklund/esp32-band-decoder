@@ -46,9 +46,9 @@ esp_err_t SystemInitializer::init_task_watchdog() {
     vTaskDelay(pdMS_TO_TICKS(100));  // Add delay after deinit
     
     constexpr esp_task_wdt_config_t twdt_config = {
-        .timeout_ms = 30000,      // Increase timeout to 30 seconds
-        .idle_core_mask = (1 << 0), // Watch core 0
-        .trigger_panic = false    // Don't trigger panic on timeout
+        .timeout_ms = 30000,      // 30 second timeout
+        .idle_core_mask = (1 << 0) | (1 << 1), // Watch idle tasks on BOTH cores (PTT poll runs on CPU1)
+        .trigger_panic = true     // Panic + reset on a genuine hang: recover, don't merely diagnose
     };
 
     esp_err_t ret = esp_task_wdt_init(&twdt_config);

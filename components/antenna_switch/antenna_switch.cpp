@@ -464,129 +464,136 @@ int AntennaSwitch::get_active_relay_for_radio(RadioID radio) const {
     return 0; // No active relay found for this radio
 }
 
-void AntennaSwitch::on_radio_a_tx_start() {
-    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
-        return;
+// Safety action for a radio entering TX: de-energize the OTHER radio's active
+// relay if the interlock requires it. Runs WITHOUT interlock_mutex_ (needs only
+// the RelayController I2C mutex) so PTT protection can never wait on bookkeeping.
+// Returns the relay it turned off (0 if none).
+int AntennaSwitch::deenergize_other_radio_for_tx(const RadioID transmitting_radio,
+                                                 const antenna_switch_config_t& config) {
+    if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
+        return 0; // Only Radio A is ever energized; nothing to interlock on the other radio.
+    }
+    if (!relay_controller_) {
+        ESP_LOGE(TAG, "Relay controller not initialized, cannot apply TX interlock.");
+        return 0;
     }
 
+    const RadioID other = (transmitting_radio == RadioID::A) ? RadioID::B : RadioID::A;
+    const int other_relay = get_active_relay_for_radio(other);
+    if (other_relay == 0) {
+        return 0; // Other radio not using any relay; nothing to do.
+    }
+
+    const bool other_transmitting = (other == RadioID::A) ? is_radio_a_transmitting_effective()
+                                                          : is_radio_b_transmitting_effective();
+    if (other_transmitting &&
+        config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB &&
+        !config.interlock_auto_resolves_conflict) {
+        ESP_LOGW(TAG, "TX interlock: conflict, other radio (relay %d) is also transmitting and resolution is manual. Relay NOT changed.",
+                 other_relay);
+        return 0;
+    }
+
+    if (const esp_err_t err = relay_controller_->set_relay(other_relay, false); err != ESP_OK) {
+        ESP_LOGE(TAG, "TX interlock: failed to de-energize other radio relay %d: %s", other_relay, esp_err_to_name(err));
+        return 0;
+    }
+    ESP_LOGI(TAG, "TX interlock: de-energized other radio relay %d (safety-first, before lock).", other_relay);
+    return other_relay;
+}
+
+// Radio A RX->TX antenna swap on TX entry. Runs WITHOUT interlock_mutex_: it
+// only touches Radio A's own relays and must complete before RF flows, so it
+// must not wait on bookkeeping either.
+void AntennaSwitch::apply_radio_a_rx_to_tx_swap(const antenna_switch_config_t& config) {
+    if (!config.rx_antenna_enabled || !config.auto_mode) {
+        return;
+    }
+    const uint32_t current_freq = cat_parser_get_frequency();
+    if (current_freq == 0) {
+        return;
+    }
+    for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
+        const auto& band = config.bands[static_cast<size_t>(RadioID::A)][band_idx];
+        if (current_freq < band.start_freq || current_freq > band.end_freq) {
+            continue;
+        }
+        if (band.rx_antenna_port == 0) {
+            return; // No RX antenna configured for this band.
+        }
+        const int current_relay = get_active_relay_for_radio(RadioID::A);
+        if (current_relay != static_cast<int>(band.rx_antenna_port)) {
+            return; // Not currently on the RX antenna; nothing to swap.
+        }
+        // Choose the TX antenna relay: prefer the last-used, else first available.
+        int tx_relay_id = 0;
+        const uint8_t preferred = config.last_used_antenna[static_cast<size_t>(RadioID::A)][band_idx];
+        if (preferred != 0 && preferred <= config.num_antenna_ports && band.antenna_ports[preferred - 1]) {
+            tx_relay_id = preferred;
+        } else {
+            for (int j = 0; j < config.num_antenna_ports; j++) {
+                if (band.antenna_ports[j]) {
+                    tx_relay_id = j + 1;
+                    break;
+                }
+            }
+        }
+        if (tx_relay_id != 0 && tx_relay_id != current_relay && relay_controller_) {
+            ESP_LOGI(TAG, "PTT: Switching Radio A from RX ant %d to TX ant %d for band %s",
+                     current_relay, tx_relay_id, band.description);
+            relay_controller_->set_relay(current_relay, false);
+            relay_controller_->set_relay(tx_relay_id, true);
+        }
+        return; // Band handled.
+    }
+}
+
+void AntennaSwitch::on_radio_a_tx_start() {
     // Heap-backed snapshot keeps the ~1.85KB struct off the stack (may run on a shallow task).
     const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
     if (!config_snapshot) {
         ESP_LOGE(TAG, "Failed to allocate config snapshot in on_radio_a_tx_start");
-        xSemaphoreGive(interlock_mutex_);
         return;
     }
     get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
 
-    // RX Antenna feature: Switch from RX to TX antenna if currently on RX antenna
-    if (config.rx_antenna_enabled && config.auto_mode) {
-        // Find current band for Radio A
-        const uint32_t current_freq = cat_parser_get_frequency();
-        if (current_freq > 0) {
-            for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
-                const auto& band = config.bands[static_cast<size_t>(RadioID::A)][band_idx];
-                if (current_freq >= band.start_freq && current_freq <= band.end_freq) {
-                    // Check if RX antenna is configured and we're currently using it
-                    if (band.rx_antenna_port != 0) {
-                        const int current_relay = get_active_relay_for_radio(RadioID::A);
-                        if (current_relay == static_cast<int>(band.rx_antenna_port)) {
-                            // We're on the RX antenna, need to switch to TX antenna
-                            int tx_relay_id = 0;
-                            const uint8_t preferred = config.last_used_antenna[static_cast<size_t>(RadioID::A)][band_idx];
-                            if (preferred != 0 && preferred <= config.num_antenna_ports &&
-                                band.antenna_ports[preferred - 1]) {
-                                tx_relay_id = preferred;
-                            } else {
-                                // Find first available TX antenna
-                                for (int j = 0; j < config.num_antenna_ports; j++) {
-                                    if (band.antenna_ports[j]) {
-                                        tx_relay_id = j + 1;
-                                        break;
-                                    }
-                                }
-                            }
+    // --- SAFETY FIRST (no interlock_mutex_) ---
+    // Put Radio A on its TX antenna, then de-energize Radio B's conflicting
+    // relay. Both go through RelayController (its own I2C mutex) and must never
+    // be blocked by restore bookkeeping that holds interlock_mutex_.
+    apply_radio_a_rx_to_tx_swap(config);
 
-                            if (tx_relay_id != 0 && tx_relay_id != current_relay) {
-                                ESP_LOGI(TAG, "PTT: Switching from RX ant %d to TX ant %d for band %s",
-                                         current_relay, tx_relay_id, band.description);
-                                if (relay_controller_) {
-                                    relay_controller_->set_relay(current_relay, false);
-                                    relay_controller_->set_relay(tx_relay_id, true);
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
+    const int active_relay_radio_a = get_active_relay_for_radio(RadioID::A);
+    if (active_relay_radio_a == 0) {
+        ESP_LOGW(TAG, "Radio A TX: PTT active, but no antenna selected for Radio A. Interlock for Radio B not applied.");
+        return; // No antenna in use -> no interlock and no bookkeeping (matches prior behaviour).
+    }
+
+    const int b_relay_dropped = deenergize_other_radio_for_tx(RadioID::A, config);
+
+    // --- BOOKKEEPING (interlock_mutex_) ---
+    // Restore state only. Protection is already applied above, so a busy mutex
+    // must never abort it: log, retry once with a longer bound, then accept lost
+    // restore state (never lost protection).
+    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+        ESP_LOGE(TAG, "on_radio_a_tx_start: interlock_mutex_ busy after 10ms; retrying with 100ms bound.");
+        if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+            ESP_LOGE(TAG, "on_radio_a_tx_start: interlock_mutex_ still busy; Radio B relay %d already de-energized, restore state NOT recorded.",
+                     b_relay_dropped);
+            return;
         }
     }
 
-    const int active_relay_radio_a = get_active_relay_for_radio(RadioID::A);
-
-    if (active_relay_radio_a == 0) {
-        ESP_LOGW(TAG, "Radio A TX: PTT active, but no antenna selected for Radio A. Interlock for Radio B not applied.");
-        ESP_LOGD(TAG, "Radio A TX state: HW PTT A: %s, CAT TX A: %s.",
-                 hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
-                 cat_tx_a_active_.load(std::memory_order_relaxed) ? "ON" : "OFF");
-        xSemaphoreGive(interlock_mutex_);
-        return;
-    }
-
-    ESP_LOGV(TAG, "Radio A TX: HW PTT A: %s, CAT TX A: %s. Radio A using relay %d. Applying interlock for Radio B.",
-             hw_ptt_a_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
-             cat_tx_a_active_.load(std::memory_order_relaxed) ? "ON" : "OFF",
-             active_relay_radio_a);
-
-    // Cancel any pending restoration for Radio B
+    // Cancel any pending restoration for Radio B.
     if (radio_b_restore_delay_timer_ != nullptr && esp_timer_is_active(radio_b_restore_delay_timer_)) {
         ESP_LOGD(TAG, "Radio A TX start: Cancelling pending Radio B relay restoration.");
         esp_timer_stop(radio_b_restore_delay_timer_);
-        // pre_tx_active_relay_radio_b_ is not cleared here; it might be needed if this TX cycle also stops.
-    }
-    if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
-        ESP_LOGV(TAG, "Single Radio A mode, no interlock action needed for Radio B.");
-        xSemaphoreGive(interlock_mutex_);
-        return;
     }
 
-    if (!relay_controller_) {
-        ESP_LOGE(TAG, "Relay controller not initialized, cannot apply TX interlock for Radio B.");
-        xSemaphoreGive(interlock_mutex_);
-        return;
-    }
-
-    // Check if Radio B is ALREADY considered interlocked (pre_tx_active_relay_radio_b_ is set)
-    // AND if Radio B is currently not using any relay (meaning it was turned off and not restored yet).
-    bool b_was_already_interlocked_and_off = false;
-    if (pre_tx_active_relay_radio_b_ != 0) {
-        if (get_active_relay_for_radio(RadioID::B) == 0) { // Check if B is actually off
-            b_was_already_interlocked_and_off = true;
-            ESP_LOGD(TAG, "Radio A TX start: Radio B interlock for relay %d already in effect and B is off. No new deactivation needed.", pre_tx_active_relay_radio_b_);
-        }
-    }
-
-    if (!b_was_already_interlocked_and_off) {
-        const int active_b_relay = get_active_relay_for_radio(RadioID::B);
-
-        if (active_b_relay != 0) {
-            if (is_radio_b_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
-                ESP_LOGW(TAG, "Radio A TX start: Conflict! Radio B (relay %d) is also transmitting. Interlock resolution is manual. Radio B relay NOT changed.", active_b_relay);
-            } else {
-                pre_tx_active_relay_radio_b_ = active_b_relay; // Store it before turning off
-                ESP_LOGV(TAG, "Radio B was using relay %d. Turning it OFF due to Radio A TX.", pre_tx_active_relay_radio_b_);
-
-                if (const esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_b_, false); err != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to turn OFF Radio B relay %d: %s", pre_tx_active_relay_radio_b_, esp_err_to_name(err));
-                    pre_tx_active_relay_radio_b_ = 0; 
-                }
-            }
-        } else {
-            ESP_LOGV(TAG, "Radio B was not using any relay. No interlock action needed for Radio A TX.");
-            // If B was not using any relay, but pre_tx_active_relay_radio_b_ was set (e.g. from a previous cycle where timer was cancelled)
-            // it should remain set. So, don't clear pre_tx_active_relay_radio_b_ here.
-        }
+    // Record what to restore when A stops (don't clobber an existing pending relay).
+    if (b_relay_dropped != 0) {
+        pre_tx_active_relay_radio_b_ = b_relay_dropped;
     }
     xSemaphoreGive(interlock_mutex_);
 }
@@ -801,75 +808,44 @@ void AntennaSwitch::radio_b_restore_timer_callback(void* arg) {
 
 
 void AntennaSwitch::on_radio_b_tx_start() {
-    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
-        ESP_LOGE(TAG, "on_radio_b_tx_start: Could not take mutex");
-        return;
-    }
-
-    const int active_relay_radio_b = get_active_relay_for_radio(RadioID::B);
-
-    if (active_relay_radio_b == 0) {
-        ESP_LOGW(TAG, "Radio B TX: PTT active, but no antenna selected for Radio B. Interlock for Radio A not applied.");
-        ESP_LOGD(TAG, "Radio B TX state: HW PTT B: %s.",
-                 hw_ptt_b_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE");
-        xSemaphoreGive(interlock_mutex_);
-        return;
-    }
-
-    ESP_LOGI(TAG, "Radio B TX: HW PTT B: %s. Radio B using relay %d. Applying interlock for Radio A.",
-             hw_ptt_b_active_.load(std::memory_order_relaxed) ? "ACTIVE" : "INACTIVE",
-             active_relay_radio_b);
-
-    if (radio_a_restore_delay_timer_ != nullptr && esp_timer_is_active(radio_a_restore_delay_timer_)) {
-        ESP_LOGI(TAG, "Radio B TX start: Cancelling pending Radio A relay restoration.");
-        esp_timer_stop(radio_a_restore_delay_timer_);
-    }
-    
     // Heap-backed snapshot keeps the ~1.85KB struct off the stack (may run on a shallow task).
     const auto config_snapshot = std::make_unique<antenna_switch_config_t>();
     if (!config_snapshot) {
         ESP_LOGE(TAG, "Failed to allocate config snapshot in on_radio_b_tx_start");
-        xSemaphoreGive(interlock_mutex_);
         return;
     }
     get_cached_config(*config_snapshot);
     const auto& config = *config_snapshot;
 
-    if (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A) {
-        ESP_LOGW(TAG, "Radio B TX reported in SINGLE_A mode. This is unexpected.");
-        xSemaphoreGive(interlock_mutex_);
-        return;
-    }
-    if (!relay_controller_) {
-        ESP_LOGE(TAG, "Relay controller not initialized, cannot apply TX interlock for Radio A.");
-        xSemaphoreGive(interlock_mutex_);
-        return;
+    // --- SAFETY FIRST (no interlock_mutex_) ---
+    // De-energize Radio A's conflicting relay before any restore bookkeeping.
+    const int active_relay_radio_b = get_active_relay_for_radio(RadioID::B);
+    if (active_relay_radio_b == 0) {
+        ESP_LOGW(TAG, "Radio B TX: PTT active, but no antenna selected for Radio B. Interlock for Radio A not applied.");
+        return; // No antenna in use -> no interlock and no bookkeeping (matches prior behaviour).
     }
 
-    bool a_was_already_interlocked_and_off = false;
-    if (pre_tx_active_relay_radio_a_ != 0) {
-        if (get_active_relay_for_radio(RadioID::A) == 0) {
-            a_was_already_interlocked_and_off = true;
-            ESP_LOGD(TAG, "Radio B TX start: Radio A interlock for relay %d already in effect and A is off. No new deactivation needed.", pre_tx_active_relay_radio_a_);
+    const int a_relay_dropped = deenergize_other_radio_for_tx(RadioID::B, config);
+
+    // --- BOOKKEEPING (interlock_mutex_) ---
+    if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+        ESP_LOGE(TAG, "on_radio_b_tx_start: interlock_mutex_ busy after 10ms; retrying with 100ms bound.");
+        if (xSemaphoreTake(interlock_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
+            ESP_LOGE(TAG, "on_radio_b_tx_start: interlock_mutex_ still busy; Radio A relay %d already de-energized, restore state NOT recorded.",
+                     a_relay_dropped);
+            return;
         }
     }
 
-    if (!a_was_already_interlocked_and_off) {
-        if (const int active_a_relay = get_active_relay_for_radio(RadioID::A); active_a_relay != 0) {
-            if (is_radio_a_transmitting_effective() && config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB && !config.interlock_auto_resolves_conflict) {
-                ESP_LOGW(TAG, "Radio B TX start: Conflict! Radio A (relay %d) is also transmitting. Interlock resolution is manual. Radio A relay NOT changed.", active_a_relay);
-            } else {
-                pre_tx_active_relay_radio_a_ = active_a_relay;
-                ESP_LOGI(TAG, "Radio A was using relay %d. Turning it OFF due to Radio B TX.", pre_tx_active_relay_radio_a_);
+    // Cancel any pending restoration for Radio A.
+    if (radio_a_restore_delay_timer_ != nullptr && esp_timer_is_active(radio_a_restore_delay_timer_)) {
+        ESP_LOGI(TAG, "Radio B TX start: Cancelling pending Radio A relay restoration.");
+        esp_timer_stop(radio_a_restore_delay_timer_);
+    }
 
-                if (const esp_err_t err = relay_controller_->set_relay(pre_tx_active_relay_radio_a_, false); err != ESP_OK) {
-                    ESP_LOGE(TAG, "Failed to turn OFF Radio A relay %d: %s", pre_tx_active_relay_radio_a_, esp_err_to_name(err));
-                    pre_tx_active_relay_radio_a_ = 0; 
-                }
-            }
-        } else {
-            ESP_LOGD(TAG, "Radio A was not using any relay. No interlock action needed for Radio B TX.");
-        }
+    // Record what to restore when B stops (don't clobber an existing pending relay).
+    if (a_relay_dropped != 0) {
+        pre_tx_active_relay_radio_a_ = a_relay_dropped;
     }
     xSemaphoreGive(interlock_mutex_);
 }

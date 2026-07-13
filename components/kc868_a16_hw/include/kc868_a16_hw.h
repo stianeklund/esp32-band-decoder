@@ -21,8 +21,11 @@
 // I2C configuration
 #define I2C_MASTER_SCL_IO GPIO_NUM_5        // SCL pin
 #define I2C_MASTER_SDA_IO GPIO_NUM_4        // SDA pin
-// #define I2C_MASTER_FREQ_HZ 100000   // 100 kHz - PCF8574 spec limit
-#define I2C_MASTER_FREQ_HZ 400000   // 400 kHz (the PCF8574 can only do 100 kHz.. overclocking seems  to work OK)
+// PCF8574 is rated for 100 kHz. We run at 400 kHz (out of spec) which works on
+// this hardware; kc868_a16_get_i2c_error_count() instruments NACK/timeout rates
+// so we can tell whether the overclock is actually causing bus errors before
+// deciding to drop back to 100000.
+#define I2C_MASTER_FREQ_HZ 400000   // 400 kHz (overclocked; see note above)
 #define I2C_MASTER_NUM I2C_NUM_0    // I2C port number
 
 esp_err_t kc868_a16_hw_init();
@@ -33,7 +36,21 @@ uint16_t kc868_a16_get_all_outputs();
 esp_err_t kc868_a16_get_input_state(uint8_t input_num, bool* state);
 esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask);
 esp_err_t kc868_a16_get_inputs_0_7_raw(uint8_t* data);
+// Raw 16-bit PCF8574 input view (NOT inverted): bit '1' = pin HIGH, '0' = pin LOW.
+esp_err_t kc868_a16_get_all_inputs_raw(uint16_t* data);
 
 void kc868_a16_hw_scan_i2c_bus();
+
+// I2C bus error instrumentation (see I2C_MASTER_FREQ_HZ note above). Counters are
+// cumulative since boot and safe to read from any task.
+typedef struct {
+    uint32_t first_attempt_errors; // transactions that failed on the first try (timeout or NACK)
+    uint32_t retry_successes;      // recovered on the second attempt
+    uint32_t hard_failures;        // failed even after the retry (or a non-retryable error)
+    uint32_t mutex_failures;       // could not acquire the I2C bus mutex
+} kc868_a16_i2c_stats_t;
+
+void kc868_a16_get_i2c_stats(kc868_a16_i2c_stats_t* out);
+uint32_t kc868_a16_get_i2c_error_count(void);
 
 #endif // KC868_A16_HW_H

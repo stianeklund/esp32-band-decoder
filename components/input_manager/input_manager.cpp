@@ -16,10 +16,11 @@ static bool determine_ptt_logical_state(
     const uint16_t all_inputs_mask,             // The raw mask from kc868_a16_get_all_inputs()
     bool* out_pcf8574_pin_physically_low        // Output: true if the PCF8574 pin for this input is physically low
 ) {
-    // For kc868_a16_get_inputs_0_7_raw, all_inputs_mask contains raw PCF8574 data for pins 0-7:
+    // all_inputs_mask is the raw 16-bit PCF8574 view from kc868_a16_get_all_inputs_raw
+    // (pins 0-15, X01-X16):
     // - A bit value of '0' means the corresponding PCF8574 physical pin is LOW.
     // - A bit value of '1' means the corresponding PCF8574 physical pin is HIGH.
-    
+
     // Check if the specific bit for configured_pin_index in all_inputs_mask is '0' (LOW)
     *out_pcf8574_pin_physically_low = ((all_inputs_mask >> configured_pin_index) & 0x01) == 0;
     const bool pcf8574_pin_physically_high = !(*out_pcf8574_pin_physically_low);
@@ -135,7 +136,7 @@ void InputManager::ptt_poll_task_trampoline(void* arg) {
     manager->ptt_poll_task();
 }
 
-constexpr int kMaxMonitoredPin = 7;
+constexpr int kMaxMonitoredPin = 15; // All 16 KC868-A16 inputs (X01-X16) are polled for PTT
 
 void InputManager::handle_ptt_line(
     const int config_pin,
@@ -180,15 +181,21 @@ void InputManager::handle_ptt_line(
 }
 
 void InputManager::handle_ptt_read_error() {
-    if (ptt_a_last_hw_state_) {
-        AntennaSwitch::instance().on_hw_ptt_a_state_change(false);
-        ptt_a_last_hw_state_ = false;
-        ESP_LOGW(TAG, "PTT A forced INACTIVE due to read error.");
-    }
-    if (ptt_b_last_hw_state_) {
-        AntennaSwitch::instance().on_hw_ptt_b_state_change(false);
-        ptt_b_last_hw_state_ = false;
-        ESP_LOGW(TAG, "PTT B forced INACTIVE due to read error.");
+    // FAIL-CLOSED: an input read failure must NEVER release an asserted PTT.
+    // Forcing PTT inactive here (the previous behaviour) is fail-OPEN: if the
+    // radio is still keyed, it fires the TX-stop path and can hot-switch the
+    // other radio's antenna back in under RF. Instead we latch the last known
+    // PTT state, so a radio that was transmitting stays transmitting (interlock
+    // and TX-guard remain in force) until a clean read proves the line released.
+    ptt_read_error_count_++;
+
+    // Escalate logging without spamming: first failure, then every ~1 s (200 * 5ms).
+    if (ptt_read_error_count_ == 1 || (ptt_read_error_count_ % 200) == 0) {
+        ESP_LOGE(TAG,
+                 "PTT input read failing (%lu consecutive). Fail-closed: latching PTT A=%s, B=%s.",
+                 static_cast<unsigned long>(ptt_read_error_count_),
+                 ptt_a_last_hw_state_ ? "ACTIVE" : "INACTIVE",
+                 ptt_b_last_hw_state_ ? "ACTIVE" : "INACTIVE");
     }
 }
 
@@ -228,22 +235,24 @@ void InputManager::ptt_poll_task() {
 
         refresh_active_ptt_config();
 
-        uint8_t ptt_inputs_raw_0_7;
+        uint16_t ptt_inputs_raw;
 
-        if (const esp_err_t ret = kc868_a16_get_inputs_0_7_raw(&ptt_inputs_raw_0_7); ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to read inputs (0-7) in PTT poll task: %s", esp_err_to_name(ret));
+        if (const esp_err_t ret = kc868_a16_get_all_inputs_raw(&ptt_inputs_raw); ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to read inputs (0-15) in PTT poll task: %s", esp_err_to_name(ret));
             handle_ptt_read_error();
-            
+
             // Feed watchdog before error delay
             if (esp_task_wdt_status(xTaskGetCurrentTaskHandle()) == ESP_OK) {
                 esp_task_wdt_reset();
             }
-            
+
             vTaskDelay(pdMS_TO_TICKS(50)); // Moderate delay on error, but don't slow PTT too much
             continue;
         }
 
-        current_inputs_mask = static_cast<uint16_t>(ptt_inputs_raw_0_7);
+        // Clean read: clear the fail-closed error latch counter.
+        ptt_read_error_count_ = 0;
+        current_inputs_mask = ptt_inputs_raw;
 
         handle_ptt_line(
             ptt_input_radio_a_config_,

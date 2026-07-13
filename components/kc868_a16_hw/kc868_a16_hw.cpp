@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include <atomic>
 #include <mutex>
 
 static constexpr const char* TAG = "KC868_A16_HW";
@@ -10,6 +11,15 @@ static uint16_t output_state = 0;
 static std::mutex output_state_mutex_;
 static bool kc868_a16_initialized = false;
 static SemaphoreHandle_t i2c_bus_mutex_ = nullptr;
+
+// --- I2C bus error instrumentation ---
+// We overclock the PCF8574s to 400 kHz (see I2C_MASTER_FREQ_HZ note in header).
+// These counters let us measure whether that is actually causing bus errors, so
+// the decision to drop back to 100 kHz can be data-driven instead of a guess.
+static std::atomic<uint32_t> i2c_first_attempt_errors_{0}; // failed on the first try (timeout or NACK)
+static std::atomic<uint32_t> i2c_retry_successes_{0};      // recovered on the second attempt
+static std::atomic<uint32_t> i2c_hard_failures_{0};        // still failed after the retry (or non-retryable)
+static std::atomic<uint32_t> i2c_mutex_failures_{0};       // could not acquire the bus mutex
 
 // Variables to store I2C addresses for input expanders
 // These will be set to KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7 and
@@ -19,6 +29,7 @@ static uint8_t discovered_pcf8574_input_addr_for_pins_8_15 = 0;
 
 static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
     if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+        i2c_mutex_failures_.fetch_add(1, std::memory_order_relaxed);
         ESP_LOGW(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for write_pcf8574 to 0x%02X (attempt 1) after 10ms", pcTaskGetName(NULL), addr);
         return ESP_ERR_TIMEOUT;
     }
@@ -33,11 +44,17 @@ static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
 
     xSemaphoreGive(i2c_bus_mutex_);
 
+    if (ret != ESP_OK) {
+        i2c_first_attempt_errors_.fetch_add(1, std::memory_order_relaxed);
+    }
+
     if (ret == ESP_ERR_TIMEOUT) {
         ESP_LOGW(TAG, "write_pcf8574 to 0x%02X timed out on 1st attempt. Retrying after 10ms delay...", addr);
         vTaskDelay(pdMS_TO_TICKS(10));
 
         if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+            i2c_mutex_failures_.fetch_add(1, std::memory_order_relaxed);
+            i2c_hard_failures_.fetch_add(1, std::memory_order_relaxed);
             ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for write_pcf8574 to 0x%02X (attempt 2) after 10ms", pcTaskGetName(NULL), addr);
             return ESP_ERR_TIMEOUT;
         }
@@ -53,14 +70,17 @@ static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
         xSemaphoreGive(i2c_bus_mutex_);
 
         if (ret == ESP_OK) {
+            i2c_retry_successes_.fetch_add(1, std::memory_order_relaxed);
             ESP_LOGI(TAG, "write_pcf8574 to 0x%02X succeeded on retry.", addr);
         } else {
+            i2c_hard_failures_.fetch_add(1, std::memory_order_relaxed);
             ESP_LOGE(TAG, "write_pcf8574 to 0x%02X failed on retry: %s", addr, esp_err_to_name(ret));
         }
     } else if (ret != ESP_OK) {
+        i2c_hard_failures_.fetch_add(1, std::memory_order_relaxed);
         ESP_LOGE(TAG, "write_pcf8574 to 0x%02X failed on 1st attempt (not timeout): %s", addr, esp_err_to_name(ret));
     }
-    
+
     return ret;
 }
 
@@ -70,6 +90,7 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
     }
 
     if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+        i2c_mutex_failures_.fetch_add(1, std::memory_order_relaxed);
         ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for read_pcf8574 from 0x%02X (attempt 1) after 10ms", pcTaskGetName(NULL), addr);
         return ESP_ERR_TIMEOUT;
     }
@@ -81,8 +102,12 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
     i2c_master_stop(cmd);
     esp_err_t ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, pdMS_TO_TICKS(10));
     i2c_cmd_link_delete(cmd);
-    
+
     xSemaphoreGive(i2c_bus_mutex_); // Release mutex IMMEDIATELY after the I2C operation
+
+    if (ret != ESP_OK) {
+        i2c_first_attempt_errors_.fetch_add(1, std::memory_order_relaxed);
+    }
 
     // --- Handle Attempt 1 Result ---
     if (ret == ESP_ERR_TIMEOUT) {
@@ -91,9 +116,11 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
 
         // --- Attempt 2 ---
         if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
+            i2c_mutex_failures_.fetch_add(1, std::memory_order_relaxed);
+            i2c_hard_failures_.fetch_add(1, std::memory_order_relaxed);
             ESP_LOGE(TAG, "Task '%s' FAILED to take i2c_bus_mutex_ for read_pcf8574 from 0x%02X (attempt 2) after 10ms", pcTaskGetName(NULL), addr);
             // Return the original error or a new one indicating mutex failure on retry
-            return ESP_ERR_TIMEOUT; 
+            return ESP_ERR_TIMEOUT;
         }
 
         cmd = i2c_cmd_link_create(); // Recreate command
@@ -108,12 +135,15 @@ static esp_err_t read_pcf8574(const uint8_t addr, uint8_t *data) {
 
         // --- Handle Attempt 2 Result ---
         if (ret == ESP_OK) {
+            i2c_retry_successes_.fetch_add(1, std::memory_order_relaxed);
             ESP_LOGD(TAG, "read_pcf8574 from 0x%02X succeeded on retry.", addr);
         } else {
+            i2c_hard_failures_.fetch_add(1, std::memory_order_relaxed);
             ESP_LOGE(TAG, "read_pcf8574 from 0x%02X failed on retry: %s", addr, esp_err_to_name(ret));
         }
     } else if (ret != ESP_OK) {
         // Log non-timeout failure from first attempt
+        i2c_hard_failures_.fetch_add(1, std::memory_order_relaxed);
         ESP_LOGE(TAG, "read_pcf8574 from 0x%02X failed on 1st attempt (not timeout): %s", addr, esp_err_to_name(ret));
     }
     // If ret was ESP_OK on the first attempt, no further logs are printed here for success.
@@ -402,6 +432,34 @@ esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask) {
     return ESP_OK;
 }
 
+esp_err_t kc868_a16_get_all_inputs_raw(uint16_t* data) {
+    if (data == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (discovered_pcf8574_input_addr_for_pins_0_7 == 0 || discovered_pcf8574_input_addr_for_pins_8_15 == 0) {
+        ESP_LOGE(TAG, "Input expander addresses not initialized. Call kc868_a16_hw_init() first.");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint8_t byte_low, byte_high;
+
+    esp_err_t ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_0_7, &byte_low);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_8_15, &byte_high);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Raw PCF8574 view (NOT inverted): bit '1' = pin HIGH, bit '0' = pin LOW.
+    // This matches what determine_ptt_logical_state() in InputManager expects.
+    *data = (static_cast<uint16_t>(byte_high) << 8) | byte_low;
+    return ESP_OK;
+}
+
 esp_err_t kc868_a16_get_inputs_0_7_raw(uint8_t* data) {
     if (data == nullptr) {
         return ESP_ERR_INVALID_ARG;
@@ -467,4 +525,20 @@ void kc868_a16_hw_scan_i2c_bus() {
     } else {
         ESP_LOGD(TAG, "I2C scan complete. Found %d device(s).", found_count);
     }
+}
+
+void kc868_a16_get_i2c_stats(kc868_a16_i2c_stats_t* out) {
+    if (out == nullptr) {
+        return;
+    }
+    out->first_attempt_errors = i2c_first_attempt_errors_.load(std::memory_order_relaxed);
+    out->retry_successes       = i2c_retry_successes_.load(std::memory_order_relaxed);
+    out->hard_failures         = i2c_hard_failures_.load(std::memory_order_relaxed);
+    out->mutex_failures        = i2c_mutex_failures_.load(std::memory_order_relaxed);
+}
+
+uint32_t kc868_a16_get_i2c_error_count() {
+    // Quick health probe: total first-attempt failures since boot. Non-zero (and
+    // rising) means the 400 kHz overclock is stressing the bus.
+    return i2c_first_attempt_errors_.load(std::memory_order_relaxed);
 }

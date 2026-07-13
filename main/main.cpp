@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_system.h" // For esp_restart
 #include "relay_controller.h"
+#include "kc868_a16_hw.h"
 #include "config_manager.h"
 #include "restart_manager.h"
 #include "serial_cli.h"
@@ -244,12 +245,27 @@ extern "C" [[noreturn]] void app_main(void) {
         if (++loop_count % 600 == 0) {
             size_t free_heap = esp_get_free_heap_size();
             size_t min_free_heap = esp_get_minimum_free_heap_size();
-            ESP_LOGI(TAG, "Memory status - Free: %u bytes, Min free ever: %u bytes", 
+            ESP_LOGI(TAG, "Memory status - Free: %u bytes, Min free ever: %u bytes",
                      free_heap, min_free_heap);
-            
+
             // Log warning if free memory is getting low
             if (free_heap < 32768) { // Less than 32KB
                 ESP_LOGW(TAG, "Low memory warning: only %u bytes free", free_heap);
+            }
+
+            // I2C bus health: tells us whether the 400 kHz PCF8574 overclock is
+            // actually causing bus errors (see I2C_MASTER_FREQ_HZ in kc868_a16_hw.h).
+            kc868_a16_i2c_stats_t i2c_stats;
+            kc868_a16_get_i2c_stats(&i2c_stats);
+            if (i2c_stats.first_attempt_errors != 0 || i2c_stats.hard_failures != 0 ||
+                i2c_stats.mutex_failures != 0) {
+                ESP_LOGW(TAG, "I2C bus health - first-attempt errors: %lu, retry recoveries: %lu, hard failures: %lu, mutex failures: %lu",
+                         static_cast<unsigned long>(i2c_stats.first_attempt_errors),
+                         static_cast<unsigned long>(i2c_stats.retry_successes),
+                         static_cast<unsigned long>(i2c_stats.hard_failures),
+                         static_cast<unsigned long>(i2c_stats.mutex_failures));
+            } else {
+                ESP_LOGI(TAG, "I2C bus health - clean (no errors since boot)");
             }
         }
 

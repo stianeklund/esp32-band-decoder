@@ -59,8 +59,9 @@ private:
 
     bool initialized_ = false;
     TaskHandle_t ptt_poll_task_handle_ = nullptr;
-    bool ptt_a_last_hw_state_ = false; 
-    bool ptt_b_last_hw_state_ = false; 
+    bool ptt_a_last_hw_state_ = false;
+    bool ptt_b_last_hw_state_ = false;
+    uint32_t ptt_read_error_count_ = 0; // consecutive input-read failures (fail-closed latch)
 
     // Locally cached PTT configuration
     int ptt_input_radio_a_config_ = -1;

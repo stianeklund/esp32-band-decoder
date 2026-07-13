@@ -170,6 +170,12 @@ private:
 
     esp_err_t update_last_used_antenna_preference(int activated_relay_id, RadioID radio_of_activated_relay, int band_idx_for_preference);
 
+    // TX-start safety helpers. These run WITHOUT interlock_mutex_ so PTT
+    // protection is never blocked by restore-state bookkeeping (see 0.1).
+    // deenergize_other_radio_for_tx returns the relay it turned off (0 if none).
+    int deenergize_other_radio_for_tx(RadioID transmitting_radio, const antenna_switch_config_t& config);
+    void apply_radio_a_rx_to_tx_swap(const antenna_switch_config_t& config);
+
     void attempt_restore_auto_resolved_radio_a_relay();
     void attempt_restore_auto_resolved_radio_b_relay();
 
