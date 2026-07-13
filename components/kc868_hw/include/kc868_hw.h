@@ -6,17 +6,25 @@
 #include "sdkconfig.h"
 
 // --- Board I/O sizing (selected via menuconfig "Band Decoder Board") ---
-// The KC868-A8 populates only the first output expander (0x24) and the first
-// input expander (0x22); the A16 adds a second of each (0x25, 0x21). All the
-// hardware ceiling is expressed through these two counts so the rest of the
-// HAL can skip the absent chips instead of NACKing on them.
-#if defined(CONFIG_BOARD_KC868_A8)
+// The A6 (6ch) and A8 (8ch) populate only the first output expander (0x24) and
+// the first input expander (0x22); the A16 adds a second of each (0x25, 0x21).
+// All the hardware ceiling is expressed through these two counts so the rest of
+// the HAL can skip the absent chips instead of NACKing on them.
+#if defined(CONFIG_BOARD_KC868_A6)
+#define KC868_HW_NUM_RELAYS 6
+#define KC868_HW_NUM_INPUTS 6
+#elif defined(CONFIG_BOARD_KC868_A8)
 #define KC868_HW_NUM_RELAYS 8
 #define KC868_HW_NUM_INPUTS 8
 #else // CONFIG_BOARD_KC868_A16 (default)
 #define KC868_HW_NUM_RELAYS 16
 #define KC868_HW_NUM_INPUTS 16
 #endif
+
+// Max antenna ports selectable per radio (<= MAX_ANTENNA_PORTS = 8). A board with
+// fewer than 8 relays caps here so the UI/config can't request a port with no
+// relay behind it (the A16 keeps the full 8 per radio).
+#define KC868_HW_MAX_PORTS_PER_RADIO (KC868_HW_NUM_RELAYS < 8 ? KC868_HW_NUM_RELAYS : 8)
 
 // PCF8574 I2C addresses
 #define PCF8574_OUTPUT_ADDR_1 0x24  // First output expander (D0-D7)
@@ -29,8 +37,14 @@
 #define KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15  0x21 // Expected I2C address for input chip handling pins 8-15 (X09-X16)
 // --- End Configuration for Input PCF8574 Expanders ---
 
-// I2C configuration
-#define I2C_MASTER_SCL_IO GPIO_NUM_5        // SCL pin
+// I2C configuration. SDA is GPIO4 on all supported boards; SCL differs by board:
+// the KC868-A6 routes SCL to GPIO15 (a boot strapping pin, but fine as I2C SCL
+// after reset), while the A8/A16 use GPIO5.
+#if defined(CONFIG_BOARD_KC868_A6)
+#define I2C_MASTER_SCL_IO GPIO_NUM_15       // SCL pin (KC868-A6)
+#else
+#define I2C_MASTER_SCL_IO GPIO_NUM_5        // SCL pin (KC868-A8/A16)
+#endif
 #define I2C_MASTER_SDA_IO GPIO_NUM_4        // SDA pin
 // PCF8574 is rated for 100 kHz. We run at 400 kHz (out of spec) which works on
 // this hardware; kc868_hw_get_i2c_error_count() instruments NACK/timeout rates

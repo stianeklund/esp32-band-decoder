@@ -5,7 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include <esp_log.h>
-#include "sdkconfig.h" // For CONFIG_BOARD_KC868_A8 (board selection)
+#include "sdkconfig.h" // For CONFIG_BOARD_KC868_* (board selection)
 #include "kc868_hw.h" // For KC868_HW_NUM_INPUTS (PTT pin range)
 
 const char *HtmlContent::TAG = "HTML";
@@ -393,7 +393,7 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<div class='form-group' style='margin-bottom: 20px;'>";
     ss_buffer << "<label for='num_antenna_ports'>Number of outputs:</label>";
     ss_buffer << "<input type='number' id='num_antenna_ports' name='num_antenna_ports' value='"
-            << std::to_string(config.num_antenna_ports) << "' min='1' max='" << MAX_ANTENNA_PORTS << "' onchange='updateAntennaPorts()'>";
+            << std::to_string(config.num_antenna_ports) << "' min='1' max='" << KC868_HW_MAX_PORTS_PER_RADIO << "' onchange='updateAntennaPorts()'>";
     ss_buffer << "</div>";
 
 // Radio Operation Mode Dropdown
@@ -401,8 +401,9 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<label for='radio_operation_mode'>Radio Operation Mode:</label>";
     ss_buffer << "<select id='radio_operation_mode' name='radio_operation_mode' onchange='toggleInterlockVisibility()'>";
     ss_buffer << "<option value='SINGLE_A' " << (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A ? "selected" : "") << ">Radio A Only</option>";
-#if !defined(CONFIG_BOARD_KC868_A8)
+#if defined(CONFIG_BOARD_KC868_A16)
     // Dual-radio modes require Radio B relays (9-16), which only the A16 has.
+    // Single-radio boards (A8, A6) omit these options entirely.
     ss_buffer << "<option value='ALTERNATING_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_ALTERNATING_AB ? "selected" : "") << ">Alternating (A or B, one at a time)</option>";
     ss_buffer << "<option value='CONCURRENT_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "selected" : "") << ">Concurrent (A and B, different antennas)</option>";
 #endif
