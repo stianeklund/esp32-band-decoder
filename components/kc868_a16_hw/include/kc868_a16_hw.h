@@ -29,7 +29,6 @@
 #define I2C_MASTER_NUM I2C_NUM_0    // I2C port number
 
 esp_err_t kc868_a16_hw_init();
-esp_err_t kc868_a16_set_output(uint8_t output_num, bool state);
 esp_err_t kc868_a16_get_output_state(uint8_t output_num, bool* state);
 esp_err_t kc868_a16_set_all_outputs(uint16_t state_mask);
 uint16_t kc868_a16_get_all_outputs();

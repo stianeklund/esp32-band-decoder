@@ -295,39 +295,6 @@ esp_err_t kc868_a16_hw_init() {
     return ESP_OK;
 }
 
-esp_err_t kc868_a16_set_output(const uint8_t output_num, const bool state) {
-    if (output_num >= 16) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    std::lock_guard<std::mutex> state_lock(output_state_mutex_);
-
-    const uint8_t pcf_addr = (output_num < 8) ? PCF8574_OUTPUT_ADDR_1 : PCF8574_OUTPUT_ADDR_2;
-    const uint8_t bit_pos = output_num % 8;
-    uint8_t current_byte = (output_num < 8) ?
-        (output_state & 0xFF) : ((output_state >> 8) & 0xFF);
-
-    if (state) {
-        current_byte &= ~(1 << bit_pos);  // PCF8574 is active low
-    } else {
-        current_byte |= (1 << bit_pos);
-    }
-
-    // Removed vTaskDelay here, relying on delay in write_pcf8574
-
-    const esp_err_t ret = write_pcf8574(pcf_addr, current_byte);
-
-    if (ret == ESP_OK) {
-        if (output_num < 8) {
-            output_state = (output_state & 0xFF00) | current_byte;
-        } else {
-            output_state = (output_state & 0x00FF) | (current_byte << 8);
-        }
-        // Removed vTaskDelay here
-    }
-    return ret;
-}
-
 esp_err_t kc868_a16_get_output_state(const uint8_t output_num, bool* state) {
     if (output_num >= 16 || state == nullptr) {
         return ESP_ERR_INVALID_ARG;
@@ -351,14 +318,16 @@ esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
         ESP_LOGE(TAG, "set_all_outputs: Failed to write to ADDR_1 (0x%02X): %s", PCF8574_OUTPUT_ADDR_1, esp_err_to_name(ret));
         return ret;
     }
+    // Chip 1's outputs are latched now that its write succeeded, so commit its
+    // cache byte before risking chip 2 -- an ADDR_2 failure won't leave it stale.
+    output_state = (output_state & 0xFF00) | low_byte;
+
     ret = write_pcf8574(PCF8574_OUTPUT_ADDR_2, high_byte);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "set_all_outputs: Failed to write to ADDR_2 (0x%02X): %s", PCF8574_OUTPUT_ADDR_2, esp_err_to_name(ret));
         return ret;
     }
-
-    // This part only executes if both writes were successful
-    output_state = (~state_mask) & 0xFFFF; // output_state stores PCF8574 register view (active low)
+    output_state = (output_state & 0x00FF) | (static_cast<uint16_t>(high_byte) << 8);
     ESP_LOGD(TAG, "set_all_outputs: Success. PCF8574s updated. Logical mask 0x%04X. output_state (active-low) 0x%04X", state_mask, output_state);
     return ret;
 }
