@@ -402,8 +402,10 @@ esp_err_t AntennaSwitch::set_frequency(const uint32_t frequency) {
             if (target_relay_id != 0) {
                 ESP_LOGD(TAG, "Auto-selecting relay %d for band %d (Radio %c) due to frequency %lu Hz",
                          target_relay_id, i, (current_radio_context == RadioID::A ? 'A' : 'B'), frequency);
-                // Use AntennaSwitch's own set_relay_for_antenna to ensure conflict anticipation and restoration logic is applied
-                return set_relay_for_antenna(target_relay_id, i, current_radio_context, true);
+                // Use AntennaSwitch's own set_relay_for_antenna to ensure conflict anticipation and restoration logic is applied.
+                // When we picked the RX antenna, do NOT record it as the band's TX preference: otherwise the PTT
+                // RX->TX swap would later read it back as the "TX antenna" and transmit on the RX antenna.
+                return set_relay_for_antenna(target_relay_id, i, current_radio_context, true, /*update_preference=*/!use_rx_antenna);
             }
 
             ESP_LOGW(TAG, "No available/preferred antenna port found for Radio %c, Band %d (Freq: %lu Hz)",
@@ -521,18 +523,22 @@ void AntennaSwitch::apply_radio_a_rx_to_tx_swap(const antenna_switch_config_t& c
         if (band.rx_antenna_port == 0) {
             return; // No RX antenna configured for this band.
         }
+        const int rx_relay = static_cast<int>(band.rx_antenna_port);
         const int current_relay = get_active_relay_for_radio(RadioID::A);
-        if (current_relay != static_cast<int>(band.rx_antenna_port)) {
+        if (current_relay != rx_relay) {
             return; // Not currently on the RX antenna; nothing to swap.
         }
         // Choose the TX antenna relay: prefer the last-used, else first available.
+        // NEVER pick the RX antenna itself as the TX antenna: transmitting on an
+        // RX-only antenna can damage equipment.
         int tx_relay_id = 0;
         const uint8_t preferred = config.last_used_antenna[static_cast<size_t>(RadioID::A)][band_idx];
-        if (preferred != 0 && preferred <= config.num_antenna_ports && band.antenna_ports[preferred - 1]) {
+        if (preferred != 0 && preferred != rx_relay &&
+            preferred <= config.num_antenna_ports && band.antenna_ports[preferred - 1]) {
             tx_relay_id = preferred;
         } else {
             for (int j = 0; j < config.num_antenna_ports; j++) {
-                if (band.antenna_ports[j]) {
+                if (band.antenna_ports[j] && (j + 1) != rx_relay) {
                     tx_relay_id = j + 1;
                     break;
                 }
@@ -543,6 +549,9 @@ void AntennaSwitch::apply_radio_a_rx_to_tx_swap(const antenna_switch_config_t& c
                      current_relay, tx_relay_id, band.description);
             relay_controller_->set_relay(current_relay, false);
             relay_controller_->set_relay(tx_relay_id, true);
+        } else {
+            ESP_LOGW(TAG, "PTT: no TX antenna distinct from RX ant %d configured for band %s; transmitting on the RX antenna!",
+                     rx_relay, band.description);
         }
         return; // Band handled.
     }
@@ -1341,7 +1350,7 @@ esp_err_t AntennaSwitch::restart() {
     return ESP_OK; // esp_restart() does not return
 }
 
-esp_err_t AntennaSwitch::set_relay_for_antenna(const int relay_id, const int band_number, const RadioID radio, const bool state) {
+esp_err_t AntennaSwitch::set_relay_for_antenna(const int relay_id, const int band_number, const RadioID radio, const bool state, const bool update_preference) {
     if (!relay_controller_) {
         ESP_LOGE(TAG, "Relay controller not initialized for set_relay_for_antenna");
         return ESP_ERR_INVALID_STATE;
@@ -1439,7 +1448,7 @@ esp_err_t AntennaSwitch::set_relay_for_antenna(const int relay_id, const int ban
     // Execute the relay change
     const esp_err_t ret = relay_controller_->set_relay_for_antenna(relay_id, band_number, radio, state);
 
-    if (ret == ESP_OK && state) {
+    if (ret == ESP_OK && state && update_preference) {
         // Update last used antenna preference if a relay was successfully turned ON
         // Pass band_number which was determined by set_frequency or passed directly.
         // If band_number is -1 (e.g. direct set_relay call), preference update will skip if band_idx is -1.

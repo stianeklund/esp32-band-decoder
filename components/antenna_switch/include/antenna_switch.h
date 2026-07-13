@@ -133,7 +133,10 @@ public:
     // Set the relay controller reference
     void set_relay_controller(RelayController* controller);
 
-    esp_err_t set_relay_for_antenna(int relay_id, int band_number, RadioID radio, bool state);
+    // update_preference=false skips recording this relay as the band's "last used"
+    // TX antenna. Used when auto-selecting the RX antenna, which must never become
+    // the TX preference (the PTT RX->TX swap would then transmit on the RX antenna).
+    esp_err_t set_relay_for_antenna(int relay_id, int band_number, RadioID radio, bool state, bool update_preference = true);
 
     esp_err_t set_relay_for_antenna(const int relay_id, const int band_number, const bool state) {
         return set_relay_for_antenna(relay_id, band_number, RadioID::A, state);
