@@ -34,7 +34,8 @@ typedef enum {
     WS_EVENT_STATUS_UPDATE = 0,
     WS_EVENT_RELAY_STATE_CHANGED = 1,
     WS_EVENT_TRANSMIT_STATE_CHANGED = 2,
-    WS_EVENT_CONFIG_CHANGED = 3
+    WS_EVENT_CONFIG_CHANGED = 3,
+    WS_EVENT_TRANSVERTER_CHANGED = 4
 } ws_event_type_t;
 
 // Maximum sizes
@@ -65,6 +66,7 @@ typedef struct {
     bool relay_state_changes;
     bool transmit_state_changes;
     bool config_changes;
+    bool transverter_state_changes;
 } ws_client_subscriptions_t;
 
 #ifdef __cplusplus

@@ -31,7 +31,9 @@ CatParser::CatParser()
         {'A' << 8 | 'P', &CatParser::process_ap_command},
         {'I' << 8 | 'F', &CatParser::process_if_command},
         {'T' << 8 | 'X', &CatParser::process_tx_command},
-        {'R' << 8 | 'X', &CatParser::process_rx_command}
+        {'R' << 8 | 'X', &CatParser::process_rx_command},
+        {'E' << 8 | 'X', &CatParser::process_ex_command},
+        {'X' << 8 | 'O', &CatParser::process_xo_command}
     };
 }
 
@@ -313,20 +315,6 @@ void CatParser::uart0_to_uart2_task()
 }
 
 esp_err_t CatParser::dispatch_one_command(std::string_view command_view) {
-    // TEMP DIAGNOSTIC (transverter detection): log ONLY transverter-related CAT commands so we can
-    // see whether they cross this serial line when the XVTR button is pressed, and with what value,
-    // without the FA/FB/IF flood. Matches EX* (covers EX056/EX085/EX059/EX060), AN*, XO* — all valid
-    // TS-590SG CAT commands. Grep the monitor for "[CATRAW]" while toggling XVTR. Remove once the
-    // detection approach is settled.
-    {
-        const auto starts_with = [command_view](const std::string_view p) {
-            return command_view.size() >= p.size() && command_view.substr(0, p.size()) == p;
-        };
-        if (starts_with("EX") || starts_with("AN") || starts_with("XO")) {
-            ESP_LOGI(TAG, "[CATRAW] %.*s", static_cast<int>(command_view.length()), command_view.data());
-        }
-    }
-
     if (command_view.length() < 2) { // Command must be at least 2 chars
         if (!command_view.empty()) {
             ESP_LOGD(TAG, "Short command received (length < 2): %.*s", static_cast<int>(command_view.length()), command_view.data());
@@ -377,17 +365,35 @@ esp_err_t CatParser::handle_frequency_change(const uint32_t frequency) {
 
     const int new_band_index = get_band_index(frequency);
 
-    // Switch antenna if the band changed or no valid band was set
-    if (current_band_index != new_band_index) {
-        ESP_LOGV(TAG, "Frequency requires band change, setting new antenna");
+    // While transverter mode is active the reported frequency is the IF (e.g. 28 MHz),
+    // but the real on-air band (e.g. 2 m) is unsupported by the antenna switch. Keep the
+    // antenna ports off and simply track the IF frequency for display/restore purposes.
+    if (transverter_active.load()) {
+        ESP_LOGV(TAG, "Transverter active; skipping antenna switch for IF %lu Hz", frequency);
+        current_frequency = frequency;
+        current_band_index = new_band_index;
+        return ESP_OK;
+    }
 
-        if (const esp_err_t ret = AntennaSwitch::instance().set_frequency(frequency); ret != ESP_OK) {
-            if (ret == ESP_ERR_NOT_FOUND) {
-                ESP_LOGW(TAG, "Frequency %lu Hz not supported by any configured band", frequency);
-            } else {
-                ESP_LOGE(TAG, "Failed to set frequency: %s", esp_err_to_name(ret));
+    // Act only when the band actually changes.
+    if (current_band_index != new_band_index) {
+        if (new_band_index < 0) {
+            // Frequency is not in any configured band (e.g. 6 m / 50 MHz not set up).
+            // We cannot select an antenna, so turn off Radio A's selected port but
+            // still track/display the frequency. This is not an error.
+            ESP_LOGI(TAG, "Frequency %lu Hz not in any configured band; turning off Radio A port", frequency);
+            const int active_relay = AntennaSwitch::instance().get_active_relay_for_radio(RadioID::A);
+            if (active_relay != 0) {
+                if (const esp_err_t ret = AntennaSwitch::instance().set_relay(active_relay, false); ret != ESP_OK) {
+                    ESP_LOGW(TAG, "Failed to turn off Radio A relay %d: %s", active_relay, esp_err_to_name(ret));
+                }
             }
-            return ret;
+        } else {
+            ESP_LOGV(TAG, "Frequency requires band change, setting new antenna");
+            if (const esp_err_t ret = AntennaSwitch::instance().set_frequency(frequency); ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to set frequency %lu Hz: %s", frequency, esp_err_to_name(ret));
+                return ret;
+            }
         }
     } else {
         ESP_LOGV(TAG, "Frequency is in the same band, skipping antenna switch");
@@ -396,7 +402,7 @@ esp_err_t CatParser::handle_frequency_change(const uint32_t frequency) {
     // Update cached values
     current_frequency = frequency;
     current_band_index = new_band_index;
-    
+
     return ESP_OK;
 }
 
@@ -713,6 +719,145 @@ esp_err_t CatParser::process_fb_command(const std::string_view command) {
     ESP_LOGE(TAG, "Invalid frequency format in FB command: %.*s",
              static_cast<int>(command.length()), command.data());
     return ESP_OK;
+}
+
+esp_err_t CatParser::process_ex_command(const std::string_view payload) {
+    // EX menu format: [menu(3)][padding "0000"(4)][value(var)]. We only act on
+    // menu 056 (Transverter Function); value 1 = ON, 0 = OFF. All other menus and
+    // the read/query form (7 chars, no value) are ignored.
+    if (payload.length() < 8) {
+        return ESP_OK; // read form or malformed: nothing to act on
+    }
+
+    unsigned int menu = 0;
+    const char* const menu_end = payload.data() + 3;
+    if (const auto r = std::from_chars(payload.data(), menu_end, menu);
+        r.ec != std::errc() || r.ptr != menu_end) {
+        ESP_LOGV(TAG, "EX command: unparseable menu in '%.*s'",
+                 static_cast<int>(payload.length()), payload.data());
+        return ESP_OK;
+    }
+
+    if (menu != 56) {
+        return ESP_OK; // not the transverter menu
+    }
+
+    const std::string_view value_str = payload.substr(7);
+    unsigned int value = 0;
+    const char* const val_end = value_str.data() + value_str.length();
+    if (const auto r = std::from_chars(value_str.data(), val_end, value);
+        r.ec != std::errc() || r.ptr != val_end) {
+        ESP_LOGW(TAG, "EX056 (transverter): invalid value '%.*s'",
+                 static_cast<int>(value_str.length()), value_str.data());
+        return ESP_OK;
+    }
+
+    set_transverter_active(value != 0);
+    return ESP_OK;
+}
+
+esp_err_t CatParser::process_xo_command(const std::string_view payload) {
+    // XO format: [direction(1)][offset in Hz(11)]. direction 0=plus, 1=minus.
+    // The read query ("XO;") has an empty payload and is ignored.
+    if (payload.length() < 2) {
+        return ESP_OK;
+    }
+
+    const uint8_t dir = (payload[0] == '1') ? 1 : 0;
+
+    const std::string_view offset_str = payload.substr(1);
+    uint32_t offset = 0;
+    const char* const off_end = offset_str.data() + offset_str.length();
+    if (const auto r = std::from_chars(offset_str.data(), off_end, offset);
+        r.ec != std::errc() || r.ptr != off_end) {
+        ESP_LOGW(TAG, "XO (transverter offset): invalid offset '%.*s'",
+                 static_cast<int>(offset_str.length()), offset_str.data());
+        return ESP_OK;
+    }
+
+    transverter_offset_hz.store(static_cast<int32_t>(offset));
+    transverter_minus_dir.store(dir);
+    ESP_LOGI(TAG, "Transverter offset set: %s%lu Hz",
+             dir ? "-" : "+", static_cast<unsigned long>(offset));
+
+    // If already in transverter mode, the corrected frequency just changed.
+    if (transverter_active.load()) {
+        broadcast_transverter_state();
+    }
+    return ESP_OK;
+}
+
+void CatParser::set_transverter_active(const bool active) {
+    if (transverter_active.load() == active) {
+        return; // not a transition
+    }
+    transverter_active.store(active);
+    ESP_LOGI(TAG, "Transverter mode %s", active ? "ENABLED" : "DISABLED");
+
+    if (active) {
+        // The ARCI XVTR macro does not push XO, but the radio stores the offset
+        // and answers a query. Read it for the transverter WebSocket event / info
+        // (the radio itself already applies the offset to its reported frequency).
+        send_to_radio("XO;");
+
+        // Turn off Radio A's currently selected antenna port: the switch cannot
+        // handle the transverter (e.g. 2 m) band anyway.
+        const int active_relay = AntennaSwitch::instance().get_active_relay_for_radio(RadioID::A);
+        if (active_relay != 0) {
+            ESP_LOGI(TAG, "Transverter active: turning off Radio A relay %d", active_relay);
+            if (const esp_err_t ret = AntennaSwitch::instance().set_relay(active_relay, false); ret != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to turn off Radio A relay %d: %s", active_relay, esp_err_to_name(ret));
+            }
+        }
+    } else if (current_frequency != 0) {
+        // Leaving transverter mode: re-evaluate the antenna for the true IF
+        // frequency so the correct port is restored (call the switch directly to
+        // bypass the same-frequency early-return in handle_frequency_change).
+        if (const esp_err_t ret = AntennaSwitch::instance().set_frequency(current_frequency); ret != ESP_OK) {
+            ESP_LOGD(TAG, "Antenna restore after transverter off returned: %s", esp_err_to_name(ret));
+        }
+    }
+
+    broadcast_transverter_state();
+}
+
+uint32_t CatParser::transverter_rf_from_if(const uint32_t if_freq) const {
+    // The radio reports the IF frequency (e.g. 28.174 MHz) over CAT; the on-air
+    // (transverter) frequency is IF + offset (plus direction) or IF - offset (minus).
+    const int32_t offset = transverter_offset_hz.load();
+    if (transverter_minus_dir.load()) {
+        if (static_cast<int64_t>(if_freq) - offset < 0) {
+            return 0;
+        }
+        return if_freq - static_cast<uint32_t>(offset);
+    }
+    return if_freq + static_cast<uint32_t>(offset);
+}
+
+void CatParser::broadcast_transverter_state() {
+    if (!websocket_server_is_running()) {
+        return;
+    }
+    // The event always reports the true on-air frequency (IF + offset) so an external
+    // consumer can drive the physical transverter, independent of the display setting.
+    const uint32_t if_freq = current_frequency;
+    const uint32_t rf_freq = transverter_active.load() ? transverter_rf_from_if(if_freq) : if_freq;
+    WebSocketServer::instance().broadcast_transverter_state_change(
+        transverter_active.load(),
+        transverter_offset_hz.load(),
+        if_freq,
+        rf_freq);
+}
+
+uint32_t CatParser::get_display_frequency() const {
+    // The radio reports the IF frequency (e.g. 28.174 MHz) over CAT even in
+    // transverter mode. Show the corrected on-air frequency (IF +/- offset) only
+    // when transverter mode is active AND the user has enabled transverter frequency
+    // display; otherwise report the raw IF frequency.
+    if (!transverter_active.load() || !current_config.transverter_show_frequency) {
+        return current_frequency;
+    }
+    return transverter_rf_from_if(current_frequency);
 }
 
 void CatParser::set_transmitting(const bool new_state) {

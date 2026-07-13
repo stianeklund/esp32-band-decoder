@@ -289,6 +289,7 @@ esp_err_t ConfigManager::init() { // Made non-const
         current_config_->interlock_auto_resolves_conflict = true; // Default to true for safety if concurrent mode is chosen
         current_config_->auto_restore_on_conflict_resolution = true; // Default to true
         current_config_->radio_restore_delay_ms = 200; // Default interlock restore delay
+        current_config_->transverter_show_frequency = true; // Default: show corrected transverter frequency
 
         // Initialize PTT input configuration defaults
         current_config_->ptt_input_radio_a = -1; // Disabled by default
@@ -403,6 +404,7 @@ esp_err_t ConfigManager::reset_to_defaults() {
     defaultConfig.interlock_auto_resolves_conflict = true;
     defaultConfig.auto_restore_on_conflict_resolution = true;
     defaultConfig.radio_restore_delay_ms = 200;
+    defaultConfig.transverter_show_frequency = true;
     defaultConfig.ptt_input_radio_a = -1;
     defaultConfig.ptt_input_radio_a_active_high = true;
     defaultConfig.ptt_input_radio_b = -1;
@@ -642,7 +644,14 @@ esp_err_t ConfigManager::save_to_nvs() const {
         ESP_LOGE(TAG, "Error saving radio_restore_delay_ms: %s", esp_err_to_name(restore_delay_err));
         if (ret == ESP_OK) ret = restore_delay_err;
     }
-    
+
+    esp_err_t txv_show_err = nvs_set_u8(nvs_handle, "txv_show_freq",
+                                        static_cast<uint8_t>(current_config_->transverter_show_frequency));
+    if (txv_show_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error saving transverter_show_frequency: %s", esp_err_to_name(txv_show_err));
+        if (ret == ESP_OK) ret = txv_show_err;
+    }
+
     // Final commit for the newly added fields
     esp_err_t final_commit_err = nvs_commit(nvs_handle);
     if (final_commit_err != ESP_OK) {
@@ -925,6 +934,19 @@ esp_err_t ConfigManager::load_from_nvs() const {
     } else {
         ESP_LOGE(TAG, "Error loading radio_restore_delay_ms (key restore_delay): %s", esp_err_to_name(err_rd));
         current_config_->radio_restore_delay_ms = 200; // Fallback on error
+    }
+
+    // Load transverter_show_frequency
+    uint8_t txv_show_val;
+    esp_err_t err_txv = nvs_get_u8(nvs_handle, "txv_show_freq", &txv_show_val);
+    if (err_txv == ESP_OK) {
+        current_config_->transverter_show_frequency = static_cast<bool>(txv_show_val);
+    } else if (err_txv == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "transverter_show_frequency (key txv_show_freq) not found in NVS, using default (true).");
+        current_config_->transverter_show_frequency = true;
+    } else {
+        ESP_LOGE(TAG, "Error loading transverter_show_frequency (key txv_show_freq): %s", esp_err_to_name(err_txv));
+        current_config_->transverter_show_frequency = true; // Fallback on error
     }
 
     // Load UART configuration
@@ -1270,6 +1292,11 @@ esp_err_t ConfigManager::export_config_to_json(char **json_string) const {
     cJSON_AddBoolToObject(websocket, "enabled", current_config_->websocket_enabled);
     cJSON_AddItemToObject(config, "websocket", websocket);
 
+    // Transverter configuration
+    cJSON *transverter = cJSON_CreateObject();
+    cJSON_AddBoolToObject(transverter, "show_frequency", current_config_->transverter_show_frequency);
+    cJSON_AddItemToObject(config, "transverter", transverter);
+
     // Interlock configuration
     cJSON *interlock = cJSON_CreateObject();
     cJSON_AddBoolToObject(interlock, "auto_resolves_conflict", current_config_->interlock_auto_resolves_conflict);
@@ -1347,6 +1374,7 @@ esp_err_t ConfigManager::import_config_from_json(const char *json_string, bool v
 
     // Create temporary config structure for validation
     antenna_switch_config_t temp_config = {};
+    temp_config.transverter_show_frequency = true; // Default when absent from imported JSON
 
     // Parse and validate basic configuration
     cJSON *auto_mode = cJSON_GetObjectItem(config, "auto_mode");
@@ -1601,6 +1629,13 @@ esp_err_t ConfigManager::import_config_from_json(const char *json_string, bool v
     if (cJSON_IsObject(websocket)) {
         cJSON *enabled = cJSON_GetObjectItem(websocket, "enabled");
         if (cJSON_IsBool(enabled)) temp_config.websocket_enabled = cJSON_IsTrue(enabled);
+    }
+
+    // Parse transverter configuration
+    cJSON *transverter = cJSON_GetObjectItem(config, "transverter");
+    if (cJSON_IsObject(transverter)) {
+        cJSON *show_freq = cJSON_GetObjectItem(transverter, "show_frequency");
+        if (cJSON_IsBool(show_freq)) temp_config.transverter_show_frequency = cJSON_IsTrue(show_freq);
     }
 
     // Parse interlock configuration

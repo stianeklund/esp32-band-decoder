@@ -97,6 +97,7 @@ typedef struct antenna_switch_config {
     // uint8_t last_used_antenna[2][MAX_BANDS]; // This is now part of the block above
     char relay_names[16][32]; // Custom names for each relay (16 relays, 32 chars each)
     uint16_t radio_restore_delay_ms; // Delay in milliseconds for interlock relay restoration
+    bool transverter_show_frequency; // Show corrected on-air frequency while transverter (XVTR) mode is active
 } antenna_switch_config_t;
 
 // Enum to identify Radio A or Radio B

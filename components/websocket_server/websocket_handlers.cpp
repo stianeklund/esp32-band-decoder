@@ -387,8 +387,12 @@ esp_err_t WebSocketHandlers::send_error_response(int sockfd, const char* request
 }
 
 cJSON* WebSocketHandlers::create_status_json() {
-    // Get current frequency from CAT parser
+    // Get current frequency from CAT parser. current_freq is the true IF frequency
+    // (used for band/antenna lookups); display_freq is corrected by the transverter
+    // offset when transverter mode is active (what the user should see).
     const uint32_t current_freq = CatParser::instance().get_frequency();
+    const bool transverter_active = CatParser::instance().is_transverter_active();
+    const uint32_t display_freq = CatParser::instance().get_display_frequency();
     const bool is_transmitting = CatParser::instance().is_transmitting();
     
     // Use cached configuration for better performance
@@ -410,8 +414,11 @@ cJSON* WebSocketHandlers::create_status_json() {
         return nullptr;
     }
     
-    cJSON_AddNumberToObject(root, "frequency", current_freq);
-    cJSON_AddNumberToObject(root, "frequency_mhz", current_freq / 1000000.0);
+    cJSON_AddNumberToObject(root, "frequency", display_freq);
+    cJSON_AddNumberToObject(root, "frequency_mhz", display_freq / 1000000.0);
+    cJSON_AddBoolToObject(root, "transverter_active", transverter_active);
+    cJSON_AddNumberToObject(root, "transverter_offset_hz",
+                            CatParser::instance().get_transverter_offset_hz());
     char antenna_name_buffer[32];
     if (active_antenna_a_num) {
         snprintf(antenna_name_buffer, sizeof(antenna_name_buffer), "Antenna %d", active_antenna_a_num);
@@ -433,7 +440,9 @@ cJSON* WebSocketHandlers::create_status_json() {
     // Find available antennas for current frequency - reserve space to avoid reallocations
     std::vector<int> available_antennas_a;
     available_antennas_a.reserve(RelayController::RELAYS_PER_RADIO); // Max 8 antennas per radio
-    if (current_freq > 0) {
+    // While transverter mode is active the antenna switch is bypassed (no port
+    // supports the transverter band), so report no available antennas.
+    if (!transverter_active && current_freq > 0) {
         for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
             const auto &band_cfg = config.bands[0][band_idx]; // Radio A
             if (current_freq >= band_cfg.start_freq && current_freq <= band_cfg.end_freq) {

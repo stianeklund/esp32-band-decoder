@@ -171,8 +171,12 @@ esp_err_t WebServer::config_get_handler(httpd_req_t *req) {
 }
 
 esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
-    // Get current frequency from CAT parser
+    // current_freq is the true IF frequency (used for band/antenna lookups);
+    // display_freq is corrected by the transverter offset when transverter mode is
+    // active (what the user should see).
     const uint32_t current_freq = cat_parser_get_frequency();
+    const bool transverter_active = cat_parser_is_transverter_active();
+    const uint32_t display_freq = cat_parser_get_display_frequency();
     const bool is_transmitting = cat_parser_get_transmit();
 
     // Use cached configuration for better performance
@@ -199,8 +203,11 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create status response");
         return ESP_ERR_NO_MEM;
     }
-    cJSON_AddNumberToObject(root, "frequency", current_freq);
-    cJSON_AddStringToObject(root, "antenna", active_antenna_a_num ? 
+    cJSON_AddNumberToObject(root, "frequency", display_freq);
+    cJSON_AddNumberToObject(root, "frequency_mhz", display_freq / 1000000.0);
+    cJSON_AddBoolToObject(root, "transverter_active", transverter_active);
+    cJSON_AddNumberToObject(root, "transverter_offset_hz", cat_parser_get_transverter_offset_hz());
+    cJSON_AddStringToObject(root, "antenna", active_antenna_a_num ?
         ("Antenna " + std::to_string(active_antenna_a_num)).c_str() : "None");
     cJSON_AddBoolToObject(root, "transmitting", is_transmitting);
     
@@ -222,7 +229,9 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
     const char* current_band_name_a = "";
     uint8_t rx_antenna_a = 0;
 
-    if (current_freq > 0) { // Only if frequency is known for Radio A
+    // While transverter mode is active the antenna switch is bypassed (no port
+    // supports the transverter band), so report no available antennas.
+    if (!transverter_active && current_freq > 0) { // Only if frequency is known for Radio A
         for (int band_idx = 0; band_idx < config.num_bands; band_idx++) {
             const auto &band_cfg = config.bands[0][band_idx]; // Radio A band config (bands[0])
             if (current_freq >= band_cfg.start_freq && current_freq <= band_cfg.end_freq) {
@@ -536,6 +545,10 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     // Parse WebSocket settings
     const cJSON *websocket_enabled = cJSON_GetObjectItem(root, "websocket_enabled");
     new_config.websocket_enabled = cJSON_IsTrue(websocket_enabled);
+
+    // Parse transverter settings (default to showing the corrected frequency when absent)
+    const cJSON *txv_show = cJSON_GetObjectItem(root, "transverter_show_frequency");
+    new_config.transverter_show_frequency = txv_show ? cJSON_IsTrue(txv_show) : true;
 
     const cJSON *mqtt_broker = cJSON_GetObjectItem(root, "mqtt_broker");
     if (cJSON_IsString(mqtt_broker)) {
@@ -1455,6 +1468,7 @@ esp_err_t WebServer::config_basic_handler(httpd_req_t *req) {
     cJSON_AddNumberToObject(root, "num_antenna_ports", config.num_antenna_ports);
     cJSON_AddBoolToObject(root, "mqtt_enabled", config.mqtt_enabled);
     cJSON_AddBoolToObject(root, "websocket_enabled", config.websocket_enabled);
+    cJSON_AddBoolToObject(root, "transverter_show_frequency", config.transverter_show_frequency);
 
     // Add radio operation mode
     const char* radio_mode_str;

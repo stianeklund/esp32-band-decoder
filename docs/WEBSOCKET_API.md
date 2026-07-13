@@ -1,4 +1,4 @@
-# RS232 Band Decoder WebSocket API
+# ESP32 Band Decoder WebSocket API
 
 A real-time API for controlling antenna switching and monitoring system status.
 
@@ -36,7 +36,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 - Direct antenna selection validates compatibility before switching
 
 ### Radio Selection
-- `"A"`: Primary radio (relays 1-8)  
+- `"A"`: Primary radio (relays 1-8)
 - `"B"`: Secondary radio (relays 9-16) - if dual-radio mode enabled
 
 ---
@@ -57,16 +57,18 @@ A real-time API for controlling antenna switching and monitoring system status.
 
 // RESPONSE
 {
-  "id": "status-1", 
+  "id": "status-1",
   "type": "response",
   "data": {
-    "frequency": 14205000,           // Hz
+    "frequency": 14205000,           // Hz (on-air; IF+offset while transverter active, if "Show transverter frequency" is on)
     "frequency_mhz": 14.205,         // MHz (convenience)
     "antenna": "Antenna 3",          // Currently active
     "transmitting": false,
+    "transverter_active": false,     // True when radio is in transverter (XVTR) mode
+    "transverter_offset_hz": 0,      // Transverter offset in Hz (from radio XO), 0 if unknown
     "data_source": "Serial",         // "Serial", "MQTT", or "None"
-    "available_antennas": [1,2,3,4], // Compatible with current frequency
-    
+    "available_antennas": [1,2,3,4], // Compatible with current frequency (empty while transverter active)
+
     // Dual-radio fields (if enabled)
     "antenna_b": "None",
     "frequency_b": 0,
@@ -90,7 +92,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 // REQUEST - Next antenna
 {
   "id": "next-1",
-  "type": "request", 
+  "type": "request",
   "action": "antenna_switch",
   "data": {
     "radio": "A",
@@ -129,7 +131,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 {
   "id": "select-5",
   "type": "request",
-  "action": "antenna_switch", 
+  "action": "antenna_switch",
   "data": {
     "radio": "A",
     "antenna": 5           // Antenna number (1-16)
@@ -139,13 +141,13 @@ A real-time API for controlling antenna switching and monitoring system status.
 // RESPONSE - Same as above
 {
   "id": "select-5",
-  "type": "response", 
+  "type": "response",
   "data": {
     "status": "success",
     "radio": "A",
     "frequency": 14205000,
     "frequency_mhz": 14.205,
-    "band": "20M", 
+    "band": "20M",
     "previous_antenna": 3,
     "new_antenna": 5,
     "available_antennas": [1,2,3,4,5,6]
@@ -196,7 +198,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 ```json
 // REQUEST
 {
-  "id": "names-1", 
+  "id": "names-1",
   "type": "request",
   "action": "relay_names"
 }
@@ -207,7 +209,7 @@ A real-time API for controlling antenna switching and monitoring system status.
   "type": "response",
   "data": {
     "1": "40M Yagi North",
-    "2": "40M Yagi South", 
+    "2": "40M Yagi South",
     "3": "20M Beam",
     "4": "20M Vertical",
     "5": "15M Yagi",
@@ -227,7 +229,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 // REQUEST
 {
   "id": "config-1",
-  "type": "request", 
+  "type": "request",
   "action": "config_basic"
 }
 
@@ -257,7 +259,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 // REQUEST - Subscribe to events
 {
   "id": "sub-1",
-  "type": "request", 
+  "type": "request",
   "action": "subscribe",
   "data": {
     "events": ["relay_state_changes", "status_updates"]
@@ -280,6 +282,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 - `relay_state_changes` - Individual relay on/off
 - `transmit_state_changes` - TX/RX state changes
 - `config_changes` - Configuration updates
+- `transverter_state_changes` - Transverter (XVTR) mode enabled/disabled (drives external transverter power/relay)
 
 **Event Subscription Best Practices:**
 
@@ -318,7 +321,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 {
   "id": "unsub-1",
   "type": "request",
-  "action": "unsubscribe", 
+  "action": "unsubscribe",
   "data": {
     "events": ["status_updates"]  // Stop receiving these events
   }
@@ -329,7 +332,7 @@ A real-time API for controlling antenna switching and monitoring system status.
   "id": "unsub-1",
   "type": "response",
   "data": {
-    "status": "success", 
+    "status": "success",
     "message": "Unsubscribed from events"
   }
 }
@@ -341,7 +344,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 // Relay changed
 {
   "type": "event",
-  "event": "relay_state_changed", 
+  "event": "relay_state_changed",
   "data": {
     "relay": 3,
     "state": true
@@ -351,17 +354,38 @@ A real-time API for controlling antenna switching and monitoring system status.
 
 // Full status update (includes frequency)
 {
-  "type": "event", 
+  "type": "event",
   "event": "status_update",
   "data": {
     "frequency": 21205000,
     "frequency_mhz": 21.205,
-    "antenna": "Antenna 5", 
+    "antenna": "Antenna 5",
     "transmitting": false,
     "available_antennas": [1,5,6,7]  // Updates when frequency changes affect antenna availability
   }
 }
+
+
+// Transverter (XVTR) mode enabled/disabled
+{
+  "type": "event",
+  "event": "transverter_state_changed",
+  "data": {
+    "enabled": true,           // true = transverter mode active (radio reported EX056=1)
+    "offset_hz": 116000000,    // Transverter offset in Hz (from radio XO), 0 if not yet known
+    "if_frequency": 28174000,  // Back-computed IF in Hz (frequency - offset_hz)
+    "frequency": 144174000,    // On-air frequency in Hz, as reported by the radio
+    "frequency_mhz": 144.174   // On-air frequency in MHz
+  }
+}
 ```
+
+**Transverter notes:**
+- Transverter mode is driven entirely by the radio's `EX056` CAT answer (the XVTR button); there is no separate enable in this API.
+- The radio reports the raw **IF** frequency over CAT (e.g. 28.174 MHz). The firmware adds the `XO` offset to compute the on-air frequency (e.g. 144.174 MHz). On enable it queries the radio's `XO;` offset, so a first `enabled:true` event may carry `offset_hz:0` (and `frequency` == `if_frequency`) until the offset answer arrives, followed by a second event.
+- This event always reports the true on-air `frequency` (IF + offset), regardless of the display setting below — use it to power/relay the physical transverter on `enabled:true` and remove power on `enabled:false`.
+- The `status` payload's `frequency`/`transverter_active` reflect a **"Show transverter frequency"** web setting (default on): when enabled, status shows the corrected on-air frequency while transverter mode is active; when disabled, status shows the raw IF. This setting only affects the displayed status frequency, not this event or the antenna behavior.
+- While active, the antenna switch is bypassed for Radio A (its selected port is turned off and `available_antennas` is empty), since the switch cannot handle the transverter band.
 
 ---
 
@@ -371,7 +395,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 ```json
 {
   "id": "your-request-id",
-  "type": "error", 
+  "type": "error",
   "data": {
     "status": "error",
     "message": "Descriptive error message"
@@ -384,7 +408,7 @@ A real-time API for controlling antenna switching and monitoring system status.
 | Error Message | Cause | Solution |
 |---------------|-------|----------|
 | `"Invalid antenna switch data"` | Missing required fields | Include either `action` or `antenna` parameter |
-| `"Invalid radio (must be 'A' or 'B')"` | Wrong radio value | Use `"A"` or `"B"` |  
+| `"Invalid radio (must be 'A' or 'B')"` | Wrong radio value | Use `"A"` or `"B"` |
 | `"Requested antenna not available for current frequency"` | Antenna incompatible with frequency | Check `available_antennas` in status first |
 | `"No frequency available for specified radio"` | No CAT/MQTT data | Ensure radio is connected and sending frequency data |
 | `"No antennas available for current frequency"` | No configured antennas for band | Configure antennas for this frequency range |
@@ -404,11 +428,11 @@ const ws = new WebSocket('ws://192.168.1.100/ws');
 // 2. Handle connection
 ws.onopen = async () => {
   console.log('Connected to antenna controller');
-  
+
   // Get initial status
   const status = await sendRequest('status', {});
   console.log('Available antennas:', status.available_antennas);
-  
+
   // Subscribe to events
   await sendRequest('subscribe', {
     events: ['relay_state_changes', 'status_updates']
@@ -418,7 +442,7 @@ ws.onopen = async () => {
 // 3. Handle messages
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
-  
+
   if (msg.type === 'response') {
     handleResponse(msg.id, msg.data);
   } else if (msg.type === 'event') {
@@ -432,10 +456,10 @@ ws.onmessage = (event) => {
 function sendRequest(action, data) {
   return new Promise((resolve, reject) => {
     const id = 'req-' + Date.now();
-    
+
     // Store promise resolver
     pendingRequests[id] = { resolve, reject };
-    
+
     // Send request
     ws.send(JSON.stringify({
       id,
@@ -443,7 +467,7 @@ function sendRequest(action, data) {
       action,
       data
     }));
-    
+
     // Timeout after 5 seconds
     setTimeout(() => {
       if (pendingRequests[id]) {
@@ -463,21 +487,21 @@ async function selectAntenna(antennaNumber) {
   try {
     // 1. Get current status to check availability
     const status = await sendRequest('status', {});
-    
-    // 2. Validate antenna is available 
+
+    // 2. Validate antenna is available
     if (!status.available_antennas.includes(antennaNumber)) {
       throw new Error(`Antenna ${antennaNumber} not available for current frequency (${status.frequency_mhz} MHz)`);
     }
-    
+
     // 3. Switch antenna
     const result = await sendRequest('antenna_switch', {
       radio: 'A',
       antenna: antennaNumber
     });
-    
+
     console.log(`Switched to antenna ${result.new_antenna}`);
     return result;
-    
+
   } catch (error) {
     console.error('Antenna selection failed:', error.message);
     throw error;
@@ -489,17 +513,17 @@ function handleRealtimeEvent(eventType, data) {
   switch (eventType) {
     case 'status_update':
       // Update frequency display
-      document.getElementById('frequency').textContent = 
+      document.getElementById('frequency').textContent =
         data.frequency_mhz.toFixed(3) + ' MHz';
-      
+
       // Update antenna display
       document.getElementById('antenna').textContent = data.antenna;
-      
+
       // Update available antennas (they may have changed due to frequency change!)
       updateAvailableAntennas(data.available_antennas);
       break;
-      
-    case 'relay_state_changed': 
+
+    case 'relay_state_changed':
       // Update antenna button states
       updateAntennaButton(data.relay, data.state);
       break;
@@ -535,64 +559,64 @@ class AntennaController {
     this.reconnectTimer = null;
     this.pendingRequests = new Map();
   }
-  
+
   connect() {
     this.ws = new WebSocket(`ws://${this.host}/ws`);
-    
+
     this.ws.onopen = () => {
       console.log('Connected to antenna controller');
       this.clearReconnectTimer();
       this.onConnected?.();
     };
-    
+
     this.ws.onclose = (event) => {
       console.log('Connection closed:', event.reason);
       this.scheduleReconnect();
     };
-    
+
     this.ws.onerror = (error) => {
       console.error('WebSocket error:', error);
     };
-    
+
     this.ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       this.handleMessage(msg);
     };
   }
-  
+
   scheduleReconnect() {
     if (this.reconnectTimer) return;
-    
+
     this.reconnectTimer = setTimeout(() => {
       console.log('Attempting to reconnect...');
       this.connect();
     }, 5000);
   }
-  
+
   clearReconnectTimer() {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
   }
-  
+
   async sendRequest(action, data) {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected to antenna controller');
     }
-    
+
     return new Promise((resolve, reject) => {
       const id = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
+
       this.pendingRequests.set(id, { resolve, reject });
-      
+
       this.ws.send(JSON.stringify({
         id,
         type: 'request',
         action,
         data: data || {}
       }));
-      
+
       // Request timeout
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
@@ -602,7 +626,7 @@ class AntennaController {
       }, 10000);
     });
   }
-  
+
   handleMessage(msg) {
     if (msg.type === 'response' || msg.type === 'error') {
       const pending = this.pendingRequests.get(msg.id);
@@ -628,7 +652,7 @@ controller.onConnected = async () => {
   await controller.sendRequest('subscribe', {
     events: ['relay_state_changes', 'status_updates']
   });
-  
+
   // Get initial status
   const status = await controller.sendRequest('status', {});
   console.log('System ready:', status);
@@ -644,15 +668,15 @@ controller.connect();
 
 ## Technical Details
 
-**Connection Limits:** 5 concurrent clients  
-**Message Size:** 8KB maximum per frame  
-**Keepalive:** 30 second ping/pong  
-**Timeout:** 60 seconds idle timeout  
+**Connection Limits:** 5 concurrent clients
+**Message Size:** 8KB maximum per frame
+**Keepalive:** 30 second ping/pong
+**Timeout:** 60 seconds idle timeout
 **Protocol:** RFC 6455 WebSocket over ESP-IDF native implementation
 
 **Performance:**
 - Message processing: <5ms typical
-- Event delivery: <10ms typical  
+- Event delivery: <10ms typical
 - Connection setup: <100ms typical
 - Max throughput: 100+ messages/second
 

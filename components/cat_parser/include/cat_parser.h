@@ -38,6 +38,14 @@ public:
     const char *get_mode() const { return current_mode.c_str(); }
     int32_t get_rit_offset() const { return rit_offset; }
 
+    // Transverter (XVTR) state, driven by the radio's EX056 answer and XO offset.
+    bool is_transverter_active() const { return transverter_active.load(); }
+    int32_t get_transverter_offset_hz() const { return transverter_offset_hz.load(); }
+    // Frequency to display/report: the corrected on-air frequency (IF + offset) when
+    // transverter mode is active and transverter frequency display is enabled in the
+    // config, otherwise the raw IF frequency the radio reports.
+    uint32_t get_display_frequency() const;
+
     esp_err_t handle_frequency_change(uint32_t frequency);
 
     void handle_frequency_update(uint32_t frequency);
@@ -72,6 +80,15 @@ private:
     static std::from_chars_result get_from_chars_result(std::string_view command, unsigned long& ports_val);
     esp_err_t process_tx_command(std::string_view payload);
     esp_err_t process_rx_command(std::string_view payload);
+    esp_err_t process_ex_command(std::string_view payload); // Extended menu (transverter = menu 056)
+    esp_err_t process_xo_command(std::string_view payload); // Transverter offset/direction
+
+    // Apply a transverter active/inactive transition (offset query, port off, broadcast).
+    void set_transverter_active(bool active);
+    // Broadcast the current transverter state to WebSocket clients (if running).
+    void broadcast_transverter_state();
+    // Convert a radio-reported IF frequency to the on-air frequency using the XO offset.
+    uint32_t transverter_rf_from_if(uint32_t if_freq) const;
 
     esp_err_t process_command(std::string_view commands_str_with_semicolons); // New core processor
     esp_err_t dispatch_one_command(std::string_view command_view); 
@@ -94,6 +111,11 @@ private:
     bool split_on{false}; // Split operation status
     std::string current_mode; // Current operating mode
     int32_t rit_offset{0}; // RIT offset in Hz
+
+    // Transverter state (atomic: written by UART task, read by web/WS handlers)
+    std::atomic<bool> transverter_active{false};    // Radio reported EX056=1
+    std::atomic<int32_t> transverter_offset_hz{0};  // Offset from XO command (Hz)
+    std::atomic<uint8_t> transverter_minus_dir{0};  // XO direction: 0=plus, 1=minus
     static constexpr auto TAG = "CAT_PARSER";
 
     // static CatParser *instance_; // Removed for pure Meyers' singleton
@@ -119,5 +141,8 @@ inline uint32_t cat_parser_get_frequency() { return CatParser::instance().get_fr
 inline bool cat_parser_get_transmit() { return CatParser::instance().is_transmitting(); } // Return type bool
 inline void cat_parser_set_transmit(const bool transmitting) { CatParser::instance().set_transmitting(transmitting); }
 inline esp_err_t cat_parser_set_frequency(const uint32_t frequency) { return CatParser::instance().handle_frequency_change(frequency); }
+inline bool cat_parser_is_transverter_active() { return CatParser::instance().is_transverter_active(); }
+inline int32_t cat_parser_get_transverter_offset_hz() { return CatParser::instance().get_transverter_offset_hz(); }
+inline uint32_t cat_parser_get_display_frequency() { return CatParser::instance().get_display_frequency(); }
 
 #endif // CAT_PARSER_H

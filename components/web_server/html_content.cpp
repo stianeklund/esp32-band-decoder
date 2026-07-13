@@ -738,6 +738,20 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ret = send_ss_chunk(ss_buffer);
     if (ret != ESP_OK) return ret;
 
+    // Transverter Configuration
+    ss_buffer << "<h3>Transverter</h3>";
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label>";
+    ss_buffer << "<input type='checkbox' name='transverter_show_frequency' " << (config.transverter_show_frequency ? "checked" : "") << ">";
+    ss_buffer << " Show transverter frequency";
+    ss_buffer << "</label>";
+    ss_buffer << "<div class='form-description' style='margin-left: 20px; font-size: 0.9em; color: #666;'>";
+    ss_buffer << "When the radio is in transverter (XVTR) mode, display the corrected on-air frequency (IF + offset, e.g. 144.174 MHz) instead of the raw IF (28.174 MHz).";
+    ss_buffer << "</div>";
+    ss_buffer << "</div>";
+    ret = send_ss_chunk(ss_buffer);
+    if (ret != ESP_OK) return ret;
+
     ss_buffer << "<div class='button-container' style='margin: 20px 0;'>";
     ss_buffer << "<input type='submit' value='Update Configuration' class='button'>";
     ss_buffer << "</div>";
@@ -796,6 +810,7 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
 
             mqtt_enabled: formData.get('mqtt_enabled') === 'on',
             websocket_enabled: formData.get('websocket_enabled') === 'on',
+            transverter_show_frequency: formData.get('transverter_show_frequency') === 'on',
             mqtt_broker: formData.get('mqtt_broker'),
             mqtt_port: parseInt(formData.get('mqtt_port')),
             mqtt_rig_id: formData.get('mqtt_rig_id'),

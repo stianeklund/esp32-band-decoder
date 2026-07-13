@@ -1164,6 +1164,28 @@ esp_err_t WebSocketServer::broadcast_config_change() {
     return broadcast_event(WS_EVENT_CONFIG_CHANGED, "{}");
 }
 
+esp_err_t WebSocketServer::broadcast_transverter_state_change(bool enabled, int32_t offset_hz,
+                                                              uint32_t if_freq, uint32_t rf_freq) {
+    // Stack-allocated buffer for thread safety
+    char json_buffer[192];
+
+    int len = snprintf(json_buffer, sizeof(json_buffer),
+                      "{\"enabled\":%s,\"offset_hz\":%ld,\"if_frequency\":%lu,"
+                      "\"frequency\":%lu,\"frequency_mhz\":%.6f}",
+                      enabled ? "true" : "false",
+                      static_cast<long>(offset_hz),
+                      static_cast<unsigned long>(if_freq),
+                      static_cast<unsigned long>(rf_freq),
+                      rf_freq / 1000000.0);
+
+    if (len >= sizeof(json_buffer)) {
+        ESP_LOGE(TAG, "JSON buffer too small for transverter state change");
+        return ESP_ERR_NO_MEM;
+    }
+
+    return broadcast_event(WS_EVENT_TRANSVERTER_CHANGED, json_buffer);
+}
+
 esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const char* data) {
     if (!m_running || !data) {
         return ESP_ERR_INVALID_STATE;
@@ -1189,6 +1211,9 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
             break;
         case WS_EVENT_CONFIG_CHANGED:
             event_name = "config_changed";
+            break;
+        case WS_EVENT_TRANSVERTER_CHANGED:
+            event_name = "transverter_state_changed";
             break;
         default:
             ESP_LOGE(TAG, "Unknown event type: %d", event_type);
@@ -1240,6 +1265,9 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
                 break;
             case WS_EVENT_CONFIG_CHANGED:
                 should_send = client->subscriptions.config_changes;
+                break;
+            case WS_EVENT_TRANSVERTER_CHANGED:
+                should_send = client->subscriptions.transverter_state_changes;
                 break;
         }
 

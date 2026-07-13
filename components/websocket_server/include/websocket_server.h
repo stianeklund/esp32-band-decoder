@@ -42,6 +42,8 @@ public:
     esp_err_t broadcast_relay_state_change(int relay_id, bool state);
     esp_err_t broadcast_transmit_state_change(bool transmitting);
     esp_err_t broadcast_config_change();
+    esp_err_t broadcast_transverter_state_change(bool enabled, int32_t offset_hz,
+                                                 uint32_t if_freq, uint32_t rf_freq);
     
     // Client management
     size_t get_active_client_count() const;
@@ -64,6 +66,7 @@ private:
             subscriptions.relay_state_changes = true;
             subscriptions.transmit_state_changes = true;
             subscriptions.config_changes = true;
+            subscriptions.transverter_state_changes = true;
         }
     };
 
