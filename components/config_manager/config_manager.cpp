@@ -12,8 +12,43 @@
 #include "freertos/semphr.h"
 #include "cJSON.h"
 #include "esp_timer.h" // For esp_timer_get_time()
+#include "sdkconfig.h" // For CONFIG_BOARD_KC868_A8 (board selection)
 
 static constexpr const char* TAG = "CONFIG_MANAGER";
+
+// Physical input count for the selected board (kept in sync with KC868_HW_NUM_INPUTS
+// in kc868_hw.h). Derived from the board macro locally to avoid a REQUIRES cycle
+// with the kc868 HAL component (which already REQUIRES config_manager).
+#if defined(CONFIG_BOARD_KC868_A8)
+static constexpr int kBoardNumInputs = 8;
+#else
+static constexpr int kBoardNumInputs = 16;
+#endif
+
+// On single-radio boards (KC868-A8) only Radio A exists. Force the operation mode
+// so a stored or imported dual-radio config can never actuate a nonexistent Radio B.
+// No-op on the A16, where all three modes are valid.
+static radio_operation_mode_t board_clamp_radio_mode(const radio_operation_mode_t mode) {
+#if defined(CONFIG_BOARD_KC868_A8)
+    if (mode != RADIO_OP_MODE_SINGLE_A) {
+        ESP_LOGW(TAG, "KC868-A8 is single-radio only; forcing radio_operation_mode to SINGLE_A (was %d)", mode);
+        return RADIO_OP_MODE_SINGLE_A;
+    }
+#endif
+    return mode;
+}
+
+// Clamp a PTT input pin to what the board physically has. -1 means "disabled".
+// An out-of-range pin (e.g. an A16 config with pin 8-15 loaded on an A8) is
+// disabled rather than left pointing at a nonexistent input.
+static int board_clamp_ptt_pin(const int pin) {
+    if (pin < -1 || pin >= kBoardNumInputs) {
+        ESP_LOGW(TAG, "PTT input pin %d out of range for this board (valid 0-%d); disabling PTT for this radio", pin, kBoardNumInputs - 1);
+        return -1;
+    }
+    return pin;
+}
+
 
 // Initialize static member
 ConfigManager *ConfigManager::instance_ = nullptr;
@@ -480,6 +515,9 @@ esp_err_t ConfigManager::update_config(const antenna_switch_config_t &new_config
     {
         std::lock_guard<std::mutex> lock(config_mutex_);
         *current_config_ = new_config;
+        current_config_->radio_operation_mode = board_clamp_radio_mode(current_config_->radio_operation_mode);
+        current_config_->ptt_input_radio_a = board_clamp_ptt_pin(current_config_->ptt_input_radio_a);
+        current_config_->ptt_input_radio_b = board_clamp_ptt_pin(current_config_->ptt_input_radio_b);
         updated_config = *current_config_;
         updated_version = config_version_.fetch_add(1) + 1;
         config_dirty_.store(true);
@@ -806,7 +844,7 @@ esp_err_t ConfigManager::load_from_nvs() const {
             current_config_->rx_antenna_enabled = loaded_base_data.rx_antenna_enabled;
             current_config_->num_bands = loaded_base_data.num_bands;
             current_config_->num_antenna_ports = loaded_base_data.num_antenna_ports;
-            current_config_->radio_operation_mode = loaded_base_data.radio_operation_mode;
+            current_config_->radio_operation_mode = board_clamp_radio_mode(loaded_base_data.radio_operation_mode);
             memcpy(current_config_->last_used_antenna, loaded_base_data.last_used_antenna, sizeof(current_config_->last_used_antenna));
             ESP_LOGD(TAG, "Base config (config_base) loaded successfully. Num_bands: %d, Num_ports: %d, RX antenna: %s", current_config_->num_bands, current_config_->num_antenna_ports, current_config_->rx_antenna_enabled ? "enabled" : "disabled");
         } else {

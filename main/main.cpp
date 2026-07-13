@@ -11,7 +11,7 @@
 #include "esp_log.h"
 #include "esp_system.h" // For esp_restart
 #include "relay_controller.h"
-#include "kc868_a16_hw.h"
+#include "kc868_hw.h"
 #include "config_manager.h"
 #include "restart_manager.h"
 #include "serial_cli.h"
@@ -254,9 +254,9 @@ extern "C" [[noreturn]] void app_main(void) {
             }
 
             // I2C bus health: tells us whether the 400 kHz PCF8574 overclock is
-            // actually causing bus errors (see I2C_MASTER_FREQ_HZ in kc868_a16_hw.h).
-            kc868_a16_i2c_stats_t i2c_stats;
-            kc868_a16_get_i2c_stats(&i2c_stats);
+            // actually causing bus errors (see I2C_MASTER_FREQ_HZ in kc868_hw.h).
+            kc868_hw_i2c_stats_t i2c_stats;
+            kc868_hw_get_i2c_stats(&i2c_stats);
             if (i2c_stats.first_attempt_errors != 0 || i2c_stats.hard_failures != 0 ||
                 i2c_stats.mutex_failures != 0) {
                 ESP_LOGW(TAG, "I2C bus health - first-attempt errors: %lu, retry recoveries: %lu, hard failures: %lu, mutex failures: %lu",

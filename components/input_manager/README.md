@@ -2,13 +2,13 @@
 
 ## Overview
 
-The `InputManager` component is responsible for managing and interpreting hardware input signals for the antenna switch system, primarily focusing on PTT / TX signals from up to two radios. It interfaces with the underlying `kc868_a16_hw` component to read states from the KC868-A16 I/O expander board.
+The `InputManager` component is responsible for managing and interpreting hardware input signals for the antenna switch system, primarily focusing on PTT / TX signals from up to two radios. It interfaces with the underlying `kc868_hw` component to read states from the KC868-A16 I/O expander board.
 
 Key responsibilities include:
 
-*   **Hardware Initialization:** Ensures the `kc868_a16_hw` I2C interface and input expanders are initialized.
+*   **Hardware Initialization:** Ensures the `kc868_hw` I2C interface and input expanders are initialized.
 *   **PTT Polling:** Continuously polls configured hardware input pins dedicated to PTT signals for Radio A and Radio B (interrupts are not possible with the PF8574 on the KC868-A16 without hw mods)
-*   **State Interpretation:** Translates raw hardware input states (which are inverted by the KC868-A16 input circuitry and `kc868_a16_get_all_inputs` function) into logical PTT active/inactive states. This interpretation considers per-radio configuration settings that define whether the PTT signal at the terminal is active-high or active-low.
+*   **State Interpretation:** Translates raw hardware input states (which are inverted by the KC868 input circuitry and `kc868_hw_get_all_inputs` function) into logical PTT active/inactive states. This interpretation considers per-radio configuration settings that define whether the PTT signal at the terminal is active-high or active-low.
 *   **Change Notification:** Detects changes in the logical PTT states and notifies the `AntennaSwitch` component via callbacks (`on_hw_ptt_a_state_change` and `on_hw_ptt_b_state_change`).
 *   **Configuration Aware:** Uses the system configuration (accessed via `ConfigCache` inheritance) to determine which input pins are assigned to PTT A and PTT B, and their respective active logic levels.
 *   **Direct Input Access:** Provides an API for other components to query the current state of any individual hardware input or get a bitmask of all input states.
@@ -25,7 +25,7 @@ Recent optimizations have resulted in the `InputManager` detecting a PTT state c
 **Breakdown of a Typical PTT Detection Cycle (when a change occurs):**
 The following timings are based on internal profiling logs, which are output at `ESP_LOGD` level only when a PTT state change is detected to minimize performance overhead during normal operation:
 
-1.  **`kc868_a16_get_all_inputs()`:** ~625-632 microseconds.
+1.  **`kc868_hw_get_all_inputs()`:** ~625-632 microseconds.
     *   This is the time taken to read the state of all 16 hardware inputs from the KC868-A16 board via I2C communication. This is the most significant contributor to the latency within the `InputManager`'s polling cycle.
 2.  **`determine_ptt_logical_state()`:** ~1 microsecond.
     *   This function performs the logical interpretation of the raw hardware input based on the configured active level (high/low) for the specific PTT input. Its execution time is negligible.
@@ -52,7 +52,7 @@ InputManager& im = InputManager::instance();
 ### `esp_err_t init()`
 
 Initializes the `InputManager`. This function:
-1.  Initializes the underlying `kc868_a16_hw` hardware if not already done.
+1.  Initializes the underlying `kc868_hw` hardware if not already done.
 2.  Creates and starts the PTT polling FreeRTOS task.
 3.  Sets an internal flag indicating successful initialization.
 
@@ -61,7 +61,7 @@ It is safe to call this multiple times; it will only perform full initialization
 *   **Returns:**
     *   `ESP_OK` on successful initialization.
     *   `ESP_FAIL` if the PTT polling task creation fails.
-    *   Other `esp_err_t` codes if `kc868_a16_hw_init()` fails.
+    *   Other `esp_err_t` codes if `kc868_hw_init()` fails.
 
 ```cpp
 esp_err_t result = InputManager::instance().init();
@@ -83,7 +83,7 @@ The returned `state` reflects the logical level at the input terminal, consideri
 *   **Returns:**
     *   `ESP_OK` if the state was successfully read.
     *   `ESP_ERR_INVALID_STATE` if `InputManager` is not initialized.
-    *   `ESP_ERR_INVALID_ARG` if `state` is `nullptr` or `input_num` is out of range (validation done by `kc868_a16_get_input_state`).
+    *   `ESP_ERR_INVALID_ARG` if `state` is `nullptr` or `input_num` is out of range (validation done by `kc868_hw_get_input_state`).
     *   Other `esp_err_t` codes on I2C communication failure.
 
 ```cpp
@@ -97,7 +97,7 @@ if (InputManager::instance().get_input_state(5, &pin5_state) == ESP_OK) {
 
 Reads the raw state of all 16 hardware input pins as a bitmask.
 **Important:** The bits in this mask represent the physical state of the PCF8574 input pins.
-Due to the KC868-A16's input circuit (optocoupler) and the behavior of `kc868_a16_get_all_inputs()`:
+Due to the KC868-A16's input circuit (optocoupler) and the behavior of `kc868_hw_get_all_inputs()`:
 *   A bit set to `1` in `state_mask` means the corresponding PCF8574 pin is **physically LOW**.
 *   A bit set to `0` in `state_mask` means the corresponding PCF8574 pin is **physically HIGH**.
 
@@ -121,7 +121,7 @@ if (InputManager::instance().get_all_inputs(&all_inputs) == ESP_OK) {
 ## PTT / Transmit signal Handling Logic
 
 The `InputManager`'s core PTT handling logic resides in its internal `ptt_poll_task`. This task periodically:
-1.  Reads all input states using `kc868_a16_get_all_inputs()`.
+1.  Reads all input states using `kc868_hw_get_all_inputs()`.
 2.  Retrieves the cached system configuration to know:
     *   Which input pin is assigned to Radio A PTT (`config.ptt_input_radio_a`).
     *   Whether Radio A's PTT signal is active-high at the terminal (`config.ptt_input_radio_a_active_high`).

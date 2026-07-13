@@ -4,7 +4,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
-#include "kc868_a16_hw.h"
+#include "kc868_hw.h"
 
 static constexpr const char* TAG = "InputManager";
 
@@ -13,10 +13,10 @@ static constexpr const char* TAG = "InputManager";
 static bool determine_ptt_logical_state(
     const int configured_pin_index,             // The configured input pin (0-15)
     const bool configured_terminal_active_high, // True if the PTT signal is active high at the terminal
-    const uint16_t all_inputs_mask,             // The raw mask from kc868_a16_get_all_inputs()
+    const uint16_t all_inputs_mask,             // The raw mask from kc868_hw_get_all_inputs()
     bool* out_pcf8574_pin_physically_low        // Output: true if the PCF8574 pin for this input is physically low
 ) {
-    // all_inputs_mask is the raw 16-bit PCF8574 view from kc868_a16_get_all_inputs_raw
+    // all_inputs_mask is the raw 16-bit PCF8574 view from kc868_hw_get_all_inputs_raw
     // (pins 0-15, X01-X16):
     // - A bit value of '0' means the corresponding PCF8574 physical pin is LOW.
     // - A bit value of '1' means the corresponding PCF8574 physical pin is HIGH.
@@ -25,7 +25,7 @@ static bool determine_ptt_logical_state(
     *out_pcf8574_pin_physically_low = ((all_inputs_mask >> configured_pin_index) & 0x01) == 0;
     const bool pcf8574_pin_physically_high = !(*out_pcf8574_pin_physically_low);
 
-    // The KC868-A16 input circuit relationship:
+    // The KC868 input circuit relationship:
     // - Terminal HIGH (+12V, e.g., radio PTT active) -> Optocoupler OFF -> PCF8574 pin HIGH.
     // - Terminal LOW (0V,   e.g., radio PTT inactive) -> Optocoupler ON  -> PCF8574 pin LOW.
 
@@ -103,8 +103,8 @@ esp_err_t InputManager::get_input_state(const uint8_t input_num, bool* state) {
     if (state == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    // kc868_a16_get_input_state already validates input_num range (0-15)
-    return kc868_a16_get_input_state(input_num, state);
+    // kc868_hw_get_input_state already validates input_num range (0-15)
+    return kc868_hw_get_input_state(input_num, state);
 }
 
 esp_err_t InputManager::get_all_inputs(uint16_t* state_mask) {
@@ -115,7 +115,7 @@ esp_err_t InputManager::get_all_inputs(uint16_t* state_mask) {
     if (state_mask == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    return kc868_a16_get_all_inputs(state_mask);
+    return kc868_hw_get_all_inputs(state_mask);
 }
 
 void InputManager::refresh_active_ptt_config() {
@@ -136,7 +136,10 @@ void InputManager::ptt_poll_task_trampoline(void* arg) {
     manager->ptt_poll_task();
 }
 
-constexpr int kMaxMonitoredPin = 15; // All 16 KC868-A16 inputs (X01-X16) are polled for PTT
+// Highest PTT input pin index the board physically has (7 on A8, 15 on A16). A
+// stored config pointing at a higher pin is ignored rather than read off a chip
+// that isn't populated.
+constexpr int kMaxMonitoredPin = KC868_HW_NUM_INPUTS - 1;
 
 void InputManager::handle_ptt_line(
     const int config_pin,
@@ -200,13 +203,13 @@ void InputManager::handle_ptt_read_error() {
 }
 
 void InputManager::ptt_poll_task() {
-    // Initialize KC868-A16 hardware on CPU1 to bind I2C interrupts to this CPU
-    ESP_LOGI(TAG, "Initializing KC868-A16 hardware on CPU1 for I2C interrupt affinity");
-    if (const esp_err_t ret = kc868_a16_hw_init(); ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize KC868-A16 hardware on CPU1: %s", esp_err_to_name(ret));
+    // Initialize KC868 hardware on CPU1 to bind I2C interrupts to this CPU
+    ESP_LOGI(TAG, "Initializing KC868 hardware on CPU1 for I2C interrupt affinity");
+    if (const esp_err_t ret = kc868_hw_init(); ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize KC868 hardware on CPU1: %s", esp_err_to_name(ret));
         // Continue anyway, hardware might be initialized from another task
     } else {
-        ESP_LOGI(TAG, "KC868-A16 hardware successfully initialized on CPU1");
+        ESP_LOGI(TAG, "KC868 hardware successfully initialized on CPU1");
     }
     
     uint16_t current_inputs_mask = 0;
@@ -237,7 +240,7 @@ void InputManager::ptt_poll_task() {
 
         uint16_t ptt_inputs_raw;
 
-        if (const esp_err_t ret = kc868_a16_get_all_inputs_raw(&ptt_inputs_raw); ret != ESP_OK) {
+        if (const esp_err_t ret = kc868_hw_get_all_inputs_raw(&ptt_inputs_raw); ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to read inputs (0-15) in PTT poll task: %s", esp_err_to_name(ret));
             handle_ptt_read_error();
 
@@ -294,7 +297,7 @@ void InputManager::ptt_poll_task() {
 
         uint8_t ptt_inputs_raw_0_7;
 
-        if (const esp_err_t ret_hw_read = kc868_a16_get_inputs_0_7_raw(&ptt_inputs_raw_0_7); ret_hw_read == ESP_OK) {
+        if (const esp_err_t ret_hw_read = kc868_hw_get_inputs_0_7_raw(&ptt_inputs_raw_0_7); ret_hw_read == ESP_OK) {
             current_inputs_mask = static_cast<uint16_t>(ptt_inputs_raw_0_7);
             // ESP_LOGV(TAG, "PTT Poll: Raw inputs 0-7: 0x%02X, current_inputs_mask: 0x%04X", ptt_inputs_raw_0_7, current_inputs_mask);
 

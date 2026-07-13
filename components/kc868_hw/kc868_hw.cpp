@@ -1,15 +1,15 @@
 // ReSharper disable CppRedundantParentheses
-#include "include/kc868_a16_hw.h"
+#include "include/kc868_hw.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <atomic>
 #include <mutex>
 
-static constexpr const char* TAG = "KC868_A16_HW";
+static constexpr const char* TAG = "KC868_HW";
 static uint16_t output_state = 0;
 static std::mutex output_state_mutex_;
-static bool kc868_a16_initialized = false;
+static bool kc868_hw_initialized = false;
 static SemaphoreHandle_t i2c_bus_mutex_ = nullptr;
 
 // --- I2C bus error instrumentation ---
@@ -22,10 +22,19 @@ static std::atomic<uint32_t> i2c_hard_failures_{0};        // still failed after
 static std::atomic<uint32_t> i2c_mutex_failures_{0};       // could not acquire the bus mutex
 
 // Variables to store I2C addresses for input expanders
-// These will be set to KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7 and
-// KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15
+// These will be set to KC868_HW_EXPECTED_INPUT_ADDR_PINS_0_7 and
+// KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15
 static uint8_t discovered_pcf8574_input_addr_for_pins_0_7 = 0;
 static uint8_t discovered_pcf8574_input_addr_for_pins_8_15 = 0;
+
+// Board population: the A8 has only the first output/input expander. Using
+// `if constexpr` on these keeps the absent-chip code paths out of the A8 build
+// entirely (no #ifdef spaghetti, no dead runtime branches addressing 0x25/0x21).
+static constexpr bool kHasSecondOutputChip = (KC868_HW_NUM_RELAYS > 8);
+static constexpr bool kHasSecondInputChip = (KC868_HW_NUM_INPUTS > 8);
+
+uint8_t kc868_hw_num_relays(void) { return KC868_HW_NUM_RELAYS; }
+uint8_t kc868_hw_num_inputs(void) { return KC868_HW_NUM_INPUTS; }
 
 static esp_err_t write_pcf8574(const uint8_t addr, const uint8_t data) {
     if (xSemaphoreTake(i2c_bus_mutex_, pdMS_TO_TICKS(10)) != pdTRUE) {
@@ -169,12 +178,12 @@ static bool check_i2c_device_present(const uint8_t addr) {
     return test_ret == ESP_OK;
 }
 
-esp_err_t kc868_a16_hw_init() {
-    if (kc868_a16_initialized) {
-        ESP_LOGI(TAG, "KC868-A16 hardware already initialized.");
+esp_err_t kc868_hw_init() {
+    if (kc868_hw_initialized) {
+        ESP_LOGI(TAG, "KC868 hardware already initialized.");
         return ESP_OK;
     }
-    ESP_LOGI(TAG, "Initializing KC868-A16 hardware");
+    ESP_LOGI(TAG, "Initializing KC868 hardware");
 
     // Create the I2C bus mutex if it hasn't been created yet
     if (i2c_bus_mutex_ == nullptr) {
@@ -221,45 +230,53 @@ esp_err_t kc868_a16_hw_init() {
     // Verify Input PCF8574 expanders at their fixed/expected addresses
     ESP_LOGD(TAG, "Verifying Input PCF8574 expanders...");
 
-    // Assuming KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7 (0x22) and
-    // KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15 (0x21) are defined in kc868_a16_hw.h or similar
-    bool found_chip_for_0_7 = check_i2c_device_present(KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7);
+    // Assuming KC868_HW_EXPECTED_INPUT_ADDR_PINS_0_7 (0x22) and
+    // KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15 (0x21) are defined in kc868_hw.h or similar
+    bool found_chip_for_0_7 = check_i2c_device_present(KC868_HW_EXPECTED_INPUT_ADDR_PINS_0_7);
     if (found_chip_for_0_7) {
         // Check that this address is not one of the output expander addresses
-        if constexpr (KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7 == PCF8574_OUTPUT_ADDR_2) {
-            ESP_LOGE(TAG, "Input expander address 0x%02X for pins 0-7 conflicts with an output expander address!", KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7);
+        if constexpr (KC868_HW_EXPECTED_INPUT_ADDR_PINS_0_7 == PCF8574_OUTPUT_ADDR_2) {
+            ESP_LOGE(TAG, "Input expander address 0x%02X for pins 0-7 conflicts with an output expander address!", KC868_HW_EXPECTED_INPUT_ADDR_PINS_0_7);
             found_chip_for_0_7 = false; // Treat as not found due to conflict
         } else {
-            discovered_pcf8574_input_addr_for_pins_0_7 = KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7;
+            discovered_pcf8574_input_addr_for_pins_0_7 = KC868_HW_EXPECTED_INPUT_ADDR_PINS_0_7;
             ESP_LOGD(TAG, "Input expander for pins 0-7 (X01-X08) verified at 0x%02X.", discovered_pcf8574_input_addr_for_pins_0_7);
         }
     } else {
-        ESP_LOGE(TAG, "Input expander for pins 0-7 (X01-X08) NOT found at expected address 0x%02X.", KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7);
+        ESP_LOGE(TAG, "Input expander for pins 0-7 (X01-X08) NOT found at expected address 0x%02X.", KC868_HW_EXPECTED_INPUT_ADDR_PINS_0_7);
     }
 
-    bool found_chip_for_8_15 = check_i2c_device_present(KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
-    if (found_chip_for_8_15) {
-        // Check that this address is not one of the output expander addresses or the other input chip
-        if constexpr (KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15 == PCF8574_OUTPUT_ADDR_2) {
-            ESP_LOGE(TAG, "Input expander address 0x%02X for pins 8-15 conflicts with an output expander address!", KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
-            found_chip_for_8_15 = false;
-        } else if (KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15 == discovered_pcf8574_input_addr_for_pins_0_7) {
-            ESP_LOGE(TAG, "Input expander address 0x%02X for pins 8-15 is the same as for pins 0-7!", KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
-            found_chip_for_8_15 = false;
-        }
-        else {
-            discovered_pcf8574_input_addr_for_pins_8_15 = KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15;
-            ESP_LOGD(TAG, "Input expander for pins 8-15 (X09-X16) verified at 0x%02X.", discovered_pcf8574_input_addr_for_pins_8_15);
-        }
-    } else {
-        ESP_LOGE(TAG, "Input expander for pins 8-15 (X09-X16) NOT found at expected address 0x%02X.", KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
-    }
-
-    if (!found_chip_for_0_7 || !found_chip_for_8_15) {
-        ESP_LOGE(TAG, "One or both input PCF8574 expanders not found or address conflict. Please check hardware and I2C addresses.");
-        ESP_LOGE(TAG, "Expected input addresses: Pins 0-7 (X01-X08) at 0x%02X, Pins 8-15 (X09-X16) at 0x%02X.",
-                 KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_0_7, KC868_A16_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
+    if (!found_chip_for_0_7) {
+        ESP_LOGE(TAG, "Input PCF8574 expander for pins 0-7 (X01-X08) not found or address conflict at 0x%02X. Please check hardware and I2C addresses.",
+                 KC868_HW_EXPECTED_INPUT_ADDR_PINS_0_7);
         return ESP_FAIL;
+    }
+
+    // The A16 has a second input expander (pins 8-15, X09-X16); the A8 does not,
+    // so this whole verification is compiled out of the A8 build.
+    if constexpr (kHasSecondInputChip) {
+        bool found_chip_for_8_15 = check_i2c_device_present(KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
+        if (found_chip_for_8_15) {
+            // Check that this address is not one of the output expander addresses or the other input chip
+            if constexpr (KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15 == PCF8574_OUTPUT_ADDR_2) {
+                ESP_LOGE(TAG, "Input expander address 0x%02X for pins 8-15 conflicts with an output expander address!", KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
+                found_chip_for_8_15 = false;
+            } else if (KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15 == discovered_pcf8574_input_addr_for_pins_0_7) {
+                ESP_LOGE(TAG, "Input expander address 0x%02X for pins 8-15 is the same as for pins 0-7!", KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
+                found_chip_for_8_15 = false;
+            } else {
+                discovered_pcf8574_input_addr_for_pins_8_15 = KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15;
+                ESP_LOGD(TAG, "Input expander for pins 8-15 (X09-X16) verified at 0x%02X.", discovered_pcf8574_input_addr_for_pins_8_15);
+            }
+        } else {
+            ESP_LOGE(TAG, "Input expander for pins 8-15 (X09-X16) NOT found at expected address 0x%02X.", KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
+        }
+
+        if (!found_chip_for_8_15) {
+            ESP_LOGE(TAG, "Second input PCF8574 expander (pins 8-15, X09-X16) not found or address conflict at 0x%02X.",
+                     KC868_HW_EXPECTED_INPUT_ADDR_PINS_8_15);
+            return ESP_FAIL;
+        }
     }
 
     // Initialize Output PCF8574s
@@ -268,11 +285,13 @@ esp_err_t kc868_a16_hw_init() {
         ESP_LOGE(TAG, "Failed to initialize PCF8574_1 (Outputs at 0x%02X): %s", PCF8574_OUTPUT_ADDR_1, esp_err_to_name(ret));
         return ret;
     }
-    
-    ret = write_pcf8574(PCF8574_OUTPUT_ADDR_2, 0xFF); // Set all output relays to OFF (active-low)
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize PCF8574_2 (Outputs at 0x%02X): %s", PCF8574_OUTPUT_ADDR_2, esp_err_to_name(ret));
-        return ret;
+
+    if constexpr (kHasSecondOutputChip) {
+        ret = write_pcf8574(PCF8574_OUTPUT_ADDR_2, 0xFF); // Set all output relays to OFF (active-low)
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize PCF8574_2 (Outputs at 0x%02X): %s", PCF8574_OUTPUT_ADDR_2, esp_err_to_name(ret));
+            return ret;
+        }
     }
 
     // Initialize discovered Input PCF8574s
@@ -282,20 +301,22 @@ esp_err_t kc868_a16_hw_init() {
         return ret;
     }
 
-    ret = write_pcf8574(discovered_pcf8574_input_addr_for_pins_8_15, 0xFF); // Set all pins to high to enable them as inputs
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize PCF8574_INPUT_2 (0x%02x): %s", discovered_pcf8574_input_addr_for_pins_8_15, esp_err_to_name(ret));
-        return ret;
+    if constexpr (kHasSecondInputChip) {
+        ret = write_pcf8574(discovered_pcf8574_input_addr_for_pins_8_15, 0xFF); // Set all pins to high to enable them as inputs
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize PCF8574_INPUT_2 (0x%02x): %s", discovered_pcf8574_input_addr_for_pins_8_15, esp_err_to_name(ret));
+            return ret;
+        }
     }
 
     output_state = 0xFFFF; // All bits high means all relays are off (PCF8574 register view)
 
-    kc868_a16_initialized = true;
-    ESP_LOGI(TAG, "KC868-A16 hardware initialized successfully");
+    kc868_hw_initialized = true;
+    ESP_LOGI(TAG, "KC868 hardware initialized successfully");
     return ESP_OK;
 }
 
-esp_err_t kc868_a16_get_output_state(const uint8_t output_num, bool* state) {
+esp_err_t kc868_hw_get_output_state(const uint8_t output_num, bool* state) {
     if (output_num >= 16 || state == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -306,7 +327,7 @@ esp_err_t kc868_a16_get_output_state(const uint8_t output_num, bool* state) {
     return ESP_OK;
 }
 
-esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
+esp_err_t kc868_hw_set_all_outputs(const uint16_t state_mask) {
     std::lock_guard<std::mutex> state_lock(output_state_mutex_);
 
     // Convert to PCF8574 active low logic
@@ -322,31 +343,38 @@ esp_err_t kc868_a16_set_all_outputs(const uint16_t state_mask) {
     // cache byte before risking chip 2 -- an ADDR_2 failure won't leave it stale.
     output_state = (output_state & 0xFF00) | low_byte;
 
-    ret = write_pcf8574(PCF8574_OUTPUT_ADDR_2, high_byte);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "set_all_outputs: Failed to write to ADDR_2 (0x%02X): %s", PCF8574_OUTPUT_ADDR_2, esp_err_to_name(ret));
-        return ret;
+    // The A8 has no second output expander; relays 9-16 don't exist, so we never
+    // address 0x25. Keep the cache high byte consistent (all-off, active-low 0xFF).
+    if constexpr (kHasSecondOutputChip) {
+        ret = write_pcf8574(PCF8574_OUTPUT_ADDR_2, high_byte);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "set_all_outputs: Failed to write to ADDR_2 (0x%02X): %s", PCF8574_OUTPUT_ADDR_2, esp_err_to_name(ret));
+            return ret;
+        }
+        output_state = (output_state & 0x00FF) | (static_cast<uint16_t>(high_byte) << 8);
+    } else {
+        output_state = (output_state & 0x00FF) | 0xFF00; // no chip 2: upper relays always off
     }
-    output_state = (output_state & 0x00FF) | (static_cast<uint16_t>(high_byte) << 8);
     ESP_LOGD(TAG, "set_all_outputs: Success. PCF8574s updated. Logical mask 0x%04X. output_state (active-low) 0x%04X", state_mask, output_state);
     return ret;
 }
 
 // Invert because PCF8574 is active low
-uint16_t kc868_a16_get_all_outputs() {
+uint16_t kc868_hw_get_all_outputs() {
     // This function returns the logical state (1 = ON, 0 = OFF)
     // output_state stores the PCF8574 register view (active-low, 1 = OFF, 0 = ON)
     std::lock_guard<std::mutex> state_lock(output_state_mutex_);
     return ~output_state & 0xFFFF;
 }
 
-esp_err_t kc868_a16_get_input_state(const uint8_t input_num, bool* state) {
-    if (input_num >= 16 || state == nullptr) {
+esp_err_t kc868_hw_get_input_state(const uint8_t input_num, bool* state) {
+    if (input_num >= KC868_HW_NUM_INPUTS || state == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (discovered_pcf8574_input_addr_for_pins_0_7 == 0 || discovered_pcf8574_input_addr_for_pins_8_15 == 0) {
-        ESP_LOGE(TAG, "Input expander addresses not discovered or invalid. Call kc868_a16_hw_init() first.");
+    if (discovered_pcf8574_input_addr_for_pins_0_7 == 0 ||
+        (kHasSecondInputChip && discovered_pcf8574_input_addr_for_pins_8_15 == 0)) {
+        ESP_LOGE(TAG, "Input expander addresses not discovered or invalid. Call kc868_hw_init() first.");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -368,17 +396,18 @@ esp_err_t kc868_a16_get_input_state(const uint8_t input_num, bool* state) {
     return ESP_OK;
 }
 
-esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask) {
+esp_err_t kc868_hw_get_all_inputs(uint16_t* state_mask) {
     if (state_mask == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (discovered_pcf8574_input_addr_for_pins_0_7 == 0 || discovered_pcf8574_input_addr_for_pins_8_15 == 0) {
-        ESP_LOGE(TAG, "Input expander addresses not initialized. Call kc868_a16_hw_init() first.");
+    if (discovered_pcf8574_input_addr_for_pins_0_7 == 0 ||
+        (kHasSecondInputChip && discovered_pcf8574_input_addr_for_pins_8_15 == 0)) {
+        ESP_LOGE(TAG, "Input expander addresses not initialized. Call kc868_hw_init() first.");
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint8_t byte_low, byte_high;
+    uint8_t byte_low, byte_high = 0xFF; // A8 has no chip 2: pins 8-15 read HIGH (inactive)
 
     esp_err_t ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_0_7, &byte_low);
     if (ret != ESP_OK) {
@@ -386,10 +415,12 @@ esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask) {
         return ret;
     }
 
-    ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_8_15, &byte_high);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to read inputs from PCF8574 for pins 8-15 (0x%02x): %s", discovered_pcf8574_input_addr_for_pins_8_15, esp_err_to_name(ret));
-        return ret;
+    if constexpr (kHasSecondInputChip) {
+        ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_8_15, &byte_high);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to read inputs from PCF8574 for pins 8-15 (0x%02x): %s", discovered_pcf8574_input_addr_for_pins_8_15, esp_err_to_name(ret));
+            return ret;
+        }
     }
 
     const uint16_t combined_raw = (static_cast<uint16_t>(byte_high) << 8) | byte_low;
@@ -401,26 +432,29 @@ esp_err_t kc868_a16_get_all_inputs(uint16_t* state_mask) {
     return ESP_OK;
 }
 
-esp_err_t kc868_a16_get_all_inputs_raw(uint16_t* data) {
+esp_err_t kc868_hw_get_all_inputs_raw(uint16_t* data) {
     if (data == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (discovered_pcf8574_input_addr_for_pins_0_7 == 0 || discovered_pcf8574_input_addr_for_pins_8_15 == 0) {
-        ESP_LOGE(TAG, "Input expander addresses not initialized. Call kc868_a16_hw_init() first.");
+    if (discovered_pcf8574_input_addr_for_pins_0_7 == 0 ||
+        (kHasSecondInputChip && discovered_pcf8574_input_addr_for_pins_8_15 == 0)) {
+        ESP_LOGE(TAG, "Input expander addresses not initialized. Call kc868_hw_init() first.");
         return ESP_ERR_INVALID_STATE;
     }
 
-    uint8_t byte_low, byte_high;
+    uint8_t byte_low, byte_high = 0xFF; // A8 has no chip 2: pins 8-15 read HIGH (inactive)
 
     esp_err_t ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_0_7, &byte_low);
     if (ret != ESP_OK) {
         return ret;
     }
 
-    ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_8_15, &byte_high);
-    if (ret != ESP_OK) {
-        return ret;
+    if constexpr (kHasSecondInputChip) {
+        ret = read_pcf8574(discovered_pcf8574_input_addr_for_pins_8_15, &byte_high);
+        if (ret != ESP_OK) {
+            return ret;
+        }
     }
 
     // Raw PCF8574 view (NOT inverted): bit '1' = pin HIGH, bit '0' = pin LOW.
@@ -429,13 +463,13 @@ esp_err_t kc868_a16_get_all_inputs_raw(uint16_t* data) {
     return ESP_OK;
 }
 
-esp_err_t kc868_a16_get_inputs_0_7_raw(uint8_t* data) {
+esp_err_t kc868_hw_get_inputs_0_7_raw(uint8_t* data) {
     if (data == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
     if (discovered_pcf8574_input_addr_for_pins_0_7 == 0) {
-        ESP_LOGE(TAG, "Input expander address for pins 0-7 not initialized. Call kc868_a16_hw_init() first.");
+        ESP_LOGE(TAG, "Input expander address for pins 0-7 not initialized. Call kc868_hw_init() first.");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -449,9 +483,9 @@ esp_err_t kc868_a16_get_inputs_0_7_raw(uint8_t* data) {
     return ESP_OK;
 }
 
-void kc868_a16_hw_scan_i2c_bus() {
-    if (!kc868_a16_initialized) {
-        ESP_LOGW(TAG, "I2C bus scan: KC868-A16 hardware not fully initialized. Attempting basic I2C setup for scan...");
+void kc868_hw_scan_i2c_bus() {
+    if (!kc868_hw_initialized) {
+        ESP_LOGW(TAG, "I2C bus scan: KC868 hardware not fully initialized. Attempting basic I2C setup for scan...");
 
         constexpr i2c_config_t conf = {
             .mode = I2C_MODE_MASTER,
@@ -496,7 +530,7 @@ void kc868_a16_hw_scan_i2c_bus() {
     }
 }
 
-void kc868_a16_get_i2c_stats(kc868_a16_i2c_stats_t* out) {
+void kc868_hw_get_i2c_stats(kc868_hw_i2c_stats_t* out) {
     if (out == nullptr) {
         return;
     }
@@ -506,7 +540,7 @@ void kc868_a16_get_i2c_stats(kc868_a16_i2c_stats_t* out) {
     out->mutex_failures        = i2c_mutex_failures_.load(std::memory_order_relaxed);
 }
 
-uint32_t kc868_a16_get_i2c_error_count() {
+uint32_t kc868_hw_get_i2c_error_count() {
     // Quick health probe: total first-attempt failures since boot. Non-zero (and
     // rising) means the 400 kHz overclock is stressing the bus.
     return i2c_first_attempt_errors_.load(std::memory_order_relaxed);

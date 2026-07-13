@@ -5,6 +5,8 @@
 #include <vector>
 #include <algorithm>
 #include <esp_log.h>
+#include "sdkconfig.h" // For CONFIG_BOARD_KC868_A8 (board selection)
+#include "kc868_hw.h" // For KC868_HW_NUM_INPUTS (PTT pin range)
 
 const char *HtmlContent::TAG = "HTML";
 
@@ -399,8 +401,11 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<label for='radio_operation_mode'>Radio Operation Mode:</label>";
     ss_buffer << "<select id='radio_operation_mode' name='radio_operation_mode' onchange='toggleInterlockVisibility()'>";
     ss_buffer << "<option value='SINGLE_A' " << (config.radio_operation_mode == RADIO_OP_MODE_SINGLE_A ? "selected" : "") << ">Radio A Only</option>";
+#if !defined(CONFIG_BOARD_KC868_A8)
+    // Dual-radio modes require Radio B relays (9-16), which only the A16 has.
     ss_buffer << "<option value='ALTERNATING_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_ALTERNATING_AB ? "selected" : "") << ">Alternating (A or B, one at a time)</option>";
     ss_buffer << "<option value='CONCURRENT_AB' " << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "selected" : "") << ">Concurrent (A and B, different antennas)</option>";
+#endif
     ss_buffer << "</select>";
     ss_buffer << "</div>";
 
@@ -547,7 +552,7 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<label for='ptt_input_radio_a'>PTT Input Pin (Radio A):</label>";
     ss_buffer << "<select id='ptt_input_radio_a' name='ptt_input_radio_a'>";
     ss_buffer << "<option value='-1' " << (config.ptt_input_radio_a == -1 ? "selected" : "") << ">Disabled</option>";
-    for (int pin = 0; pin <= 15; pin++) { // KC868-A16 has 16 inputs (0-15), corresponding to X1-X16
+    for (int pin = 0; pin < KC868_HW_NUM_INPUTS; pin++) { // Board inputs (0-based), shown as X1-X8 (A8) or X1-X16 (A16)
         ss_buffer << "<option value='" << pin << "' "
                   << (config.ptt_input_radio_a == pin ? "selected" : "")
                   << ">X" << (pin + 1 < 10 ? "0" : "") << (pin + 1) << "</option>";
@@ -569,7 +574,7 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "<label for='ptt_input_radio_b'>PTT Input Pin (Radio B):</label>";
     ss_buffer << "<select id='ptt_input_radio_b' name='ptt_input_radio_b'>";
     ss_buffer << "<option value='-1' " << (config.ptt_input_radio_b == -1 ? "selected" : "") << ">Disabled</option>";
-    for (int pin = 0; pin <= 15; pin++) { // KC868-A16 has 16 inputs (0-15), corresponding to X1-X16
+    for (int pin = 0; pin < KC868_HW_NUM_INPUTS; pin++) { // Board inputs (0-based), shown as X1-X8 (A8) or X1-X16 (A16)
         ss_buffer << "<option value='" << pin << "' "
                   << (config.ptt_input_radio_b == pin ? "selected" : "")
                   << ">X" << (pin + 1 < 10 ? "0" : "") << (pin + 1) << "</option>";

@@ -4,7 +4,7 @@
 The Relay Controller component provides a high-level interface for controlling the physical relay outputs. It manages the logical mapping between antenna band selection and physical relay activation, handles radio-specific relay allocation, and implements safety features to prevent hot-switching.
 
 ## Responsibilities
-- Controls physical relay outputs through the KC868-A16 hardware interface
+- Controls physical relay outputs through the KC868 hardware interface
 - Implements safety features to prevent switching during transmission
 - Maintains state information about currently active relays
 - Manages last selected relays for each band

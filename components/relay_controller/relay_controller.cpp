@@ -22,9 +22,9 @@ RelayController::~RelayController() = default;
 esp_err_t RelayController::init() {
     ESP_LOGI(TAG, "Initializing relay controller");
 
-    esp_err_t ret = kc868_a16_hw_init();
+    esp_err_t ret = kc868_hw_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize KC868-A16 hardware: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to initialize KC868 hardware: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -49,7 +49,7 @@ esp_err_t RelayController::turn_off_all_relays() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    const esp_err_t ret = kc868_a16_set_all_outputs(0);
+    const esp_err_t ret = kc868_hw_set_all_outputs(0);
     if (ret == ESP_OK) {
         currently_selected_relay_ = 0;
     }
@@ -81,12 +81,12 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
     // the single source of truth). Compute the desired 16-bit mask, write it, and
     // only update software state after a confirmed successful write.
     const uint8_t hw_relay = relay_id - 1; // 0-based
-    const uint16_t committed = kc868_a16_get_all_outputs(); // logical (1 = ON)
+    const uint16_t committed = kc868_hw_get_all_outputs(); // logical (1 = ON)
     const uint16_t desired = state
         ? static_cast<uint16_t>(committed | (1u << hw_relay))
         : static_cast<uint16_t>(committed & ~(1u << hw_relay));
 
-    const esp_err_t ret = kc868_a16_set_all_outputs(desired);
+    const esp_err_t ret = kc868_hw_set_all_outputs(desired);
     if (ret == ESP_OK) {
         if (state) {
             currently_selected_relay_ = relay_id;
@@ -101,7 +101,7 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
         }
     }
     // On failure the HW cache still reflects physical reality (per-chip, see
-    // kc868_a16_set_all_outputs); leave software state alone and let the caller retry.
+    // kc868_hw_set_all_outputs); leave software state alone and let the caller retry.
     return ret;
 }
 
@@ -112,7 +112,7 @@ bool RelayController::get_relay_state(const int relay_id) const {
     }
 
     bool state;
-    if (kc868_a16_get_output_state(relay_id - 1, &state) != ESP_OK) {
+    if (kc868_hw_get_output_state(relay_id - 1, &state) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to get relay state");
         return false;
     }
@@ -120,11 +120,11 @@ bool RelayController::get_relay_state(const int relay_id) const {
 }
 
 uint16_t RelayController::get_relay_states() const {
-    // kc868_a16_get_all_outputs() returns logical state (1 = ON, 0 = OFF).
+    // kc868_hw_get_all_outputs() returns logical state (1 = ON, 0 = OFF).
     // However, UI layer expects active-low format (0 = ON, 1 = OFF) for consistency
     // with the active-low checking pattern: if (!((states >> i) & 1))
     // So we intentionally invert to provide active-low format to callers.
-    const uint16_t logical_states = kc868_a16_get_all_outputs();
+    const uint16_t logical_states = kc868_hw_get_all_outputs();
     const uint16_t active_low_states = ~logical_states & 0xFFFF;
 
     if (active_low_states != 0xFFFF) {
@@ -187,7 +187,7 @@ esp_err_t RelayController::execute_relay_change(const int relay_id, const int ba
     // truth). Splitting it into per-radio nibbles means a control output dropped by
     // the interlock (via set_relay, which doesn't go through this path) is never
     // re-asserted here: bits 0-7 = Radio A, bits 8-15 = Radio B.
-    const uint16_t committed = kc868_a16_get_all_outputs();
+    const uint16_t committed = kc868_hw_get_all_outputs();
     uint8_t radio_mask[2] = {
         static_cast<uint8_t>(committed & 0xFF),
         static_cast<uint8_t>((committed >> RELAYS_PER_RADIO) & 0xFF),
@@ -239,7 +239,7 @@ esp_err_t RelayController::execute_relay_change(const int relay_id, const int ba
     // radio_mask[1] is for relays 9-16 (physical bits 8-15)
     const uint16_t desired = radio_mask[0] | (static_cast<uint16_t>(radio_mask[1]) << RELAYS_PER_RADIO);
 
-    const esp_err_t ret = kc868_a16_set_all_outputs(desired);
+    const esp_err_t ret = kc868_hw_set_all_outputs(desired);
     if (ret == ESP_OK) {
         ESP_LOGD(TAG, "Successfully set desired mask: 0x%04X (Radio A: 0x%02X, Radio B: 0x%02X)", desired, radio_mask[0], radio_mask[1]);
         if (state) { // Only update last selected if turning ON

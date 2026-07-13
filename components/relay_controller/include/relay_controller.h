@@ -2,7 +2,7 @@
 #define RELAY_CONTROLLER_H
 
 #include "esp_err.h"
-#include "kc868_a16_hw.h"
+#include "kc868_hw.h"
 #include "antenna_switch.h"
 #include <map>
 #include <mutex>
@@ -13,8 +13,15 @@ class CatParser;
 
 class RelayController : public ConfigCache {
 public:
-    static constexpr int NUM_RELAYS = 16; // Total number of relays
-    static constexpr int RELAYS_PER_RADIO = NUM_RELAYS / 2;
+    // Per-radio port/relay ceiling. Fixed at 8 on both boards: it is the Radio-A
+    // port count, the Radio-B relay offset (relay 9 = Radio B port 1 on the A16),
+    // and the modulo divisor in the interlock math. Do NOT derive it from
+    // NUM_RELAYS -- on the A8 that would make it 4 and corrupt every A/B split.
+    static constexpr int RELAYS_PER_RADIO = 8;
+    // Total physical relays. A8 = 8 (Radio A only, relays 1-8); A16 = 16 (adds
+    // Radio B on relays 9-16). With A8's NUM_RELAYS == RELAYS_PER_RADIO, the
+    // Radio-B relay range (RELAYS_PER_RADIO..NUM_RELAYS) is empty.
+    static constexpr int NUM_RELAYS = KC868_HW_NUM_RELAYS;
 
 
     // Delete copy constructor and assignment operator

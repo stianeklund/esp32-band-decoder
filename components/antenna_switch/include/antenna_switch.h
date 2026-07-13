@@ -76,9 +76,9 @@ typedef struct antenna_switch_config {
     int8_t uart_rx_pin;  // GPIO pin for UART RX
 
     // PTT input configuration
-    int ptt_input_radio_a;      // KC868-A16 input number (0-15) for Radio A PTT, -1 if disabled
+    int ptt_input_radio_a;      // KC868 input number (0-15) for Radio A PTT, -1 if disabled
     bool ptt_input_radio_a_active_high; // True if PTT active is high, false if active low
-    int ptt_input_radio_b;      // KC868-A16 input number (0-15) for Radio B PTT, -1 if disabled (for future use)
+    int ptt_input_radio_b;      // KC868 input number (0-15) for Radio B PTT, -1 if disabled (for future use)
     bool ptt_input_radio_b_active_high; // True if PTT active is high, false if active low (for future use)
 
     bool mqtt_enabled;

@@ -1,0 +1,25 @@
+menu "Band Decoder Board"
+
+choice BOARD_MODEL
+    prompt "Target KinCony board"
+    default BOARD_KC868_A16
+    help
+        Selects the KinCony KC868 board variant this firmware runs on.
+
+        KC868-A16: 16 relays and 16 optocoupler inputs. Two PCF8574 output
+        expanders (0x24/0x25) and two input expanders (0x22/0x21). Supports
+        single- and dual-radio (alternating/concurrent) antenna switching.
+
+        KC868-A8: 8 relays and 8 optocoupler inputs. One PCF8574 output
+        expander (0x24) and one input expander (0x22). Runs single-radio
+        (Radio A) only, up to 8 antenna ports on relays 1-8.
+
+config BOARD_KC868_A16
+    bool "KC868-A16 (16 relays / 16 inputs, single or dual radio)"
+
+config BOARD_KC868_A8
+    bool "KC868-A8 (8 relays / 8 inputs, single radio only)"
+
+endchoice
+
+endmenu
