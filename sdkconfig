@@ -692,6 +692,17 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# Band Decoder Board
+#
+# default:
+CONFIG_BOARD_KC868_A16=y
+# default:
+# CONFIG_BOARD_KC868_A8 is not set
+# default:
+# CONFIG_BOARD_KC868_A6 is not set
+# end of Band Decoder Board
+
+#
 # Compiler options
 #
 # CONFIG_COMPILER_OPTIMIZATION_DEBUG is not set
@@ -3240,7 +3251,6 @@ CONFIG_MQTT_TRANSPORT_WEBSOCKET_SECURE=y
 # end of ESP-MQTT Configurations
 # end of Component config
 
-# default:
 # CONFIG_IDF_EXPERIMENTAL_FEATURES is not set
 
 # Deprecated options for backward compatibility

@@ -41,7 +41,7 @@ typedef enum {
 // Maximum sizes
 #define WS_MAX_MESSAGE_SIZE 8192
 #define WS_MAX_CLIENTS 5
-#define WS_MAX_REQUEST_ID_LEN 32
+#define WS_MAX_REQUEST_ID_LEN 40  // fits a 36-char uuid4 + NUL
 #define WS_MAX_ACTION_LEN 32
 
 // Keepalive and timeout configuration
