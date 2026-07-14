@@ -341,6 +341,7 @@ esp_err_t ConfigManager::init() { // Made non-const
         
         // Default for radio operation mode and interlock
         current_config_->radio_operation_mode = RADIO_OP_MODE_SINGLE_A; // Default to Radio A only
+        current_config_->radio_protocol = RADIO_PROTOCOL_KENWOOD; // Default CAT protocol
         current_config_->interlock_auto_resolves_conflict = true; // Default to true for safety if concurrent mode is chosen
         current_config_->auto_restore_on_conflict_resolution = true; // Default to true
         current_config_->radio_restore_delay_ms = 200; // Default interlock restore delay
@@ -461,6 +462,7 @@ esp_err_t ConfigManager::reset_to_defaults() {
     strncpy(defaultConfig.mqtt_topic, "omnirig/frequent/radio_info", sizeof(defaultConfig.mqtt_topic) - 1);
     defaultConfig.mqtt_topic[sizeof(defaultConfig.mqtt_topic) - 1] = '\0';
     defaultConfig.radio_operation_mode = RADIO_OP_MODE_SINGLE_A;
+    defaultConfig.radio_protocol = RADIO_PROTOCOL_KENWOOD;
     defaultConfig.interlock_auto_resolves_conflict = true;
     defaultConfig.auto_restore_on_conflict_resolution = true;
     defaultConfig.radio_restore_delay_ms = 200;
@@ -714,6 +716,14 @@ esp_err_t ConfigManager::save_to_nvs() const {
     if (txv_show_err != ESP_OK) {
         ESP_LOGE(TAG, "Error saving transverter_show_frequency: %s", esp_err_to_name(txv_show_err));
         if (ret == ESP_OK) ret = txv_show_err;
+    }
+
+    // Save radio protocol (individual key; NOT in the base blob - see antenna_switch.h)
+    esp_err_t radio_proto_err = nvs_set_u8(nvs_handle, "radio_proto",
+                                           static_cast<uint8_t>(current_config_->radio_protocol));
+    if (radio_proto_err != ESP_OK) {
+        ESP_LOGE(TAG, "Error saving radio_protocol: %s", esp_err_to_name(radio_proto_err));
+        if (ret == ESP_OK) ret = radio_proto_err;
     }
 
     // Final commit for the newly added fields
@@ -1013,6 +1023,24 @@ esp_err_t ConfigManager::load_from_nvs() const {
         current_config_->transverter_show_frequency = true; // Fallback on error
     }
 
+    // Load radio protocol (individual key)
+    uint8_t radio_proto_val;
+    esp_err_t err_proto = nvs_get_u8(nvs_handle, "radio_proto", &radio_proto_val);
+    if (err_proto == ESP_OK) {
+        if (radio_proto_val <= static_cast<uint8_t>(RADIO_PROTOCOL_YAESU)) {
+            current_config_->radio_protocol = static_cast<radio_protocol_t>(radio_proto_val);
+        } else {
+            ESP_LOGW(TAG, "radio_protocol value %u out of range, using default (Kenwood).", radio_proto_val);
+            current_config_->radio_protocol = RADIO_PROTOCOL_KENWOOD;
+        }
+    } else if (err_proto == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "radio_protocol (key radio_proto) not found in NVS, using default (Kenwood).");
+        current_config_->radio_protocol = RADIO_PROTOCOL_KENWOOD;
+    } else {
+        ESP_LOGE(TAG, "Error loading radio_protocol: %s", esp_err_to_name(err_proto));
+        current_config_->radio_protocol = RADIO_PROTOCOL_KENWOOD;
+    }
+
     // Load UART configuration
     int32_t temp_i32_val; // Temporary variable for nvs_get_i32
     esp_err_t uart_err = nvs_get_i32(nvs_handle, "uart_baud", &temp_i32_val);
@@ -1284,6 +1312,10 @@ esp_err_t ConfigManager::export_config_to_json(char **json_string) const {
     }
     cJSON_AddStringToObject(config, "radio_operation_mode", radio_mode_str);
 
+    // Radio protocol (Kenwood/Yaesu)
+    const char *radio_protocol_str = (current_config_->radio_protocol == RADIO_PROTOCOL_YAESU) ? "YAESU" : "KENWOOD";
+    cJSON_AddStringToObject(config, "radio_protocol", radio_protocol_str);
+
     // Bands configuration
     cJSON *bands = cJSON_CreateObject();
     cJSON *radio_a_bands = cJSON_CreateArray();
@@ -1511,6 +1543,21 @@ esp_err_t ConfigManager::import_config_from_json(const char *json_string, bool v
         ESP_LOGE(TAG, "Invalid radio_operation_mode field");
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
+    }
+
+    // Parse radio protocol (optional; absent in older exports -> Kenwood)
+    cJSON *radio_proto = cJSON_GetObjectItem(config, "radio_protocol");
+    if (cJSON_IsString(radio_proto)) {
+        if (strcmp(radio_proto->valuestring, "KENWOOD") == 0) {
+            temp_config.radio_protocol = RADIO_PROTOCOL_KENWOOD;
+        } else if (strcmp(radio_proto->valuestring, "YAESU") == 0) {
+            temp_config.radio_protocol = RADIO_PROTOCOL_YAESU;
+        } else {
+            ESP_LOGW(TAG, "Invalid radio_protocol: %s, defaulting to KENWOOD", radio_proto->valuestring);
+            temp_config.radio_protocol = RADIO_PROTOCOL_KENWOOD;
+        }
+    } else {
+        temp_config.radio_protocol = RADIO_PROTOCOL_KENWOOD;
     }
 
     // Parse bands configuration

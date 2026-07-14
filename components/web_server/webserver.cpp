@@ -410,6 +410,19 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
         new_config.radio_operation_mode = RADIO_OP_MODE_SINGLE_A; 
     }
 
+    // Parse radio_protocol (Kenwood/Yaesu). Default Kenwood if absent/invalid.
+    const cJSON *radio_protocol_json = cJSON_GetObjectItem(root, "radio_protocol");
+    if (cJSON_IsString(radio_protocol_json) && radio_protocol_json->valuestring != nullptr) {
+        if (strcmp(radio_protocol_json->valuestring, "YAESU") == 0) {
+            new_config.radio_protocol = RADIO_PROTOCOL_YAESU;
+        } else {
+            new_config.radio_protocol = RADIO_PROTOCOL_KENWOOD;
+        }
+    } else {
+        ESP_LOGW(TAG, "radio_protocol not found or not a string. Defaulting to KENWOOD.");
+        new_config.radio_protocol = RADIO_PROTOCOL_KENWOOD;
+    }
+
     // Parse interlock_auto_resolves_conflict
     const cJSON* interlock_json = cJSON_GetObjectItem(root, "interlock_auto_resolves_conflict");
     new_config.interlock_auto_resolves_conflict = cJSON_IsTrue(interlock_json);
@@ -721,6 +734,16 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     
     cJSON_Delete(root);
 
+    // A CAT-protocol change only takes effect on reboot (the parser is built once
+    // per session), so detect it here against the currently-persisted config.
+    bool radio_protocol_changed = false;
+    {
+        antenna_switch_config_t prev_cfg;
+        if (AntennaSwitch::instance().get_config(&prev_cfg) == ESP_OK) {
+            radio_protocol_changed = (prev_cfg.radio_protocol != new_config.radio_protocol);
+        }
+    }
+
     esp_err_t err = AntennaSwitch::instance().set_config(&new_config);
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to set configuration");
@@ -747,6 +770,12 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
 
     httpd_resp_sendstr_chunk(req, success_msg);
     httpd_resp_sendstr_chunk(req, nullptr); // Terminate chunked response
+
+    if (radio_protocol_changed) {
+        ESP_LOGI(TAG, "Radio CAT protocol changed; restarting to apply the new parser.");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        AntennaSwitch::instance().restart(); // does not return
+    }
     
     free(content);
     return ESP_OK;
@@ -1487,6 +1516,10 @@ esp_err_t WebServer::config_basic_handler(httpd_req_t *req) {
             break;
     }
     cJSON_AddStringToObject(root, "radio_operation_mode", radio_mode_str);
+
+    // Radio CAT protocol
+    cJSON_AddStringToObject(root, "radio_protocol",
+                            config.radio_protocol == RADIO_PROTOCOL_YAESU ? "YAESU" : "KENWOOD");
 
     // Add relay names array
     cJSON *relay_names_array = cJSON_CreateArray();

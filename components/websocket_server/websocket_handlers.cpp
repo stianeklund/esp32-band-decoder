@@ -547,6 +547,10 @@ cJSON* WebSocketHandlers::create_config_basic_json() {
             break;
     }
     cJSON_AddStringToObject(root, "radio_operation_mode", radio_mode_str);
+
+    // Radio CAT protocol
+    cJSON_AddStringToObject(root, "radio_protocol",
+                            config.radio_protocol == RADIO_PROTOCOL_YAESU ? "YAESU" : "KENWOOD");
     
     return root;
 }

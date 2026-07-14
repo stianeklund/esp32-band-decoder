@@ -22,6 +22,13 @@ typedef enum {
     RADIO_OP_MODE_CONCURRENT_AB     // Radio A and Radio B can be active simultaneously on different antennas.
 } radio_operation_mode_t;
 
+// Enum for CAT protocol family. Selected at runtime and applied on reboot (the
+// CAT parser object is built exactly once per session; see cat_parser_factory.cpp).
+typedef enum {
+    RADIO_PROTOCOL_KENWOOD, // Kenwood TS-590SG and compatible
+    RADIO_PROTOCOL_YAESU,   // Modern Yaesu (FT-891/FT-991A/FTDX-10/101)
+} radio_protocol_t;
+
 // Enum for Antenna Switch operation mode
 // TODO implement whether or not we should rely on polling or AI2 for updates
 typedef enum {
@@ -74,6 +81,11 @@ typedef struct antenna_switch_config {
     uint8_t uart_flow_ctrl;
     int8_t uart_tx_pin;  // GPIO pin for UART TX
     int8_t uart_rx_pin;  // GPIO pin for UART RX
+
+    // CAT protocol family (Kenwood/Yaesu). Persisted as its own NVS key
+    // ("radio_proto"), NOT in base_nvs_config_data_t, so adding it never changes
+    // that blob's sizeof() and never trips the size-mismatch config wipe.
+    radio_protocol_t radio_protocol;
 
     // PTT input configuration
     int ptt_input_radio_a;      // KC868 input number (0-15) for Radio A PTT, -1 if disabled

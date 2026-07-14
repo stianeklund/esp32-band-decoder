@@ -410,6 +410,16 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
     ss_buffer << "</select>";
     ss_buffer << "</div>";
 
+// Radio CAT Protocol Dropdown
+    ss_buffer << "<div class='form-group'>";
+    ss_buffer << "<label for='radio_protocol'>Radio CAT Protocol:</label>";
+    ss_buffer << "<select id='radio_protocol' name='radio_protocol'>";
+    ss_buffer << "<option value='KENWOOD' " << (config.radio_protocol == RADIO_PROTOCOL_KENWOOD ? "selected" : "") << ">Kenwood (TS-590SG)</option>";
+    ss_buffer << "<option value='YAESU' " << (config.radio_protocol == RADIO_PROTOCOL_YAESU ? "selected" : "") << ">Yaesu (FT-891 / FT-991A / FTDX)</option>";
+    ss_buffer << "</select>";
+    ss_buffer << "<small style='display:block;color:#888;'>Changing this reboots the decoder to apply.</small>";
+    ss_buffer << "</div>";
+
 // Interlock Option (conditionally visible)
     ss_buffer << "<div class='form-group' id='interlock_options_div' style='display: "
        << (config.radio_operation_mode == RADIO_OP_MODE_CONCURRENT_AB ? "block" : "none") << ";'>";
@@ -797,6 +807,7 @@ esp_err_t HtmlContent::generate_config_html_chunked(httpd_req_t *req, const ante
             rx_antenna_enabled: formData.get('rx_antenna_enabled') === 'on',
             allow_concurrent_data_sources: formData.get('allow_concurrent_data_sources') === 'on',
             radio_operation_mode: formData.get('radio_operation_mode'),
+            radio_protocol: formData.get('radio_protocol'),
             interlock_auto_resolves_conflict: formData.get('interlock_auto_resolves_conflict') === 'on',
             auto_restore_on_conflict_resolution: formData.get('auto_restore_on_conflict_resolution') === 'on',
             radio_restore_delay_ms: parseInt(formData.get('radio_restore_delay_ms')) || 200, // Added this line
