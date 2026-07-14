@@ -2,6 +2,7 @@
 #define CAT_PARSER_H
 
 #include "esp_err.h"
+#include "esp_log.h"
 #include "driver/uart.h"
 #include "antenna_switch.h"
 #include <string_view>
@@ -15,11 +16,19 @@
 #define BUF_SIZE 256  // Reduced buffer size
 #define MAX_EVENTS_PER_LOOP 3  // Limit events processed per loop
 
+// CatParser is the protocol-neutral base: it owns the UART engine, ';'-framing,
+// band-decode/antenna handoff, the TX-safety chokepoint (set_transmitting), the
+// transverter state/math, and every getter the rest of the firmware consumes.
+// Concrete radio protocols derive from it (see KenwoodCat / YaesuCat) and supply
+// only the wire-format parsing: their own command map + dispatch_one_command()
+// and, optionally, poll_for_updates() for protocol-specific auto-info/polling.
+// Consumers keep using CatParser::instance() unchanged; the factory (in
+// cat_parser_factory.cpp) picks the subclass from config at first init.
 class CatParser {
 public:
     CatParser();
 
-    ~CatParser();
+    virtual ~CatParser();
 
     esp_err_t init();
 
@@ -52,36 +61,71 @@ public:
 
     // Send commands to the radio via UART
     esp_err_t send_to_radio(const char* command);
-    esp_err_t probe_and_configure_ai_mode();
 
-    // Request async AI mode probe (non-blocking, executed by UART task)
+    // Request async AI/auto-info probe (non-blocking, executed by UART task via
+    // poll_for_updates()). Kept protocol-neutral so callers don't care which
+    // radio protocol is active.
     void request_ai_probe() { ai_probe_requested_.store(true); }
     bool is_ai_probe_pending() const { return ai_probe_requested_.load(); }
 
-    // Legacy C-style interface for backward compatibility
+    // Returns the active parser; the concrete subclass is chosen from config the
+    // first time this is called and lives for the whole session (see the
+    // load-bearing identity invariant in cat_parser_factory.cpp).
     static CatParser &instance();
 
-private:
-    using CommandHandler = esp_err_t (CatParser::*)(std::string_view);
+protected:
+    // --- Protocol hooks implemented by subclasses ---
+    // Parse one command (already stripped of its trailing ';'). Subclasses route
+    // through dispatch_lookup() with their own typed command map.
+    virtual esp_err_t dispatch_one_command(std::string_view command_view) = 0;
+    // Called from the UART task idle branch; subclasses use it for protocol-specific
+    // auto-info handshakes / polling. Default: nothing to poll.
+    virtual void poll_for_updates() {}
+
+    // Shared dispatch: look up a 2-char command code in a subclass-owned map of
+    // member-function pointers, invoke it, and keep the shared logging + valid-command
+    // bookkeeping in one place. Zero-heap (no std::function).
+    template <class D>
+    esp_err_t dispatch_lookup(const std::unordered_map<uint16_t, esp_err_t (D::*)(std::string_view)>& handlers,
+                              D* self, std::string_view command_view) {
+        if (command_view.length() < 2) { // Command must be at least 2 chars
+            if (!command_view.empty()) {
+                ESP_LOGD(TAG, "Short command received (length < 2): %.*s",
+                         static_cast<int>(command_view.length()), command_view.data());
+            }
+            return ESP_OK;
+        }
+
+        const uint16_t cmd_code = static_cast<uint16_t>(command_view[0]) << 8 | command_view[1];
+        const std::string_view cmd_payload = command_view.length() > 2 ? command_view.substr(2) : std::string_view();
+
+        const auto handler_it = handlers.find(cmd_code);
+        if (handler_it != handlers.end()) {
+            if (handler_it->second) { // Check if the function pointer is not null
+                const esp_err_t ret = (self->*(handler_it->second))(cmd_payload);
+                if (ret != ESP_OK) {
+                    ESP_LOGW(TAG, "Command handler for '%.*s' returned error %s",
+                             static_cast<int>(command_view.substr(0, 2).length()), command_view.substr(0, 2).data(),
+                             esp_err_to_name(ret));
+                } else {
+                    last_valid_command_time = std::chrono::steady_clock::now();
+                    ESP_LOGV(TAG, "Successfully processed command: %.*s",
+                             static_cast<int>(command_view.length()), command_view.data());
+                }
+                return ret;
+            }
+        } else {
+            ESP_LOGV(TAG, "No handler for command prefix: '%.*s'",
+                     static_cast<int>(command_view.substr(0, 2).length()), command_view.substr(0, 2).data());
+        }
+        return ESP_OK; // No handler found or handler was null
+    }
 
     void uart_task();
     static void uart0_to_uart2_task();
 
     int get_band_index(uint32_t freq) const;
     bool is_same_band(uint32_t freq1, uint32_t freq2) const;
-
-    esp_err_t process_fa_command(std::string_view command);
-    esp_err_t process_fb_command(std::string_view command);
-
-    esp_err_t process_if_command(std::string_view command);
-
-    esp_err_t process_ap_command(std::string_view command);
-    esp_err_t process_ai_command(std::string_view command_payload);
-    static std::from_chars_result get_from_chars_result(std::string_view command, unsigned long& ports_val);
-    esp_err_t process_tx_command(std::string_view payload);
-    esp_err_t process_rx_command(std::string_view payload);
-    esp_err_t process_ex_command(std::string_view payload); // Extended menu (transverter = menu 056)
-    esp_err_t process_xo_command(std::string_view payload); // Transverter offset/direction
 
     // Apply a transverter active/inactive transition (offset query, port off, broadcast).
     void set_transverter_active(bool active);
@@ -90,14 +134,12 @@ private:
     // Convert a radio-reported IF frequency to the on-air frequency using the XO offset.
     uint32_t transverter_rf_from_if(uint32_t if_freq) const;
 
-    esp_err_t process_command(std::string_view commands_str_with_semicolons); // New core processor
-    esp_err_t dispatch_one_command(std::string_view command_view); 
+    esp_err_t process_command(std::string_view commands_str_with_semicolons); // ';'-framing → dispatch
 
     static void uart_task_trampoline(void *arg);
 
     uint32_t get_current_frequency() const { return current_frequency; }
 
-    std::unordered_map<uint16_t, CommandHandler> command_handlers;
     QueueHandle_t uart2_queue;
     antenna_switch_config_t current_config{};
     uint32_t current_frequency{0};  // Frequency of the currently active VFO
@@ -118,7 +160,6 @@ private:
     std::atomic<uint8_t> transverter_minus_dir{0};  // XO direction: 0=plus, 1=minus
     static constexpr auto TAG = "CAT_PARSER";
 
-    // static CatParser *instance_; // Removed for pure Meyers' singleton
     std::atomic<bool> shutdown_requested;
     std::atomic<bool> ai_probe_requested_{false};  // Request async AI probe from UART task
     static constexpr int SERIAL_DATA_TIMEOUT_S = 5;  // 5 second timeout
@@ -126,7 +167,6 @@ private:
     std::chrono::steady_clock::time_point last_valid_command_time;  // Track when we last parsed a valid CAT command
     std::chrono::steady_clock::time_point last_ai_query_time;  // Track when we last sent an AI query
     static constexpr int AI_QUERY_INTERVAL_S = 5;  // Retry AI query every 5 seconds if no response
-    bool radio_provides_auto_updates_{false}; // True if Kenwood AI (Auto Information) from the radio is ON
 };
 
 // Legacy C-style interface
