@@ -42,6 +42,28 @@ public:
     esp_err_t set_relay(int relay_id, bool state);
     [[nodiscard]] bool get_relay_state(int relay_id) const;
 
+    // Move the active antenna from one relay to another in a single hardware
+    // write: off_relay goes low and on_relay goes high at the same instant, so the
+    // antenna port is never momentarily disconnected (no gap where both are off).
+    //
+    // Two things make this different from set_relay():
+    //  1. Atomic. set_relay() is one relay per call, so switching antennas needs
+    //     two calls with a dead gap between them. This does both in one write.
+    //  2. It is allowed to run during transmit. set_relay() refuses to move a
+    //     transmitting radio's relay (the interlock that stops the web UI / MQTT /
+    //     band changes from hot-switching under RF). But moving from the RX to the
+    //     TX antenna at key-up IS the transmit action, so it must never be blocked
+    //     by that interlock. Only AntennaSwitch's PTT key-up / key-down path calls
+    //     this; every other caller still goes through the guarded set_relay().
+    //
+    // If the hardware write fails, it restores the previous relay and returns the
+    // error, so a failed switch never leaves the port disconnected.
+    //
+    //   off_relay == 0 -> nothing to turn off (used to recover a port that is
+    //                     currently on no relay at all).
+    //   on_relay  == 0 -> rejected: this call must always end with an antenna live.
+    esp_err_t swap_antenna_relays(int off_relay, int on_relay);
+
     esp_err_t set_relay_for_antenna(int relay_id, int band_number, RadioID radio, bool state);
     inline esp_err_t set_relay_for_antenna(int relay_id, int band_number, bool state) { // Default to Radio A
         return set_relay_for_antenna(relay_id, band_number, RadioID::A, state);

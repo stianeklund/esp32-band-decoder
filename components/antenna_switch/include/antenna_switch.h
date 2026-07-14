@@ -213,6 +213,15 @@ public:
     bool is_radio_a_transmitting_effective() const;
     bool is_radio_b_transmitting_effective() const;
 
+    // Raw hardware-PTT TX state for either radio, WITHOUT the diagnostic logging
+    // that is_radio_*_transmitting_effective() emits. Used by the RelayController
+    // interlock so an asserted PTT line blocks external hot-switching even when
+    // CAT never reported (or has stopped reporting) TX. Pure atomic reads.
+    bool hw_ptt_tx_active() const {
+        return hw_ptt_a_active_.load(std::memory_order_relaxed) ||
+               hw_ptt_b_active_.load(std::memory_order_relaxed);
+    }
+
     // Callbacks for InputManager to report PTT state changes
     void on_hw_ptt_a_state_change(bool active);
     void on_hw_ptt_b_state_change(bool active);

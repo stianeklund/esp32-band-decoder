@@ -1,4 +1,5 @@
 #include "antenna_switch.h"
+#include "antenna_swap_logic.h"
 #include "config_manager.h"
 #include "esp_log.h"
 #include "relay_controller.h"
@@ -188,54 +189,49 @@ void AntennaSwitch::on_hw_ptt_a_state_change(const bool active) {
              old_hw_ptt_a_value ? "ACTIVE" : "INACTIVE",
              active ? "ACTIVE" : "INACTIVE");
 
-    // Determine effective TX state BEFORE applying the new HW PTT state.
-    const bool old_cat_tx_a = cat_tx_a_active_.load(std::memory_order_relaxed);
-    const bool was_effectively_transmitting = old_hw_ptt_a_value || old_cat_tx_a;
-
-    // Track PTT active timestamp for debounce
-    if (active && !old_hw_ptt_a_value) {
-        // PTT going active - record timestamp
+    // PTT is the authoritative TX signal: it is an order of magnitude faster than
+    // CAT and, unlike CAT, never gets stuck asserted. So we drive TX-start/stop
+    // directly off the raw PTT edge here, NOT off a combined "effective" state
+    // that a stuck CAT flag could poison (which would suppress the swap entirely).
+    if (active) {
+        // --- PTT rising edge: authoritative TX start ---
+        // Assert the TX antenna now, whatever CAT currently believes.
+        // on_radio_a_tx_start()/apply_radio_a_rx_to_tx_swap() are idempotent and
+        // self-healing, so this also recovers a previously stranded port.
         hw_ptt_a_active_since_us_ = ptt_a_start_time;
-    }
-
-    // Store the new HW PTT state
-    hw_ptt_a_active_.store(active, std::memory_order_relaxed);
-
-    // When HW PTT goes inactive, clear any stale CAT TX state - but only if PTT was
-    // active for at least PTT_DEBOUNCE_US. This prevents brief glitches from clearing
-    // CAT TX state and allowing antenna switching mid-transmission.
-    if (!active && old_cat_tx_a) {
-        const int64_t ptt_active_duration_us = ptt_a_start_time - hw_ptt_a_active_since_us_;
-        if (ptt_active_duration_us >= PTT_DEBOUNCE_US) {
-            ESP_LOGI(TAG, "Radio A: HW PTT went inactive (was active for %lld us), clearing stale CAT TX state.",
-                     ptt_active_duration_us);
-            cat_tx_a_active_.store(false, std::memory_order_relaxed);
-        } else {
-            ESP_LOGW(TAG, "Radio A: HW PTT glitch detected (active only %lld us < %lld us debounce). NOT clearing CAT TX state.",
-                     ptt_active_duration_us, PTT_DEBOUNCE_US);
-            // Don't clear CAT TX state - this was likely a glitch
-        }
-    }
-
-    // Determine effective TX state AFTER applying changes.
-    // Since we cleared CAT TX when HW PTT goes inactive, effective state now follows HW PTT.
-    const bool is_now_effectively_transmitting = active;
-
-    ESP_LOGV(TAG, "Radio A: Effective TX state check (HW PTT change): was_eff_tx=%d, is_now_eff_tx=%d (new_hw_ptt=%d, cat_tx_cleared=%d)",
-             was_effectively_transmitting, is_now_effectively_transmitting, active, !active && old_cat_tx_a);
-
-    if (was_effectively_transmitting && !is_now_effectively_transmitting) {
-        // Effective TX state changed from ON to OFF
-        ESP_LOGV(TAG, "Radio A: Effective TX state changed from ON to OFF (due to HW PTT).");
-        on_radio_a_tx_stop();
-    } else if (!was_effectively_transmitting && is_now_effectively_transmitting) {
-        // Effective TX state changed from OFF to ON
-        ESP_LOGV(TAG, "Radio A: Effective TX state changed from OFF to ON (due to HW PTT).");
+        hw_ptt_a_active_.store(true, std::memory_order_relaxed);
         on_radio_a_tx_start();
     } else {
-        // Effective TX state did not change (e.g., was ON, still ON, or was OFF, still OFF)
-        ESP_LOGV(TAG, "Radio A: HW PTT raw state changed, but effective TX state remains %s.",
-                 is_now_effectively_transmitting ? "ON" : "OFF");
+        // --- PTT falling edge ---
+        const bool old_cat_tx_a = cat_tx_a_active_.load(std::memory_order_relaxed);
+        hw_ptt_a_active_.store(false, std::memory_order_relaxed);
+
+        const int64_t ptt_active_duration_us = ptt_a_start_time - hw_ptt_a_active_since_us_;
+        if (ptt_active_duration_us < PTT_DEBOUNCE_US && old_cat_tx_a) {
+            // Sub-debounce PTT drop while CAT still asserts TX: treat as a glitch
+            // and KEEP the TX antenna, so a noise blip can't hot-switch the antenna
+            // out from under live RF. A real (sustained) release, or CAT going RX,
+            // ends TX. This is the one case where we defer to CAT on purpose.
+            ESP_LOGW(TAG, "Radio A: HW PTT glitch detected (active only %lld us < %lld us debounce). Keeping TX antenna.",
+                     ptt_active_duration_us, PTT_DEBOUNCE_US);
+            return;
+        }
+
+        // Real key-up: PTT is boss. Force any stale CAT TX flag down -- both our
+        // local mirror AND the CatParser flag the RelayController interlock reads --
+        // so a radio that never reports RX can't keep the port latched in TX.
+        // Clear the mirror FIRST so the on_cat_tx_a_state_change() callback that
+        // cat_parser_set_transmit(false) triggers sees "no change" and does nothing
+        // (we drive the tx-stop ourselves, just below).
+        if (old_cat_tx_a) {
+            ESP_LOGI(TAG, "Radio A: HW PTT released after %lld us; clearing CAT TX state (PTT authoritative).",
+                     ptt_active_duration_us);
+            cat_tx_a_active_.store(false, std::memory_order_relaxed);
+            if (cat_parser_get_transmit()) {
+                cat_parser_set_transmit(false);
+            }
+        }
+        on_radio_a_tx_stop();
     }
     ESP_LOGD(TAG, "PROF: on_hw_ptt_a_state_change took %lld us", esp_timer_get_time() - ptt_a_start_time);
 }
@@ -523,35 +519,44 @@ void AntennaSwitch::apply_radio_a_rx_to_tx_swap(const antenna_switch_config_t& c
         if (band.rx_antenna_port == 0) {
             return; // No RX antenna configured for this band.
         }
+        if (!relay_controller_) {
+            ESP_LOGE(TAG, "PTT: relay controller not set; cannot swap to TX antenna.");
+            return;
+        }
         const int rx_relay = static_cast<int>(band.rx_antenna_port);
         const int current_relay = get_active_relay_for_radio(RadioID::A);
-        if (current_relay != rx_relay) {
-            return; // Not currently on the RX antenna; nothing to swap.
-        }
+
         // Choose the TX antenna relay: prefer the last-used, else first available.
         // NEVER pick the RX antenna itself as the TX antenna: transmitting on an
         // RX-only antenna can damage equipment.
-        int tx_relay_id = 0;
         const uint8_t preferred = config.last_used_antenna[static_cast<size_t>(RadioID::A)][band_idx];
-        if (preferred != 0 && preferred != rx_relay &&
-            preferred <= config.num_antenna_ports && band.antenna_ports[preferred - 1]) {
-            tx_relay_id = preferred;
-        } else {
-            for (int j = 0; j < config.num_antenna_ports; j++) {
-                if (band.antenna_ports[j] && (j + 1) != rx_relay) {
-                    tx_relay_id = j + 1;
-                    break;
-                }
-            }
-        }
-        if (tx_relay_id != 0 && tx_relay_id != current_relay && relay_controller_) {
-            ESP_LOGI(TAG, "PTT: Switching Radio A from RX ant %d to TX ant %d for band %s",
-                     current_relay, tx_relay_id, band.description);
-            relay_controller_->set_relay(current_relay, false);
-            relay_controller_->set_relay(tx_relay_id, true);
-        } else {
+        const int tx_relay_id = antenna_logic::choose_tx_relay(
+            rx_relay, preferred, config.num_antenna_ports, band.antenna_ports);
+        if (tx_relay_id == 0) {
             ESP_LOGW(TAG, "PTT: no TX antenna distinct from RX ant %d configured for band %s; transmitting on the RX antenna!",
                      rx_relay, band.description);
+            return;
+        }
+
+        // If no relay is on right now (current_relay == 0, the port got left
+        // disconnected), plan_relay_swap still switches the TX antenna on rather
+        // than giving up. swap_antenna_relays() does the move in one write, so it
+        // can't be blocked by the transmit interlock and never leaves the antenna
+        // on nothing mid-move.
+        const auto plan = antenna_logic::plan_relay_swap(current_relay, tx_relay_id);
+        if (!plan.needed) {
+            ESP_LOGD(TAG, "PTT: Radio A already on TX ant %d for band %s.", tx_relay_id, band.description);
+            return;
+        }
+        if (current_relay == 0) {
+            ESP_LOGW(TAG, "PTT: Radio A port was stranded (no relay energized); recovering onto TX ant %d for band %s.",
+                     tx_relay_id, band.description);
+        } else {
+            ESP_LOGI(TAG, "PTT: Switching Radio A from ant %d to TX ant %d for band %s",
+                     current_relay, tx_relay_id, band.description);
+        }
+        if (const esp_err_t err = relay_controller_->swap_antenna_relays(plan.off_relay, plan.on_relay); err != ESP_OK) {
+            ESP_LOGE(TAG, "PTT: RX->TX swap to ant %d failed: %s", tx_relay_id, esp_err_to_name(err));
         }
         return; // Band handled.
     }
@@ -635,17 +640,24 @@ void AntennaSwitch::on_radio_a_tx_stop() {
                 const auto& band = config.bands[static_cast<size_t>(RadioID::A)][band_idx];
                 if (current_freq >= band.start_freq && current_freq <= band.end_freq) {
                     // Check if RX antenna is configured
-                    if (band.rx_antenna_port != 0) {
+                    if (band.rx_antenna_port != 0 && relay_controller_) {
                         const int current_relay = get_active_relay_for_radio(RadioID::A);
                         const int rx_relay = static_cast<int>(band.rx_antenna_port);
 
-                        // Only switch if not already on RX antenna
-                        if (current_relay != rx_relay && current_relay != 0) {
-                            ESP_LOGI(TAG, "PTT release: Switching back to RX ant %d from TX ant %d for band %s",
-                                     rx_relay, current_relay, band.description);
-                            if (relay_controller_) {
-                                relay_controller_->set_relay(current_relay, false);
-                                relay_controller_->set_relay(rx_relay, true);
+                        // Recovers a disconnected port (current == 0 still switches
+                        // the RX antenna on) and does nothing if we are already on
+                        // RX. swap_antenna_relays() does the move in one write.
+                        const auto plan = antenna_logic::plan_relay_swap(current_relay, rx_relay);
+                        if (plan.needed) {
+                            if (current_relay == 0) {
+                                ESP_LOGW(TAG, "PTT release: Radio A port was stranded; recovering onto RX ant %d for band %s.",
+                                         rx_relay, band.description);
+                            } else {
+                                ESP_LOGI(TAG, "PTT release: Switching back to RX ant %d from ant %d for band %s",
+                                         rx_relay, current_relay, band.description);
+                            }
+                            if (const esp_err_t err = relay_controller_->swap_antenna_relays(plan.off_relay, plan.on_relay); err != ESP_OK) {
+                                ESP_LOGE(TAG, "PTT release: TX->RX swap to ant %d failed: %s", rx_relay, esp_err_to_name(err));
                             }
                         }
                     }

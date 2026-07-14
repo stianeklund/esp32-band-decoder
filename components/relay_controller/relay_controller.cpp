@@ -105,6 +105,65 @@ esp_err_t RelayController::set_relay(const int relay_id, const bool state) {
     return ret;
 }
 
+esp_err_t RelayController::swap_antenna_relays(const int off_relay, const int on_relay) {
+    // The relay to switch ON is required: this call always leaves an antenna live.
+    if (on_relay < 1 || on_relay > NUM_RELAYS) {
+        ESP_LOGE(TAG, "swap_antenna_relays: invalid on_relay %d", on_relay);
+        return ESP_ERR_INVALID_ARG;
+    }
+    // off_relay may be 0, meaning "no relay is currently on, just switch one on".
+    if (off_relay != 0 && (off_relay < 1 || off_relay > NUM_RELAYS)) {
+        ESP_LOGE(TAG, "swap_antenna_relays: invalid off_relay %d", off_relay);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    std::lock_guard lock(relay_mutex_);
+
+    // Deliberately no transmit interlock here: see the header. This is the key-up /
+    // key-down antenna move itself, so blocking it during transmit is exactly the
+    // bug we are fixing.
+
+    // Start from what is physically on right now, clear the old relay's bit, set
+    // the new relay's bit, and write the whole thing at once. Because it is one
+    // write, the old and new relays change together -- the antenna is never left
+    // on nothing in between.
+    const uint16_t current_outputs = kc868_hw_get_all_outputs(); // 1 = relay ON
+    uint16_t new_outputs = current_outputs;
+    if (off_relay != 0) {
+        new_outputs = static_cast<uint16_t>(new_outputs & ~(1u << (off_relay - 1)));
+    }
+    new_outputs = static_cast<uint16_t>(new_outputs | (1u << (on_relay - 1)));
+
+    if (new_outputs == current_outputs) {
+        // Already exactly where we want to be (new relay on, old relay off).
+        currently_selected_relay_ = on_relay;
+        return ESP_OK;
+    }
+
+    if (const esp_err_t ret = kc868_hw_set_all_outputs(new_outputs); ret != ESP_OK) {
+        // The write failed. Put the relays back the way they were so a failed
+        // switch never leaves the antenna disconnected. The hardware cache still
+        // reflects what is physically set, so re-writing the old value restores it.
+        ESP_LOGE(TAG, "swap_antenna_relays: hardware write failed (%s); restoring relay %d",
+                 esp_err_to_name(ret), off_relay);
+        if (const esp_err_t rb = kc868_hw_set_all_outputs(current_outputs); rb != ESP_OK) {
+            ESP_LOGE(TAG, "swap_antenna_relays: restore ALSO failed (%s)", esp_err_to_name(rb));
+        }
+        return ret;
+    }
+
+    currently_selected_relay_ = on_relay;
+
+    // Tell WebSocket clients about both relays that changed.
+    if (websocket_server_is_running()) {
+        if (off_relay != 0) {
+            WebSocketServer::instance().broadcast_relay_state_change(off_relay, false);
+        }
+        WebSocketServer::instance().broadcast_relay_state_change(on_relay, true);
+    }
+    return ESP_OK;
+}
+
 bool RelayController::get_relay_state(const int relay_id) const {
     if (relay_id < 1 || relay_id > NUM_RELAYS) {
         ESP_LOGE(TAG, "Invalid relay ID: %d", relay_id);
@@ -147,7 +206,15 @@ bool RelayController::is_correct_relay_set(int band_number) const {
 }
 
 bool RelayController::is_transmitting() const {
-    return cat_parser_.is_transmitting() || MQTTClient::instance().is_transmitting();
+    // "Are we transmitting right now?" for the relay interlock. We check all three
+    // TX sources: CAT (radio told us over the serial link), MQTT (a networked
+    // radio), and the hardware PTT line. Including the PTT line matters because it
+    // is the fastest and most reliable signal, and on some radios (e.g. Yaesu) CAT
+    // may not report TX at all -- without it the interlock would miss a live key-up.
+    // The key-up antenna move itself uses swap_antenna_relays(), which skips this
+    // check, so this only ever blocks OTHER callers (web UI, MQTT, band changes).
+    return cat_parser_.is_transmitting() || MQTTClient::instance().is_transmitting() ||
+           AntennaSwitch::instance().hw_ptt_tx_active();
 }
 
 esp_err_t RelayController::execute_relay_change(const int relay_id, const int band_number, const RadioID radio, const bool state) {
