@@ -16,9 +16,10 @@ choice BOARD_MODEL
 
         KC868-A6 (classic ESP32, PCB v1.4): 6 relays and 6 inputs. Same
         single PCF8574 output (0x24) / input (0x22) topology as the A8, but
-        I2C SCL is on GPIO15 instead of GPIO5. Single-radio only, up to 6
-        antenna ports. (The ESP32-S3 "A6v3" is a different target and is not
-        this option.)
+        I2C SCL is on GPIO15 instead of GPIO5, and the RS232/CAT port is on
+        GPIO16 (RX) / GPIO17 (TX) instead of the A16's HT header (GPIO32/33).
+        Single-radio only, up to 6 antenna ports. (The ESP32-S3 "A6v3" is a
+        different target and is not this option.)
 
 config BOARD_KC868_A16
     bool "KC868-A16 (16 relays / 16 inputs, single or dual radio)"

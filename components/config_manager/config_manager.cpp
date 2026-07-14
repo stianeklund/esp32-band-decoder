@@ -313,8 +313,13 @@ esp_err_t ConfigManager::init() { // Made non-const
         current_config_->uart_parity = UART_PARITY_DISABLE;
         current_config_->uart_stop_bits = UART_STOP_BITS_1;
         current_config_->uart_flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-        current_config_->uart_rx_pin = GPIO_NUM_32; // HT1
-        current_config_->uart_tx_pin = GPIO_NUM_33; // HT2
+#if defined(CONFIG_BOARD_KC868_A6)
+        current_config_->uart_rx_pin = GPIO_NUM_16; // RS232_RXD (KC868-A6)
+        current_config_->uart_tx_pin = GPIO_NUM_17; // RS232_TXD (KC868-A6)
+#else
+        current_config_->uart_rx_pin = GPIO_NUM_32; // HT1 (KC868-A8/A16)
+        current_config_->uart_tx_pin = GPIO_NUM_33; // HT2 (KC868-A8/A16)
+#endif
 
         // Whether to allow data from both uart and MQTT at the same time
         current_config_->allow_concurrent_data_sources = true;  // First come first serve
@@ -432,8 +437,13 @@ esp_err_t ConfigManager::reset_to_defaults() {
     defaultConfig.uart_parity = UART_PARITY_DISABLE;
     defaultConfig.uart_stop_bits = UART_STOP_BITS_1;
     defaultConfig.uart_flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-    defaultConfig.uart_rx_pin = GPIO_NUM_32; // HT1
-    defaultConfig.uart_tx_pin = GPIO_NUM_33; // HT2
+#if defined(CONFIG_BOARD_KC868_A6)
+    defaultConfig.uart_rx_pin = GPIO_NUM_16; // RS232_RXD (KC868-A6)
+    defaultConfig.uart_tx_pin = GPIO_NUM_17; // RS232_TXD (KC868-A6)
+#else
+    defaultConfig.uart_rx_pin = GPIO_NUM_32; // HT1 (KC868-A8/A16)
+    defaultConfig.uart_tx_pin = GPIO_NUM_33; // HT2 (KC868-A8/A16)
+#endif
     defaultConfig.allow_concurrent_data_sources = true;
     defaultConfig.mqtt_enabled = false;
     defaultConfig.websocket_enabled = false; // Default to disabled for safety
