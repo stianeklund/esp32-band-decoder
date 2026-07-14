@@ -1,4 +1,5 @@
 #include "kenwood_cat.h"
+#include "kenwood_frames.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "config_manager.h"
@@ -160,47 +161,17 @@ esp_err_t KenwoodCat::process_ap_command(const std::string_view command) {
 }
 
 esp_err_t KenwoodCat::process_if_command(const std::string_view command) {
-    if (command.length() < 35) {
-        ESP_LOGW(TAG, "IF command too short: %.*s",
+    const auto if_frame = kenwood::parse_if(command);
+    if (!if_frame) {
+        ESP_LOGW(TAG, "IF command invalid or too short: %.*s",
                  static_cast<int>(command.length()), command.data());
         return ESP_OK;
     }
 
-    uint32_t frequency;
-    // Parse frequency (first 11 chars of the command payload)
-    const std::string_view freq_sv = command.substr(0, 11);
-    const char* const freq_start_ptr = freq_sv.data();
-    const char* const freq_end_ptr = freq_sv.data() + freq_sv.length();
-
-    // ReSharper disable once CppUseStructuredBinding
-    auto fc_result = std::from_chars(freq_start_ptr, freq_end_ptr, frequency);
-
-    if (fc_result.ec != std::errc() || fc_result.ptr != freq_end_ptr) {
-        ESP_LOGW(TAG, "Invalid frequency in IF command: %.*s", static_cast<int>(freq_sv.length()), freq_sv.data());
-        return ESP_OK; // Keep original behavior
-    }
-
-    const auto new_tx_state = command[26] == '1';
-
-    // Parse mode
-    const char mode_char = command[27];
-    std::string new_mode_str; // Renamed to avoid conflict with member `current_mode`
-
-    switch (mode_char) {
-        case '1': new_mode_str = "LSB"; break;
-        case '2': new_mode_str = "USB"; break;
-        case '3': new_mode_str = "CW-U"; break;
-        case '4': new_mode_str = "FM"; break;
-        case '5': new_mode_str = "AM"; break;
-        case '6': new_mode_str = "DIG-L"; break;
-        case '7': new_mode_str = "CW-L"; break;
-        case '9': new_mode_str = "DIG-U"; break;
-        default:  new_mode_str = "UNKNOWN";
-    }
-
-    // Parse VFO selection (P10 field at position 28)
-    // P10: 0 = VFO A, 1 = VFO B, 2 = Memory
-    const uint8_t vfo_selection = command[28] - '0';  // Convert ASCII to number
+    const uint32_t frequency = if_frame->frequency;
+    const bool new_tx_state = if_frame->transmitting;
+    const std::string new_mode_str = kenwood::mode_string(if_frame->mode_char);
+    const uint8_t vfo_selection = if_frame->vfo;
 
     const bool current_tx_state = transmitting.load();
     const bool tx_state_changed = new_tx_state != current_tx_state;
@@ -248,49 +219,34 @@ esp_err_t KenwoodCat::process_if_command(const std::string_view command) {
 }
 
 esp_err_t KenwoodCat::process_fa_command(const std::string_view command) {
-    uint32_t frequency;
-
-    const char* const start_ptr = command.data();
-    const char* const end_ptr = command.data() + command.length();
-
-    // ReSharper disable once CppLocalVariableMayBeConst
-    // ReSharper disable once CppTooWideScopeInitStatement
-    auto result = std::from_chars(start_ptr, end_ptr, frequency);
-
-    if (result.ec == std::errc() && result.ptr == end_ptr) {
-        ESP_LOGV(TAG, "FA command frequency: %lu Hz", frequency);
+    const auto frequency = kenwood::parse_u32(command);
+    if (frequency) {
+        ESP_LOGV(TAG, "FA command frequency: %lu Hz", static_cast<unsigned long>(*frequency));
         // Update VFO A frequency
-        vfo_a_frequency = frequency;
+        vfo_a_frequency = *frequency;
 
         // Only trigger antenna change if VFO A is active
         if (active_vfo == 0) {
-            return handle_frequency_change(frequency);
+            return handle_frequency_change(*frequency);
         }
         return ESP_OK;
     }
 
     ESP_LOGE(TAG, "Invalid frequency format in FA command: %.*s",
              static_cast<int>(command.length()), command.data());
-    // We don't want to error here (I guess)
     return ESP_OK;
 }
 
 esp_err_t KenwoodCat::process_fb_command(const std::string_view command) {
-    uint32_t frequency;
-
-    const char* const start_ptr = command.data();
-    const char* const end_ptr = command.data() + command.length();
-
-    auto result = std::from_chars(start_ptr, end_ptr, frequency);
-
-    if (result.ec == std::errc() && result.ptr == end_ptr) {
-        ESP_LOGV(TAG, "FB command frequency: %lu Hz", frequency);
+    const auto frequency = kenwood::parse_u32(command);
+    if (frequency) {
+        ESP_LOGV(TAG, "FB command frequency: %lu Hz", static_cast<unsigned long>(*frequency));
         // Update VFO B frequency
-        vfo_b_frequency = frequency;
+        vfo_b_frequency = *frequency;
 
         // Only trigger antenna change if VFO B is active
         if (active_vfo == 1) {
-            return handle_frequency_change(frequency);
+            return handle_frequency_change(*frequency);
         }
         return ESP_OK;
     }
