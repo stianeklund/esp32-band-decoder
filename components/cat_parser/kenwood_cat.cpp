@@ -49,7 +49,7 @@ void KenwoodCat::poll_for_updates() {
 
         // If no valid commands recently and enough time since last AI query, send AI;
         if (time_since_valid_cmd > SERIAL_DATA_TIMEOUT_S && time_since_ai_query >= AI_QUERY_INTERVAL_S) {
-            ESP_LOGI(TAG, "No valid CAT commands for %lld sec, sending periodic AI query", time_since_valid_cmd);
+            ESP_LOGD(TAG, "No valid CAT commands for %lld sec, sending periodic AI query", time_since_valid_cmd);
             last_ai_query_time = now;
             send_to_radio("AI;");
         }
@@ -96,8 +96,14 @@ esp_err_t KenwoodCat::process_ai_command(const std::string_view command_payload)
             break;
         case '2': // Auto Information ON
         case '4': // Auto Information ON
+            // Only announce the transition; the radio re-confirms ON on every AI
+            // poll (~6 s), so repeats stay at DEBUG to avoid log spam.
+            if (!radio_provides_auto_updates_) {
+                ESP_LOGI(TAG, "Kenwood AI Set: Radio Auto Information ON (P1=%c). CAT polling not required.", p1_val);
+            } else {
+                ESP_LOGD(TAG, "Kenwood AI ack: Auto Information still ON (P1=%c)", p1_val);
+            }
             radio_provides_auto_updates_ = true;
-            ESP_LOGI(TAG, "Kenwood AI Set: Radio Auto Information ON (P1=%c). CAT polling not required.", p1_val);
             break;
         default:
             ESP_LOGE(TAG, "Kenwood AI Set: Invalid parameter P1='%c'. Expected '0' through '6'.", p1_val);
