@@ -7,7 +7,9 @@
 #include "esp_random.h"
 #include "cJSON.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
+#include <utility>
 
 // WebSocket support is now dynamically controlled by user configuration
 // Uses ESP-IDF native WebSocket support with CONFIG_HTTPD_WS_SUPPORT=y
@@ -25,6 +27,7 @@ WebSocketServer::WebSocketServer()
     , m_keepalive_timer(nullptr)
     , m_initialized(false)
     , m_running(false)
+    , m_next_connection_id(0)
     , m_buffer_pool_mutex(nullptr)
     , m_response_buffer_mutex(nullptr)
 {
@@ -274,11 +277,28 @@ esp_err_t WebSocketServer::websocket_handler(httpd_req_t *req) {
         }
         
         // Add client to active connections after successful handshake
-        esp_err_t ret = server->add_client(sockfd);
+        uint64_t connection_id = 0;
+        esp_err_t ret = server->add_client(sockfd, &connection_id);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to add WebSocket client fd=%d", sockfd);
             return ret;
         }
+
+        // Tie our client record to the lifetime of ESP-IDF's HTTP session.
+        // This callback runs for every close path (TCP FIN/RST, LRU purge,
+        // handler failure and explicit close), before the fd can be reused.
+        auto* session_context = static_cast<WebSocketSessionContext*>(
+            malloc(sizeof(WebSocketSessionContext)));
+        if (!session_context) {
+            ESP_LOGE(TAG, "Failed to allocate session context for WebSocket fd=%d", sockfd);
+            server->remove_client(sockfd);
+            return ESP_ERR_NO_MEM;
+        }
+        session_context->server = server;
+        session_context->sockfd = sockfd;
+        session_context->connection_id = connection_id;
+        req->sess_ctx = session_context;
+        req->free_ctx = free_websocket_session_context;
         
         ESP_LOGI(TAG, "WebSocket client connected successfully: fd=%d", sockfd);
         return ESP_OK;
@@ -470,6 +490,26 @@ esp_err_t WebSocketServer::websocket_handler(httpd_req_t *req) {
         }
     }
     return ret;
+}
+
+void WebSocketServer::free_websocket_session_context(void* context) {
+    auto* session_context = static_cast<WebSocketSessionContext*>(context);
+    if (!session_context) {
+        return;
+    }
+
+    if (session_context->server) {
+        esp_err_t ret = session_context->server->remove_client(
+            session_context->sockfd, session_context->connection_id);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to untrack closed WebSocket fd=%d: %s",
+                     session_context->sockfd, esp_err_to_name(ret));
+        } else {
+            ESP_LOGD(TAG, "HTTP session closed for WebSocket fd=%d",
+                     session_context->sockfd);
+        }
+    }
+    free(session_context);
 }
 
 esp_err_t WebSocketServer::websocket_status_handler(httpd_req_t *req) {
@@ -854,7 +894,91 @@ esp_err_t WebSocketServer::send_to_client(int sockfd, const char* message) {
     }
 }
 
-esp_err_t WebSocketServer::add_client(int sockfd) {
+esp_err_t WebSocketServer::queue_async_send(int sockfd, uint64_t connection_id,
+                                            bool is_ping, const char* message) {
+    if (!m_http_server || sockfd < 0 || (!is_ping && !message)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const size_t message_len = is_ping ? 0 : strlen(message);
+    const size_t allocation_size = sizeof(AsyncSendContext) +
+                                   (is_ping ? 0 : message_len + 1);
+    auto* context = static_cast<AsyncSendContext*>(malloc(allocation_size));
+    if (!context) {
+        ESP_LOGE(TAG, "Failed to allocate queued WebSocket send for fd=%d", sockfd);
+        return ESP_ERR_NO_MEM;
+    }
+
+    context->server = this;
+    context->sockfd = sockfd;
+    context->connection_id = connection_id;
+    context->is_ping = is_ping;
+    if (!is_ping) {
+        auto* queued_message = reinterpret_cast<char*>(context + 1);
+        memcpy(queued_message, message, message_len + 1);
+    }
+
+    // ESP-IDF's httpd_ws_send_frame_async() is a low-level direct socket
+    // write. Despite its name it does not queue or serialize the write. All
+    // sends originating outside a URI handler must therefore run on the
+    // httpd task, otherwise a ping/event can be inserted between another
+    // frame's header and payload.
+    esp_err_t ret = httpd_queue_work(m_http_server, async_send_worker, context);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to queue WebSocket %s for fd=%d: %s",
+                 is_ping ? "ping" : "message", sockfd, esp_err_to_name(ret));
+        free(context);
+    }
+    return ret;
+}
+
+esp_err_t WebSocketServer::queue_text_to_client(int sockfd, uint64_t connection_id,
+                                                const char* message) {
+    return queue_async_send(sockfd, connection_id, false, message);
+}
+
+void WebSocketServer::async_send_worker(void* context_ptr) {
+    auto* context = static_cast<AsyncSendContext*>(context_ptr);
+    if (!context) {
+        return;
+    }
+
+    WebSocketServer* server = context->server;
+    const int sockfd = context->sockfd;
+    const uint64_t connection_id = context->connection_id;
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    if (server && server->m_running) {
+        bool is_current_connection = false;
+        if (xSemaphoreTake(server->m_clients_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            WebSocketClient* client = server->find_client(sockfd);
+            is_current_connection = client && client->connection_id == connection_id;
+            xSemaphoreGive(server->m_clients_mutex);
+        }
+
+        // A queued frame can outlive the socket that originated it. Do not
+        // deliver it to a newly accepted connection that reused the same fd.
+        if (is_current_connection) {
+            if (context->is_ping) {
+                ret = server->send_ping_frame_to_client(sockfd);
+            } else {
+                const auto* message = reinterpret_cast<const char*>(context + 1);
+                ret = server->send_to_client(sockfd, message);
+            }
+        } else {
+            ret = ESP_ERR_NOT_FOUND;
+        }
+    }
+    free(context);
+
+    if (ret != ESP_OK && ret != ESP_ERR_NOT_FOUND && server && server->m_running) {
+        ESP_LOGW(TAG, "Queued WebSocket send failed for fd=%d: %s; closing session",
+                 sockfd, esp_err_to_name(ret));
+        server->remove_client(sockfd, connection_id);
+        server->close_client_socket(sockfd);
+    }
+}
+
+esp_err_t WebSocketServer::add_client(int sockfd, uint64_t* connection_id) {
     if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to acquire clients mutex");
         return ESP_ERR_TIMEOUT;
@@ -868,30 +992,38 @@ esp_err_t WebSocketServer::add_client(int sockfd) {
     }
     
     // Check if client already exists
-    if (find_client(sockfd) != nullptr) {
+    if (WebSocketClient* existing_client = find_client(sockfd); existing_client != nullptr) {
         ESP_LOGW(TAG, "WebSocket client fd=%d already exists", sockfd);
+        if (connection_id) {
+            *connection_id = existing_client->connection_id;
+        }
         xSemaphoreGive(m_clients_mutex);
         return ESP_OK;
     }
-    
+
     // Add new client
-    auto client = std::make_unique<WebSocketClient>(sockfd);
+    const uint64_t new_connection_id = ++m_next_connection_id;
+    auto client = std::make_unique<WebSocketClient>(sockfd, new_connection_id);
     client->last_activity = esp_timer_get_time() / 1000; // Convert to milliseconds
     m_clients.push_back(std::move(client));
-    
+    if (connection_id) {
+        *connection_id = new_connection_id;
+    }
+
     xSemaphoreGive(m_clients_mutex);
     return ESP_OK;
 }
 
-esp_err_t WebSocketServer::remove_client(int sockfd) {
+esp_err_t WebSocketServer::remove_client(int sockfd, uint64_t connection_id) {
     if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         ESP_LOGE(TAG, "Failed to acquire clients mutex");
         return ESP_ERR_TIMEOUT;
     }
     
     auto it = std::remove_if(m_clients.begin(), m_clients.end(),
-        [sockfd](const std::unique_ptr<WebSocketClient>& client) {
-            return client->sockfd == sockfd;
+        [sockfd, connection_id](const std::unique_ptr<WebSocketClient>& client) {
+            return client->sockfd == sockfd &&
+                   (connection_id == 0 || client->connection_id == connection_id);
         });
     
     if (it != m_clients.end()) {
@@ -1032,7 +1164,7 @@ esp_err_t WebSocketServer::cleanup_inactive_clients() {
         if (!client->awaiting_pong && 
             (current_time - client->last_ping_sent > ping_interval_with_jitter)) {
             
-            esp_err_t ret = send_ping_to_client(client->sockfd);
+            esp_err_t ret = send_ping_to_client(client->sockfd, client->connection_id);
             if (ret == ESP_OK) {
                 client->last_ping_sent = current_time;
                 client->awaiting_pong = true;
@@ -1065,7 +1197,11 @@ esp_err_t WebSocketServer::cleanup_inactive_clients() {
     return ESP_OK;
 }
 
-esp_err_t WebSocketServer::send_ping_to_client(int sockfd) {
+esp_err_t WebSocketServer::send_ping_to_client(int sockfd, uint64_t connection_id) {
+    return queue_async_send(sockfd, connection_id, true, nullptr);
+}
+
+esp_err_t WebSocketServer::send_ping_frame_to_client(int sockfd) {
     if (!m_http_server) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -1085,7 +1221,6 @@ esp_err_t WebSocketServer::send_ping_to_client(int sockfd) {
     esp_err_t ret = httpd_ws_send_frame_async(m_http_server, sockfd, &ws_pkt);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to send WebSocket ping to fd=%d: %s", sockfd, esp_err_to_name(ret));
-        // Don't call remove_client() here - caller (cleanup_inactive_clients) already holds mutex
     }
 
     return ret;
@@ -1237,8 +1372,8 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
 
     // STEP 1: Collect list of clients to notify (while holding clients mutex)
     // This prevents deadlock by avoiding I/O operations while holding the mutex
-    std::vector<int> target_sockfds;
-    target_sockfds.reserve(WS_MAX_CLIENTS);
+    std::vector<std::pair<int, uint64_t>> target_clients;
+    target_clients.reserve(WS_MAX_CLIENTS);
 
     if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         ESP_LOGW(TAG, "Failed to acquire clients mutex for broadcast check");
@@ -1272,62 +1407,39 @@ esp_err_t WebSocketServer::broadcast_event(ws_event_type_t event_type, const cha
         }
 
         if (should_send) {
-            target_sockfds.push_back(client->sockfd);
+            target_clients.emplace_back(client->sockfd, client->connection_id);
         }
     }
 
     xSemaphoreGive(m_clients_mutex);
 
     // Early exit if no subscribers
-    if (target_sockfds.empty()) {
+    if (target_clients.empty()) {
         ESP_LOGD(TAG, "No subscribers for event type %d, skipping broadcast", event_type);
         xSemaphoreGiveRecursive(m_response_buffer_mutex);
         return ESP_OK;
     }
 
-    ESP_LOGD(TAG, "Broadcasting event '%s' to %zu clients", event_name, target_sockfds.size());
+    ESP_LOGD(TAG, "Broadcasting event '%s' to %zu clients", event_name, target_clients.size());
 
     // STEP 2: Send to each client (WITHOUT holding mutex to avoid deadlock)
-    std::vector<int> failed_sockfds;
-    size_t sent_count = 0;
+    size_t queued_count = 0;
 
-    for (int sockfd : target_sockfds) {
-        esp_err_t ret = send_to_client(sockfd, message_buffer);
+    for (const auto& target : target_clients) {
+        const int sockfd = target.first;
+        esp_err_t ret = queue_text_to_client(sockfd, target.second, message_buffer);
         if (ret == ESP_OK) {
-            sent_count++;
+            queued_count++;
         } else {
-            ESP_LOGW(TAG, "Failed to send event to client fd=%d", sockfd);
-            failed_sockfds.push_back(sockfd);
+            // A work-queue failure is server backpressure, not proof that the
+            // peer is dead. Keep the client and let keepalive/session cleanup
+            // make that determination.
+            ESP_LOGW(TAG, "Failed to queue event for client fd=%d", sockfd);
         }
     }
 
-    // STEP 3: Clean up failed clients (acquire mutex for cleanup)
-    if (!failed_sockfds.empty()) {
-        if (xSemaphoreTake(m_clients_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            for (int failed_fd : failed_sockfds) {
-                auto it = std::remove_if(m_clients.begin(), m_clients.end(),
-                    [failed_fd](const std::unique_ptr<WebSocketClient>& client) {
-                        return client->sockfd == failed_fd;
-                    });
-
-                if (it != m_clients.end()) {
-                    m_clients.erase(it, m_clients.end());
-                    ESP_LOGD(TAG, "Removed failed WebSocket client fd=%d", failed_fd);
-                }
-            }
-            xSemaphoreGive(m_clients_mutex);
-        } else {
-            ESP_LOGW(TAG, "Failed to acquire mutex for client cleanup after broadcast");
-        }
-
-        // Close the sockets of clients that failed to receive (dead connections)
-        // so their descriptors are returned to the pool instead of leaking.
-        for (int failed_fd : failed_sockfds) {
-            close_client_socket(failed_fd);
-        }
-    }
-
-    ESP_LOGD(TAG, "Event '%s' sent to %zu/%zu clients", event_name, sent_count, target_sockfds.size());
+    ESP_LOGD(TAG, "Event '%s' queued for %zu/%zu clients",
+             event_name, queued_count, target_clients.size());
 
     xSemaphoreGiveRecursive(m_response_buffer_mutex);
     return ESP_OK;

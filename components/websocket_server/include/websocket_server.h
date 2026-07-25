@@ -52,6 +52,7 @@ public:
 private:
     struct WebSocketClient {
         int sockfd;
+        uint64_t connection_id;
         ws_client_subscriptions_t subscriptions;
         uint64_t last_activity;          // Only inbound activity (messages, PONGs)
         uint64_t last_ping_sent;         // Track when we sent last ping
@@ -59,8 +60,9 @@ private:
         bool is_active;
         bool awaiting_pong;              // Flag: waiting for PONG response
         
-        WebSocketClient(int fd) : sockfd(fd), last_activity(0), last_ping_sent(0), 
-                                 missed_pong_count(0), is_active(true), awaiting_pong(false) {
+        WebSocketClient(int fd, uint64_t id)
+            : sockfd(fd), connection_id(id), last_activity(0), last_ping_sent(0),
+              missed_pong_count(0), is_active(true), awaiting_pong(false) {
             // Default subscriptions - all enabled
             subscriptions.status_updates = true;
             subscriptions.relay_state_changes = true;
@@ -70,11 +72,27 @@ private:
         }
     };
 
+    struct WebSocketSessionContext {
+        WebSocketServer* server;
+        int sockfd;
+        uint64_t connection_id;
+    };
+
+    struct AsyncSendContext {
+        WebSocketServer* server;
+        int sockfd;
+        uint64_t connection_id;
+        bool is_ping;
+        // A text message, when present, is stored immediately after this struct.
+    };
+
     WebSocketServer();
     ~WebSocketServer();
     
     // WebSocket handlers
     static esp_err_t websocket_handler(httpd_req_t *req);
+    static void free_websocket_session_context(void* context);
+    static void async_send_worker(void* context);
     
     // HTTP fallback handlers
     static esp_err_t websocket_status_handler(httpd_req_t *req);
@@ -91,10 +109,12 @@ private:
     // Event broadcasting helpers
     esp_err_t broadcast_event(ws_event_type_t event_type, const char* data);
     esp_err_t send_to_client(int sockfd, const char* message);
+    esp_err_t queue_text_to_client(int sockfd, uint64_t connection_id, const char* message);
+    esp_err_t queue_async_send(int sockfd, uint64_t connection_id, bool is_ping, const char* message);
     
     // Client management
-    esp_err_t add_client(int sockfd);
-    esp_err_t remove_client(int sockfd);
+    esp_err_t add_client(int sockfd, uint64_t* connection_id = nullptr);
+    esp_err_t remove_client(int sockfd, uint64_t connection_id = 0);
     // Close the underlying httpd socket for a client (returns it to the socket pool).
     // Safe to call from any task and idempotent for already-closed sockets.
     void close_client_socket(int sockfd);
@@ -103,7 +123,8 @@ private:
     
     // Keepalive and cleanup
     static void keepalive_timer_callback(TimerHandle_t timer);
-    esp_err_t send_ping_to_client(int sockfd);
+    esp_err_t send_ping_to_client(int sockfd, uint64_t connection_id);
+    esp_err_t send_ping_frame_to_client(int sockfd);
     
     // Buffer pool for WebSocket frame processing
     struct FrameBuffer {
@@ -135,6 +156,7 @@ private:
     TimerHandle_t m_keepalive_timer;
     bool m_initialized;
     bool m_running;
+    uint64_t m_next_connection_id;
     
     // Buffer pool for performance optimization
     std::vector<std::unique_ptr<FrameBuffer>> m_buffer_pool;

@@ -325,11 +325,17 @@ esp_err_t WebServer::status_get_handler(httpd_req_t *req) {
     ESP_LOGD(TAG, "Sending JSON response: %s", json_string);
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json_string);
+    const esp_err_t send_ret = httpd_resp_sendstr(req, json_string);
 
     free(json_string);
     cJSON_Delete(root);
-    return ESP_OK;
+    if (send_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to send /status response to fd=%d: %s",
+                 httpd_req_to_sockfd(req), esp_err_to_name(send_ret));
+    }
+    // Returning the send failure is essential: ESP-IDF closes the dead HTTP
+    // session only when the URI handler returns a non-ESP_OK result.
+    return send_ret;
 }
 
 esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
@@ -875,11 +881,15 @@ esp_err_t WebServer::relay_status_handler(httpd_req_t *req) {
         return ESP_ERR_NO_MEM;
     }
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json_string);
+    const esp_err_t send_ret = httpd_resp_sendstr(req, json_string);
 
     free(json_string);
     cJSON_Delete(root);
-    return ESP_OK;
+    if (send_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to send /relay/status response to fd=%d: %s",
+                 httpd_req_to_sockfd(req), esp_err_to_name(send_ret));
+    }
+    return send_ret;
 }
 
 // Receive up to buf_size-1 bytes of the request body into buf, looping over
