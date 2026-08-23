@@ -745,9 +745,40 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     bool radio_protocol_changed = false;
     {
         antenna_switch_config_t prev_cfg;
-        if (AntennaSwitch::instance().get_config(&prev_cfg) == ESP_OK) {
-            radio_protocol_changed = (prev_cfg.radio_protocol != new_config.radio_protocol);
+        if (AntennaSwitch::instance().get_config(&prev_cfg) != ESP_OK) {
+            // Falling through here would save new_config as-is: rx_antenna_port and
+            // last_used_antenna are still zeroed from the memset()/parse above (see
+            // comment below), so a silent fall-through would re-arm the exact
+            // data-loss bug the preserve step below exists to fix. Refuse the save
+            // instead of persisting a half-zeroed config.
+            ESP_LOGE(TAG, "Failed to read current configuration; refusing to save (would wipe rx_antenna_port/last_used_antenna)");
+            free(content);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to read current configuration");
+            return ESP_FAIL;
         }
+        radio_protocol_changed = (prev_cfg.radio_protocol != new_config.radio_protocol);
+
+        // This form doesn't carry per-band rx_antenna_port or the learned TX-antenna
+        // preference (last_used_antenna) -- only "description" and "antenna_ports_*"
+        // are parsed above, and the band memset() zeroed both. Without this, every
+        // save through this handler would silently erase the RX-antenna table set via
+        // the dedicated /set-rx-antenna endpoint and forget each band's preferred TX
+        // antenna.
+        //
+        // Tripwire: this loop only carries rx_antenna_port forward. If band_config_t
+        // grows a new field, decide whether the POST form parses it (search above) or
+        // whether it also needs preserving here, then update the literal size below
+        // to match (recompute with sizeof(band_config_t) on a normal build).
+        static_assert(sizeof(band_config_t) == 52,
+                      "band_config_t changed size -- a field was added/removed. Check "
+                      "whether config_post_handler's band-parse loop (above) or the "
+                      "rx_antenna_port preserve loop (below) needs updating for it, "
+                      "then update the literal size in this static_assert.");
+        for (int i = 0; i < MAX_BANDS; i++) {
+            new_config.bands[0][i].rx_antenna_port = prev_cfg.bands[0][i].rx_antenna_port;
+            new_config.bands[1][i].rx_antenna_port = prev_cfg.bands[1][i].rx_antenna_port;
+        }
+        memcpy(new_config.last_used_antenna, prev_cfg.last_used_antenna, sizeof(new_config.last_used_antenna));
     }
 
     esp_err_t err = AntennaSwitch::instance().set_config(&new_config);
@@ -760,6 +791,19 @@ esp_err_t WebServer::config_post_handler(httpd_req_t *req) {
     err = cat_parser_update_config();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to update CAT parser configuration: %s", esp_err_to_name(err));
+    }
+
+    // Re-evaluate Radio A's antenna for the current frequency now, so toggling
+    // rx_antenna_enabled takes effect immediately instead of waiting for the next
+    // band change or TX->RX cycle. Skip while the transverter is active: the reported
+    // frequency is the IF, not the real on-air band, and set_frequency() has no
+    // transverter guard of its own (only CatParser::handle_frequency_change() does) --
+    // energizing the IF band's relay here would fight the deliberate de-energize that
+    // set_transverter_active(true) already applied.
+    if (new_config.auto_mode && !cat_parser_is_transverter_active()) {
+        if (const uint32_t current_freq = cat_parser_get_frequency(); current_freq != 0) {
+            AntennaSwitch::instance().set_frequency(current_freq);
+        }
     }
 
     // Request async AI mode probing if ai_mode is enabled (non-blocking)
@@ -1049,6 +1093,19 @@ esp_err_t WebServer::set_rx_antenna_handler(httpd_req_t *req) {
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save config");
         return ESP_FAIL;
+    }
+
+    // Re-evaluate the antenna for the current frequency now, instead of waiting for
+    // the next band change or TX->RX cycle to notice the new/cleared RX antenna port.
+    // set_frequency() re-applies regardless of whether the band changed (it has no
+    // "same band" early-return, unlike CatParser::handle_frequency_change), so setting
+    // the port switches to it immediately, and clearing it switches back to the band's
+    // preferred TX antenna immediately. Skip while the transverter is active -- see the
+    // matching guard in config_post_handler for why.
+    if (radio_idx == 0 && !cat_parser_is_transverter_active()) {
+        if (const uint32_t current_freq = cat_parser_get_frequency(); current_freq != 0) {
+            AntennaSwitch::instance().set_frequency(current_freq);
+        }
     }
 
     // Build response
